@@ -1,0 +1,9 @@
+chromadb==0.4.24
+rank-bm25==0.2.2
+langgraph==0.2.0
+pydantic>=2.9.0,<3.0.0
+pyzotero==1.11.1
+python-dotenv==1.0.1
+pytest==8.2.0
+numpy<2.0
+docling>=2.0.0
