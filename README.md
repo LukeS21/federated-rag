@@ -160,21 +160,26 @@ Change one config value: graph_backend: "neo4j"
 
 All consumers are unaware of the swap
 
-4.2 Node & Edge Types
-Node Type	Examples
-material	Ti-6Al-4V, TiO₂, rough‑hydrophilic Ti
-cell_type	neutrophil, macrophage, CD4+ T cell, MSC
-cytokine	IL‑6, TNF‑alpha, IL‑1beta
-model_system	C57BL/6J mouse, rat tibia
-method	flow cytometry, ELISA, microCT
-finding	"IL‑6 elevated in obese mice", "rough‑hydrophilic Ti increased anti‑inflammatory macrophages"
-paper	source paper metadata
-Edge Type	Meaning
-measured_via	(cytokine) → (method)
-observed_in	(cell_type) → (model_system)
-expressed_on	(finding) → (material)
-reported_in	(finding) → (paper)
-upregulated_by	(cytokine) → (condition)
+### 4.2 Node & Edge Types
+
+| Node Type | Examples |
+|-----------|----------|
+| `material` | Ti-6Al-4V, TiO₂, rough‑hydrophilic Ti |
+| `cell_type` | neutrophil, macrophage, CD4+ T cell, MSC |
+| `cytokine` | IL‑6, TNF‑alpha, IL‑1beta |
+| `model_system` | C57BL/6J mouse, rat tibia |
+| `method` | flow cytometry, ELISA, microCT |
+| `finding` | "IL‑6 elevated in obese mice", "rough‑hydrophilic Ti increased anti‑inflammatory macrophages" |
+| `paper` | source paper metadata |
+
+| Edge Type | Meaning |
+|-----------|---------|
+| `measured_via` | (cytokine) → (method) |
+| `observed_in` | (cell_type) → (model_system) |
+| `expressed_on` | (finding) → (material) |
+| `reported_in` | (finding) → (paper) |
+| `upregulated_by` | (cytokine) → (condition) |
+
 4.3 Graph Construction Flow
 Category Discovery phase identifies entity types present in retrieved chunks
 
@@ -689,13 +694,15 @@ class Neo4jStorage(BaseGraphStorage):
 ```
 12. Testing Strategy
 12.1 Test Layers
-Layer	Scope	Tool	Target Coverage
-Unit	Individual functions/classes	pytest	≥90% per module
-Integration	Multi-component workflows	pytest	All pipeline paths
-Retrieval Quality	Known-item queries	Custom eval	Top-1 accuracy ≥80%
-Synthesis Fidelity	Evidence anchoring scores	Programmatic	Anchoring ≥0.85
-Security	Penetration tests	Custom scripts	No leaks
-End-to-End	Full query → output	Pytest + manual	5+ real biomedical queries
+| Layer | Scope | Tool | Target Coverage |
+|-------|-------|------|-----------------|
+| Unit | Individual functions/classes | pytest | ≥90% per module |
+| Integration | Multi-component workflows | pytest | All pipeline paths |
+| Retrieval Quality | Known-item queries | Custom eval | Top-1 accuracy ≥80% |
+| Synthesis Fidelity | Evidence anchoring scores | Programmatic | Anchoring ≥0.85 |
+| Security | Penetration tests | Custom scripts | No leaks |
+| End-to-End | Full query → output | Pytest + manual | 5+ real biomedical queries |
+
 12.2 Key Test Cases
 Unicode scrubbing: Greek letters, subscripts, microgram symbol → correct ASCII
 
