@@ -1,5 +1,18 @@
+# Python
 .venv/
-.venv/
-.env
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
+
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# ChromaDB runtime data
+projects/*/chroma_data/**/*.bin
+
+# Temp test artifacts
+data/tmp_*.json
