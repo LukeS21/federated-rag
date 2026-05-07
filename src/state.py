@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Dict, Literal, Optional
+from typing import TypedDict, List, Dict, Literal, Optional, NotRequired, Any
 
 class Document(TypedDict):
     id: str
@@ -25,3 +25,9 @@ class AgentState(TypedDict):
     critic_feedback: str
     synthesis_revised: str
     anchoring_score: float
+    ungrounded_claims: List[Dict]
+
+    # Runtime configuration (optional)
+    num_ctx: NotRequired[int]
+    client_kwargs: NotRequired[Dict[str, Any]]
+    callback: NotRequired[Any]
