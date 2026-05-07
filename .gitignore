@@ -3,9 +3,3 @@
 .env
 __pycache__/
 *.pyc
-
-# Project-local indexes (regenerated from corpus / demos)
-projects/default/chroma_data/*
-!projects/default/chroma_data/.gitkeep
-projects/default/bm25_index/*
-!projects/default/bm25_index/.gitkeep

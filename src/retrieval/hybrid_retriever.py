@@ -47,16 +47,10 @@ class HybridRetriever:
         # BM25 (only needs texts)
         self.bm25.add_documents(texts)
 
-    def query(
-        self,
-        query: str,
-        n_results: int = 5,
-        filter_references: bool = True,
-    ) -> List[Dict]:
+    def query(self, query: str, n_results: int = 5) -> List[Dict]:
         """
         Hybrid search: query both, fuse, return top-n documents with metadata.
         Returns list of dicts with 'text' and 'metadata' (where available).
-        If filter_references is True, chunks with metadata chunk_type == 'reference' are omitted.
         """
         # Dense
         chroma_res = self.chroma.collection.query(query_texts=[query], n_results=n_results)
@@ -80,8 +74,6 @@ class HybridRetriever:
                 continue
             seen.add(text)
             meta = text_meta.get(text, {})
-            if filter_references and meta.get("chunk_type") == "reference":
-                continue
             results.append({"text": text, "metadata": meta})
             if len(results) >= n_results:
                 break

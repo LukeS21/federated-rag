@@ -14,9 +14,8 @@ from src.retrieval.hybrid_retriever import HybridRetriever
 
 
 def main(pdf_path=None):
-    # Set up retriever (project-local persistence; see projects/default/)
-    project_chroma = Path(__file__).resolve().parent / "projects" / "default" / "chroma_data"
-    chroma = ChromaClient("demo_public", persist_directory=str(project_chroma))
+    # Set up retriever
+    chroma = ChromaClient("demo_public")   # persists in ./chroma_data
     bm25 = BM25Index()
     retriever = HybridRetriever(chroma, bm25)
 
@@ -57,7 +56,7 @@ def main(pdf_path=None):
         except (EOFError, KeyboardInterrupt):
             break
 
-    print("\nSession ended. Index persists under projects/default/chroma_data/ for later queries.")
+    print("\nSession ended. Index persists in chroma_data/ for later queries.")
 
 
 if __name__ == "__main__":

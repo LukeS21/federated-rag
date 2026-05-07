@@ -11,12 +11,6 @@ def test_state_initialization():
         "citations_used": [],
         "final_output": "",
         "human_approved": False,
-        "routes": None,
-        "mode": "deep",
-        "discovered_categories": {},
-        "knowledge_graph_snapshot": {},
-        "critic_feedback": "",
-        "synthesis_revised": "",
-        "anchoring_score": 0.0,
+        "routes": None
     }
     assert state["user_query"] == "test"
