@@ -36,7 +36,7 @@ class SynthesisDrafter:
             temperature=0.0,
             api_key=os.getenv("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com/v1",
-            max_tokens=4096,
+            max_tokens=8192,
             timeout=120,
         )
         self.callback = callback
