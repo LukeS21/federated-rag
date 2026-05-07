@@ -10,6 +10,8 @@ from src.agents.extraction_agent import ExtractionAgent
 from src.agents.synthesis_drafter import SynthesisDrafter
 from src.agents.socratic_critic import SocraticCritic
 from src.agents.arbiter import Arbiter
+from src.agents.summarizer import Summarizer
+from src.agents.sci_ner import extract_ner_entities
 from src.anchoring.evidence_check import compute_anchoring_score, decompose_claims
 from src.graph.base_graph import BaseGraphStorage
 from src.graph.graph_builder import GraphBuilder
@@ -50,12 +52,39 @@ def retrieve_node(state: AgentState, hybrid_retriever: HybridRetriever) -> Dict[
 
 
 # ---------------------------------------------------------------------------
+#  Node 2b: Chunk Summarizer
+# ---------------------------------------------------------------------------
+def summarize_node(state: AgentState) -> Dict[str, Any]:
+    """Condense retrieved chunks into an evidence abstract.
+
+    Downstream agents consume this summary instead of raw chunks, cutting
+    token usage ~5x per subsequent LLM call.
+    """
+
+    chunks = state.get("public_context") or state.get("secure_context", [])
+    if not chunks:
+        return {"chunk_summary": ""}
+
+    callback = state.get("callback")
+    summarizer = Summarizer(
+        num_ctx=int(state.get("num_ctx", 16384) or 16384),
+        client_kwargs=state.get("client_kwargs"),
+        callback=callback,
+    )
+    summary = summarizer.summarize(chunks, state["user_query"])
+    return {"chunk_summary": summary}
+
+
+# ---------------------------------------------------------------------------
 #  Node 3: Category Discovery
 # ---------------------------------------------------------------------------
 def category_discovery_node(state: AgentState) -> Dict[str, Any]:
     """Run category discovery via the ExtractionAgent."""
 
     chunks = state.get("public_context") or state.get("secure_context", [])
+    summary = state.get("chunk_summary", "")
+    if summary:
+        chunks = [{"text": summary, "metadata": {"source": "evidence_summary"}}]
     callback = state.get("callback")
     agent = ExtractionAgent(
         num_ctx=int(state.get("num_ctx", 8192) or 8192),
@@ -67,20 +96,39 @@ def category_discovery_node(state: AgentState) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+#  Node 3b: SciSpaCy NER (deterministic)
+# ---------------------------------------------------------------------------
+def sci_ner_node(state: AgentState) -> Dict[str, Any]:
+    """Run SciSpaCy NER on raw chunks for deterministic biomedical entity extraction.
+
+    Results are stored as ``ner_entities`` and passed to the LLM extraction
+    agent as grounding hints.
+    """
+
+    chunks = state.get("public_context") or state.get("secure_context", [])
+    entities = extract_ner_entities(chunks)
+    return {"ner_entities": entities}
+
+
+# ---------------------------------------------------------------------------
 #  Node 4: Entity Extraction
 # ---------------------------------------------------------------------------
 def extraction_node(state: AgentState) -> Dict[str, Any]:
-    """Run entity extraction with evidence grounding."""
+    """Run entity extraction with evidence grounding.
+
+    Passes SciSpaCy NER entities as deterministic hints to the LLM agent.
+    """
 
     chunks = state.get("public_context") or state.get("secure_context", [])
     categories = state.get("discovered_categories", {})
+    ner_entities = state.get("ner_entities", [])
     callback = state.get("callback")
     agent = ExtractionAgent(
         num_ctx=int(state.get("num_ctx", 8192) or 8192),
         client_kwargs=state.get("client_kwargs"),
         callback=callback,
     )
-    entities = agent.extract_entities(chunks, categories, state["user_query"])
+    entities = agent.extract_entities(chunks, categories, state["user_query"], ner_entities=ner_entities)
     return {"extracted_entities": entities}
 
 
@@ -111,8 +159,13 @@ def drafter_node(state: AgentState) -> Dict[str, Any]:
     """First synthesis draft."""
 
     entities = state.get("extracted_entities", {})
-    chunks = state.get("public_context") or state.get("secure_context", [])
-    citations = list({(ch.get("metadata", {}) or {}).get("source", "unknown") for ch in chunks})
+    raw_chunks = state.get("public_context") or state.get("secure_context", [])
+    summary = state.get("chunk_summary", "")
+    if summary:
+        chunks = [{"text": summary, "metadata": {"source": "evidence_summary"}}]
+    else:
+        chunks = raw_chunks
+    citations = list({(ch.get("metadata", {}) or {}).get("source", "unknown") for ch in raw_chunks})
     kg_snapshot = state.get("knowledge_graph_snapshot", {})
     callback = state.get("callback")
 
@@ -138,7 +191,9 @@ def critic_node(state: AgentState) -> Dict[str, Any]:
     """Critique the draft."""
 
     draft = state.get("synthesis_draft", "")
-    chunks = state.get("public_context") or state.get("secure_context", [])
+    raw_chunks = state.get("public_context") or state.get("secure_context", [])
+    summary = state.get("chunk_summary", "")
+    chunks = [{"text": summary, "metadata": {"source": "evidence_summary"}}] if summary else raw_chunks
     entities = state.get("extracted_entities", {})
     callback = state.get("callback")
     critic = SocraticCritic(
@@ -158,14 +213,23 @@ def arbiter_node(state: AgentState) -> Dict[str, Any]:
 
     draft = state.get("synthesis_draft", "")
     critique = state.get("critic_feedback", "")
-    chunks = state.get("public_context") or state.get("secure_context", [])
+    raw_chunks = state.get("public_context") or state.get("secure_context", [])
+    summary = state.get("chunk_summary", "")
+    chunks = [{"text": summary, "metadata": {"source": "evidence_summary"}}] if summary else raw_chunks
     callback = state.get("callback")
-    arbiter = Arbiter(
-        num_ctx=int(state.get("num_ctx", 8192) or 8192),
-        client_kwargs=state.get("client_kwargs"),
-        callback=callback,
-    )
-    revised = arbiter.revise(draft, critique, chunks)
+    logger.info("Arbiter: draft=%d chars, critique=%d chars, chunks_in=%d, summary=%d chars, using_summary=%s",
+                len(draft), len(critique), len(raw_chunks), len(summary), bool(summary))
+    try:
+        arbiter = Arbiter(
+            num_ctx=int(state.get("num_ctx", 8192) or 8192),
+            client_kwargs=state.get("client_kwargs"),
+            callback=callback,
+        )
+        revised = arbiter.revise(draft, critique, chunks)
+        logger.info("Arbiter: revised=%d chars", len(revised))
+    except Exception as exc:
+        logger.exception("Arbiter LLM call failed; falling back to draft")
+        return {"synthesis_revised": draft}
     return {"synthesis_revised": revised}
 
 

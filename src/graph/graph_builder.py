@@ -129,14 +129,18 @@ def build_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
         input_router_node,
         kg_builder_node,
         retrieve_node,
+        sci_ner_node,
         scrub_node,
+        summarize_node,
     )
 
     workflow = StateGraph(AgentState)
 
     workflow.add_node("input_router", input_router_node)
     workflow.add_node("retrieve", lambda state: retrieve_node(state, hybrid_retriever))
+    workflow.add_node("summarize", summarize_node)
     workflow.add_node("category_discovery", category_discovery_node)
+    workflow.add_node("sci_ner", sci_ner_node)
     workflow.add_node("extraction", extraction_node)
     workflow.add_node("kg_builder", lambda state: kg_builder_node(state, graph_storage))
     workflow.add_node("drafter", drafter_node)
@@ -152,8 +156,10 @@ def build_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
 
     workflow.set_entry_point("input_router")
     workflow.add_edge("input_router", "retrieve")
-    workflow.add_edge("retrieve", "category_discovery")
-    workflow.add_edge("category_discovery", "extraction")
+    workflow.add_edge("retrieve", "summarize")
+    workflow.add_edge("summarize", "category_discovery")
+    workflow.add_edge("category_discovery", "sci_ner")
+    workflow.add_edge("sci_ner", "extraction")
     workflow.add_edge("extraction", "kg_builder")
     workflow.add_edge("kg_builder", "drafter")
     workflow.add_edge("drafter", "critic")
@@ -210,5 +216,13 @@ def build_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
     workflow.add_edge("human_gate", "scrub")
     workflow.add_edge("scrub", END)
 
-    # Interrupt semantics in langgraph==0.2.0 are handled at compile-time.
-    return workflow.compile(interrupt_before=["human_gate"])
+    # MemorySaver checkpointer enables interrupt/resume for human-in-the-loop.
+    # Two checkpoints:
+    #   1. sci_ner — user can review/refine discovered categories before NER
+    #   2. human_gate — final review before output (anchoring score < 0.85)
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return workflow.compile(
+        interrupt_before=["human_gate", "sci_ner"],
+        checkpointer=MemorySaver(),
+    )

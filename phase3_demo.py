@@ -15,6 +15,10 @@ import sys
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv(override=True)  # ensure .env values take precedence over shell env
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from langgraph.errors import GraphRecursionError
@@ -163,43 +167,69 @@ while True:
 
         warn_if_large(query, "User query")
 
-        stream_handler = TokenStreamHandler()
         initial_state = {
             "user_query": query,
             "query_scope": "public",
             "mode": "deep",
             "num_ctx": NUM_CTX,
             "client_kwargs": CLIENT_KWARGS,
-            "callback": stream_handler,
         }
 
         logger.info(f"Running deep pipeline for: {query}")
 
-        node_times: dict[str, float] = {}
-        last_node: str | None = None
-
-        # Single streamed execution:
-        # - prints node start/finish timing
-        # - accumulates state updates to avoid calling `invoke()` again
         final_state: dict = dict(initial_state)
+        config = {"configurable": {"thread_id": f"demo-{int(time.time())}"}}
+        interrupt_count = 0
+        current_input = initial_state
 
-        for event in app.stream(initial_state):
-            for node_name, output_dict in event.items():
-                now = time.time()
-                if node_name != last_node:
-                    if last_node is not None:
-                        elapsed = now - node_times.get(last_node, now)
-                        logger.info(f"✓ {last_node} finished ({elapsed:.1f}s)")
-                    logger.info(f"▸ {node_name} started…")
-                    node_times[node_name] = now
-                    last_node = node_name
+        # Loop handles up to two interrupts: sci_ner (category review), human_gate (final review)
+        while True:
+            stream_input = current_input if interrupt_count == 0 else None
+            stream_ended_normally = True
+            last_time = time.time()  # reset per stream cycle (avoids counting user think time)
 
-                if isinstance(output_dict, dict) and output_dict:
-                    final_state.update(output_dict)
+            for event in app.stream(stream_input, config):
+                for node_name, output_dict in event.items():
+                    if node_name == "__interrupt__":
+                        stream_ended_normally = False
+                        continue
 
-        if last_node is not None:
-            elapsed = time.time() - node_times.get(last_node, time.time())
-            logger.info(f"✓ {last_node} finished ({elapsed:.1f}s)")
+                    now = time.time()
+                    elapsed = now - last_time
+                    logger.info(f"▸ {node_name} ({elapsed:.1f}s)")
+                    last_time = now
+
+                    if isinstance(output_dict, dict) and output_dict:
+                        final_state.update(output_dict)
+
+            if stream_ended_normally:
+                break  # Graph completed, no more interrupts
+
+            # ── Handle interrupt ──
+            interrupt_count += 1
+            if interrupt_count == 1:
+                # Category checkpoint (before sci_ner)
+                cats = final_state.get("discovered_categories", {})
+                print("\n" + "-" * 50)
+                print("CATEGORY REVIEW (edit or press Enter to continue)")
+                print("-" * 50)
+                if isinstance(cats, dict) and cats.get("discovered_categories"):
+                    for c in cats["discovered_categories"]:
+                        print(f"  - {c.get('name', '?')}: {c.get('description', '')[:80]}")
+                print("-" * 50)
+                action = input("Press Enter to continue, or type new categories (JSON): ").strip()
+                if action:
+                    try:
+                        new_cats = json.loads(action)
+                        app.update_state(config, {"discovered_categories": new_cats})
+                        final_state["discovered_categories"] = new_cats
+                        logger.info("Categories updated by user.")
+                    except json.JSONDecodeError:
+                        print("Invalid JSON, using discovered categories.")
+                logger.info("Resuming pipeline…")
+            else:
+                # Human gate checkpoint (final review)
+                logger.info("⏸ Pipeline paused at human gate. Reviewing results below.")
 
         # ---- Display Results ----
         print("\n" + "-" * 50)

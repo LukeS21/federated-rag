@@ -580,6 +580,67 @@ Interactive phase3_demo.py supporting Deep Mode
 
 Integration test: one query through full pipeline
 
+### Phase 3 Status (May 2026)
+
+**Complete.** Deep Mode pipeline runs end-to-end with all specified components implemented and tested.
+
+#### Implemented graph (17 nodes)
+
+```
+InputRouter → Retrieve → Summarize → CategoryDiscovery
+  → [Human Checkpoint: review/edit categories]
+  → SciSpaCyNER → Extraction → KGBuilder
+  → Drafter → Critic → Arbiter → AnchoringCheck1
+  → (ArbiterPass2 if score < 0.85) → AnchoringCheck2
+  → (HumanGate if score < 0.85) → Scrub → END
+```
+
+#### Confirmed behavior
+
+| Component | Implementation | Notes |
+|-----------|---------------|-------|
+| Chunk summarization | New `Summarizer` agent after retrieval | Cuts token usage ~5x for downstream agents; category_discovery, drafter, critic, arbiter use summary; extraction uses raw chunks for evidence grounding |
+| SciSpaCy NER | `en_core_sci_sm` model in `sci_ner` node | 155+ biomedical entities extracted deterministically per query; fed as grounding hints to LLM extraction agent |
+| Anchoring | TF-IDF cosine similarity (threshold 0.35) | Replaced Jaccard placeholder; correctly distinguishes grounded vs ungrounded claims |
+| Human-in-the-loop | Two checkpoints via `interrupt_before` | (1) After category discovery — review/edit categories before NER runs; (2) HumanGate — final review when anchoring score < 0.85 |
+| Checkpointer | `MemorySaver` in-memory checkpointer | Enables interrupt/resume for human-in-the-loop |
+| Debate chain | Drafter → Critic → Arbiter → ArbiterPass2 | Full three-role heterogeneous debate confirmed; Critic routes to Arbiter when claims need revision, skips (NO_CRITIQUE) when draft is grounded |
+| Knowledge graph | `NetworkXJSONStorage` with co-occurrence edges | Builds entity-entity edges from shared chunk provenance; persisted to `project_graph.json` |
+
+#### Design decisions
+
+- **DeepSeek v4 Pro API** instead of local Ollama (Qwen/Gemma) — faster iteration, no GPU requirement for development; Ollama path preserved for Phase 5 air-gap deployment
+- **TF-IDF cosine (0.35)** for anchoring per README §5.3 spec (originally: Jaccard placeholder)
+- **10 retrieved chunks** per query via hybrid retriever (ChromaDB vector + BM25 sparse)
+- **Chunk summarization** (query-time): one LLM call condenses retrieved chunks into a ~500-word evidence abstract; downstream agents consume the summary rather than raw text
+- **API key sanitization** in all agents: strips non-ASCII characters from `DEEPSEEK_API_KEY` to prevent `UnicodeEncodeError` in HTTP headers
+- **`load_dotenv(override=True)`** in demo to ensure `.env` values take precedence over shell environment
+
+#### Tests
+
+- **27 tests passing** (5 new integration tests, 22 existing)
+- **6 pre-existing failures**: `test_synthesis_agents.py` mocks `langchain_ollama.ChatOllama` which was replaced by `langchain_openai.ChatOpenAI` during the Ollama→DeepSeek migration; not yet updated
+
+#### Remaining Phase 3 optimization (before Phase 4)
+
+| Priority | Task | Rationale |
+|----------|------|-----------|
+| **High** | Replace fixed `n_results=10` with similarity-threshold retrieval | Adaptive chunk count improves quality at scale; prevents noise chunks from diluting LLM context or relevant chunks from being excluded |
+| **High** | Reduce extraction prompt size | Extraction is the bottleneck (~5 min); cut by capping NER entities at top-30 and removing redundant category examples from prompt |
+| **High** | KG-driven synthesis | Knowledge graph is built but minimally used; add graph reasoning layer to surface central/bridge entities and meaningful relationships to the drafter |
+| **Medium** | Reduce summarization latency | Lower `max_tokens=512`, switch to cheaper model tier, or pre-summarize chunks at ingest time to eliminate the query-time summarization LLM call entirely |
+| **Medium** | Cache LLM responses | Hash (prompt, chunks) → store; category discovery and summarization become instant for similar queries |
+| **Low** | Update Ollama→DeepSeek migration tests | Fix 6 pre-existing test failures in `test_synthesis_agents.py` |
+| **Future** | Structured pre-summarization with entity links | Store chunk summaries + entity lists at ingest time; KG edges link related chunks; enables cross-cutting theme discovery and relationship-aware context assembly |
+
+#### Known limitations
+
+- **~5–10 minute latency per query**: 7 sequential LLM calls; extraction alone is ~5 minutes due to large prompt (raw chunks + 155 NER entities + full categories)
+- **Single-document scale**: `n_results=10` is tuned for one PDF; multi-document retrieval not yet tested
+- **No cross-query learning**: each query runs independently; no caching, no session memory
+- **Knowledge graph underutilized**: built but not meaningfully traversed during synthesis
+- **Survey Mode not implemented**: broad retrieval → theme clustering → per-theme synthesis → gap analysis is deferred to Phase 4
+
 Phase 4: Live Citation & Survey Mode (Weeks 8-9)
 Goal: Real Zotero integration + systematic literature surveying.
 

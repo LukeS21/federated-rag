@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from src.unicode_map import scrub_unicode
+from src.unicode_map import sanitize_api_key, scrub_unicode
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class ExtractionAgent:
         self._llm = ChatOpenAI(
             model="deepseek-v4-pro",
             temperature=temperature,
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
             base_url="https://api.deepseek.com/v1",
             max_tokens=8192,
             timeout=120,
@@ -106,6 +106,7 @@ class ExtractionAgent:
         chunks: List[Dict[str, Any]],
         categories: Dict[str, Any],
         query: str,
+        ner_entities: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         """Extract structured entities grouped by the discovered categories.
 
@@ -116,6 +117,8 @@ class ExtractionAgent:
             chunks: Retrieved chunks (text and metadata).
             categories: Output of ``discover_categories()``.
             query: The original research question.
+            ner_entities: Optional deterministic NER entities from SciSpaCy
+                to use as grounding hints.
 
         Returns:
             A dictionary whose top-level keys are category names. Each value
@@ -130,6 +133,11 @@ class ExtractionAgent:
         chunk_summaries = self._format_chunks_for_prompt(scrubbed_chunks)
 
         categories_str = json.dumps(categories, indent=2, ensure_ascii=False)
+
+        ner_hint = ""
+        if ner_entities:
+            ner_lines = [f"  - {e['text']} ({e['label']}) [Chunk {e.get('source_chunk', '?')}]" for e in ner_entities[:50]]
+            ner_hint = "Deterministic NER entities (use as hints; verify with evidence):\n" + "\n".join(ner_lines) + "\n\n"
 
         system_prompt = (
             "You are a biomedical entity extraction specialist. "
@@ -149,6 +157,7 @@ class ExtractionAgent:
         user_prompt = (
             f"Research Query: {query}\n\n"
             f"Discovered Categories:\n{categories_str}\n\n"
+            f"{ner_hint}"
             f"Retrieved Chunks (format: [Chunk N] text):\n{chunk_summaries}\n\n"
             "Extract all entities grouped by the categories above. For every entity, provide "
             "the evidence phrase and the source chunk number."

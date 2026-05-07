@@ -56,7 +56,20 @@ UNICODE_TO_PLAIN = {
     '÷': '/',
 }
 
+import os
 import unicodedata
+
+
+def sanitize_api_key(key: str | None) -> str | None:
+    """Strip non-ASCII characters from an API key.
+    
+    Prevents UnicodeEncodeError when the key is placed in HTTP headers
+    (e.g. Authorization: Bearer <key>).
+    """
+    if key is None:
+        return None
+    return key.encode("ascii", errors="replace").decode("ascii").replace("?", "")
+
 
 def scrub_unicode(text: str) -> str:
     # Step A: NFKC normalization (handle ligatures, fullwidth chars, etc.)

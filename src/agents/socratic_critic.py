@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from src.unicode_map import scrub_unicode
+from src.unicode_map import sanitize_api_key, scrub_unicode
 
 
 def _strip_thinking(text: str) -> str:
@@ -37,7 +37,7 @@ class SocraticCritic:
         self.llm = ChatOpenAI(
             model="deepseek-v4-pro",
             temperature=0.0,
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
             base_url="https://api.deepseek.com/v1",
             max_tokens=8192,
             timeout=120,

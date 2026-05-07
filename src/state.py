@@ -26,6 +26,8 @@ class AgentState(TypedDict):
     synthesis_revised: str
     anchoring_score: float
     ungrounded_claims: List[Dict]
+    chunk_summary: str
+    ner_entities: List[Dict]
 
     # Runtime configuration (optional)
     num_ctx: NotRequired[int]
