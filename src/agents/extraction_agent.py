@@ -48,6 +48,10 @@ class ExtractionAgent:
             base_url="https://api.deepseek.com/v1",
             max_tokens=8192,
             timeout=120,
+            default_headers={
+                "User-Agent": "federated-rag",
+                "Accept": "application/json",
+            },
         )
         self.callback = callback
 
@@ -67,7 +71,11 @@ class ExtractionAgent:
             ``key_variables``, and ``experimental_methods`` as described
             in the architecture (README §6.2).
         """
-        chunk_summaries = self._format_chunks_for_prompt(chunks)
+        # Scrub all chunk texts to plain ASCII before building the prompt
+        scrubbed_chunks = [
+            {**ch, "text": scrub_unicode(ch["text"])} for ch in chunks
+        ]
+        chunk_summaries = self._format_chunks_for_prompt(scrubbed_chunks)
 
         system_prompt = (
             "You are a biomedical literature analyst. Given a research query and a set of "
@@ -115,7 +123,11 @@ class ExtractionAgent:
             ``evidence``, and ``source``. Additional keys (e.g. ``conditions``,
             ``direction``, ``context``) are populated as discovered (README §6.3).
         """
-        chunk_summaries = self._format_chunks_for_prompt(chunks)
+        # Scrub all chunk texts to plain ASCII before building the prompt
+        scrubbed_chunks = [
+            {**ch, "text": scrub_unicode(ch["text"])} for ch in chunks
+        ]
+        chunk_summaries = self._format_chunks_for_prompt(scrubbed_chunks)
 
         categories_str = json.dumps(categories, indent=2, ensure_ascii=False)
 

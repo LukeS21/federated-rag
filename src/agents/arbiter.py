@@ -37,6 +37,10 @@ class Arbiter:
             base_url="https://api.deepseek.com/v1",
             max_tokens=8192,
             timeout=120,
+            default_headers={
+                "User-Agent": "federated-rag",
+                "Accept": "application/json",
+            },
         )
         self.callback = callback
 
@@ -55,6 +59,9 @@ class Arbiter:
             "- Output the complete revised paragraph. Plain ASCII only."
         )
 
+        chunks = [
+            {**ch, "text": scrub_unicode(ch["text"])} for ch in chunks
+        ]
         original_chunks = "\n\n".join(f"[Chunk {i}] {ch.get('text', '')}" for i, ch in enumerate(chunks))
 
         user_prompt = (

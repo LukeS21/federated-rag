@@ -38,6 +38,10 @@ class SynthesisDrafter:
             base_url="https://api.deepseek.com/v1",
             max_tokens=8192,
             timeout=120,
+            default_headers={
+                "User-Agent": "federated-rag",
+                "Accept": "application/json",
+            },
         )
         self.callback = callback
 
@@ -58,6 +62,9 @@ class SynthesisDrafter:
         )
 
         entities_json = json.dumps(entities, indent=2, ensure_ascii=False)
+        chunks = [
+            {**ch, "text": scrub_unicode(ch["text"])} for ch in chunks
+        ]
         chunk_texts = "\n\n".join(f"[Chunk {i}] {ch.get('text', '')}" for i, ch in enumerate(chunks))
         cite_keys = ", ".join(citations) if citations else "none provided"
         subgraph_json = json.dumps(kg_context or {}, indent=2, ensure_ascii=False)
