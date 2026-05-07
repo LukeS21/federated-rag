@@ -16,6 +16,12 @@ def test_end_to_end_foundation():
         "final_output": "",
         "human_approved": False,
         "routes": None,
+        "mode": "deep",
+        "discovered_categories": {},
+        "knowledge_graph_snapshot": {},
+        "critic_feedback": "",
+        "synthesis_revised": "",
+        "anchoring_score": 0.0,
     }
     assert state["query_scope"] == "public"
 
