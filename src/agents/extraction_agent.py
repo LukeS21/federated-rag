@@ -7,6 +7,7 @@ evidence-grounded entities from retrieved document chunks.
 
 import json
 import logging
+import re
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -17,6 +18,11 @@ from src.unicode_map import scrub_unicode
 logger = logging.getLogger(__name__)
 
 
+def _strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks from Qwen outputs."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 class ExtractionAgent:
     """Handles category discovery and structured entity extraction.
 
@@ -24,16 +30,23 @@ class ExtractionAgent:
     ASCII output from the model; responses are scrubbed before JSON parsing.
     """
 
-    def __init__(self, model_name: str = "qwen3.6:35b-a3b", temperature: float = 0.0) -> None:
-        """Initialise the extraction agent.
-
-        Args:
-            model_name: Ollama model tag.
-            temperature: Sampling temperature (0.0 for deterministic output).
-        """
-        self.model_name = model_name
-        self.temperature = temperature
-        self._llm = ChatOllama(model=model_name, temperature=temperature)
+    def __init__(
+        self,
+        model_name: str = "qwen3.6:35b",
+        temperature: float = 0.0,
+        num_ctx: int = 16384,
+        client_kwargs: dict | None = None,
+        callback=None,
+    ) -> None:
+        if client_kwargs is None:
+            client_kwargs = {}
+        self._llm = ChatOllama(
+            model=model_name,
+            temperature=temperature,
+            num_ctx=num_ctx,
+            client_kwargs=client_kwargs,
+        )
+        self.callback = callback
 
     # ------------------------------------------------------------------
     #  Category Discovery (Pass 1)
@@ -104,9 +117,10 @@ class ExtractionAgent:
         categories_str = json.dumps(categories, indent=2, ensure_ascii=False)
 
         system_prompt = (
-            "You are a biomedical entity extraction specialist. Given a research query, a set "
-            "of document chunks, and a list of discovered categories, extract all specific "
-            "entities that fall under each category. For each entity you MUST:\n"
+            "You are a biomedical entity extraction specialist. "
+            "The research query, document chunks, and discovered categories "
+            "ARE PROVIDED in the user message below. Do NOT state that data is missing. "
+            "Extract all specific entities that fall under each category. For each entity you MUST:\n"
             ' - include an "evidence" field quoting the exact sentence(s) from the chunks.\n'
             ' - include a "source" field with the chunk number (e.g. "Chunk 3") the evidence came from.\n'
             ' - normalise synonyms (e.g. "TNF-\u03b1" and "TNF-alpha" become "TNF-alpha").\n'
@@ -146,12 +160,19 @@ class ExtractionAgent:
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
-        response = self._llm.invoke(messages)
+        config = {}
+        if self.callback:
+            config["callbacks"] = [self.callback]
+        response = self._llm.invoke(messages, config=config)
         return (response.content or "").strip()
 
     def _parse_json_safely(self, raw_text: str, context: str) -> Dict[str, Any]:
         """Parse JSON after ASCII-scrubbing; up to two parse attempts (second uses looser extraction)."""
         ascii_text = scrub_unicode(raw_text)
+        if "<think>" in raw_text:
+            logger.warning("Thinking block detected in LLM output for %s", context)
+        ascii_text = _strip_thinking(ascii_text)
+        logger.debug("Stripped thinking block. Remaining text: %s", ascii_text[:200])
         candidate = self._isolate_json_text(ascii_text)
 
         for attempt in range(2):
