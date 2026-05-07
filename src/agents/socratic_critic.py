@@ -4,11 +4,12 @@ Uses Gemma 4 26B A4B to resist peer-pressure convergence.
 """
 
 import json
+import os
 import re
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from src.unicode_map import scrub_unicode
 
@@ -33,11 +34,13 @@ class SocraticCritic:
     ) -> None:
         if client_kwargs is None:
             client_kwargs = {}
-        self.llm = ChatOllama(
-            model=model_name,
+        self.llm = ChatOpenAI(
+            model="deepseek-v4-pro",
             temperature=0.0,
-            num_ctx=num_ctx,
-            client_kwargs=client_kwargs,
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url="https://api.deepseek.com/v1",
+            max_tokens=4096,
+            timeout=120,
         )
         self.callback = callback
 

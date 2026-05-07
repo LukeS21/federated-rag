@@ -7,11 +7,12 @@ evidence-grounded entities from retrieved document chunks.
 
 import json
 import logging
+import os
 import re
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from src.unicode_map import scrub_unicode
 
@@ -40,11 +41,13 @@ class ExtractionAgent:
     ) -> None:
         if client_kwargs is None:
             client_kwargs = {}
-        self._llm = ChatOllama(
-            model=model_name,
+        self._llm = ChatOpenAI(
+            model="deepseek-v4-pro",
             temperature=temperature,
-            num_ctx=num_ctx,
-            client_kwargs=client_kwargs,
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url="https://api.deepseek.com/v1",
+            max_tokens=4096,
+            timeout=120,
         )
         self.callback = callback
 
