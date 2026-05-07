@@ -1,12 +1,12 @@
 ```text
 Full Phase Recap
-Phase	Status
-Phase 1	Foundation (state, Unicode, citation, retrieval primitives)	✅ Complete
-Phase 2	PDF Ingestion & Hybrid Retrieval	⚠️ Functional; needs 3 small upgrades to match v3.0
-Phase 3	LLM Agents & LangGraph Core (extraction, debate synthesis, KG, anchoring, Deep Mode)	🔜 Next
-Phase 4	Live Citation & Survey Mode (real Zotero API, systematic field mapping)	
-Phase 5	Security Hardening & Air‑Gap (Docker isolation, boundary scrubber, penetration testing)	
-Phase 6	UI, Polish & Deployment (Streamlit/Gradio, session history, Neo4j adapter, Docker Compose)
+Phase   Status
+Phase 1 Foundation (state, Unicode, citation, retrieval primitives)   ✅ Complete
+Phase 2 PDF Ingestion & Hybrid Retrieval   ✅ Functional
+Phase 3 LLM Agents & LangGraph Core (extraction, debate synthesis, KG, anchoring, Deep Mode)   ✅ Complete (May 2026)
+Phase 4 Live Citation & Survey Mode (real Zotero API, systematic field mapping)   🔜 Next
+Phase 5 Security Hardening & Air‑Gap (Docker isolation, boundary scrubber, penetration testing)   📋 Planned
+Phase 6 UI, Polish & Deployment (Streamlit/Gradio, session history, Neo4j adapter, Docker Compose)   📋 Planned
 ```
 ___
 
@@ -192,7 +192,7 @@ All consumers are unaware of the swap
 | `reported_in` | (finding) → (paper) |
 | `upregulated_by` | (cytokine) → (condition) |
 
-4.3 Graph Construction Flow
+### 4.3 Graph Construction Flow
 Category Discovery phase identifies entity types present in retrieved chunks
 
 Extraction phase produces structured JSON with entity instances + evidence phrases
@@ -207,8 +207,8 @@ Attaches evidence_phrase and source_paper metadata to every edge
 
 Calls graph.save() to persist
 
-5. Multi‑Agent Synthesis Architecture
-5.1 Core Principle: Heterogeneous, Role‑Structured Debate with Evidence Anchoring
+## 5. Multi‑Agent Synthesis Architecture
+### 5.1 Core Principle: Heterogeneous, Role‑Structured Debate with Evidence Anchoring
 Research shows that homogeneous debate causes peer‑pressure convergence (agents agree on wrong answers), and iterative closed‑system debate degrades evidential grounding (The Reasoning Trap, May 2026). Our architecture addresses both failure modes:
 
 Heterogeneous models: Qwen3.6 + Gemma 4 (different families, different reasoning biases)
@@ -219,7 +219,7 @@ Evidence‑anchored stopping criterion: measurable Anchoring Score, not subjecti
 
 Bounded iterations: maximum 2 passes, then human escalation
 
-5.2 Agent Roles
+### 5.2 Agent Roles
 Agent 1: Drafter (Qwen3.6 35B-A3B)
 Prompt structure:
 ```text
@@ -271,7 +271,7 @@ Prompt structure:
 ```
 Output: Revised synthesis paragraph.
 
-5.3 Evidence‑Anchoring Check (Programmatic)
+### 5.3 Evidence‑Anchoring Check (Programmatic)
 After the Arbiter produces a revised synthesis, the system performs an automated check without LLM involvement:
 
 Claim decomposition: Split the synthesis into atomic factual claims using regex sentence splitting + simple heuristics (e.g., "X was measured via Y", "Z increased in condition W").
@@ -290,7 +290,7 @@ Anchoring Score < 0.85 → flagged claims are sent back to Arbiter for a conditi
 
 If after second pass, Anchoring Score < 0.85 → escalate to human approval gate (LangGraph interrupt)
 
-5.4 Flow Diagram
+### 5.4 Flow Diagram
 ```text
 ┌──────────┐     ┌──────────────┐     ┌───────────┐
 │  Drafter │────►│ Socratic     │────►│  Arbiter  │
@@ -316,11 +316,11 @@ If after second pass, Anchoring Score < 0.85 → escalate to human approval gate
                                               │
                                    ≥ 0.85 ────┴─── < 0.85 ──► Human Gate
 ```
-6. Extraction Pipeline
-6.1 Design Principle: Schema‑Less, Query‑Conditioned, Evidence‑Grounded
+## 6. Extraction Pipeline
+### 6.1 Design Principle: Schema‑Less, Query‑Conditioned, Evidence‑Grounded
 The researcher never defines entity categories. The system discovers them from the literature. Every extracted entity is tied to an evidence phrase from the source text.
 
-6.2 Category Discovery (Pass 1)
+### 6.2 Category Discovery (Pass 1)
 The LLM reads all retrieved chunks (filtered to body text, references excluded) and identifies:
 
 Recurring themes
@@ -354,7 +354,7 @@ Output format (JSON):
   ```
 Optional user checkpoint: A LangGraph interrupt displays the discovered categories. The researcher can accept, remove, or add categories. If they do nothing, the pipeline proceeds automatically.
 
-6.3 Two‑Pass Extraction (Pass 2)
+### 6.3 Two‑Pass Extraction (Pass 2)
 Pass 2a: Deterministic NER (SciSpaCy)
 Model: en_ner_bc5cdr_md or en_core_sci_lg
 
@@ -395,7 +395,7 @@ Output format:
   ]
 }
 ```
-6.4 Evidence Grounding (Automated)
+### 6.4 Evidence Grounding (Automated)
 For each extracted entity, the system verifies that:
 
 An evidence phrase exists in the source chunks
@@ -406,12 +406,12 @@ A source_paper and chunk_index reference is attached
 
 Entities without evidence grounding are discarded or flagged.
 
-7. Federated Data Management (Air‑Gap)
-7.1 Dual‑Corpus Architecture
+## 7. Federated Data Management (Air‑Gap)
+### 7.1 Dual‑Corpus Architecture
 Corpus	Contents	Network Access	LLM Instance
 Public	PubMed literature, open‑access PDFs	Internet (rate‑limited)	Ollama instance 1 (can access internet)
 Secure Lab	Internal spreadsheets, grant drafts, unpublished results	None (Docker internal: true)	Ollama instance 2 (air‑gapped)
-7.2 Enforcement Layers
+### 7.2 Enforcement Layers
 Docker network isolation: Secure container has no gateway, no DNS. External connections are physically impossible.
 
 Boundary scrubber: Before any payload moves from secure → public container, a Python regex checks for proprietary terms. If detected, the payload is blocked and logged.
@@ -420,8 +420,8 @@ LangGraph routing: The state machine's query_scope field ("public", "secure", "b
 
 Per‑corpus LLM instances: The air‑gapped Ollama instance processes only secure‑corpus data. It has no internet access.
 
-8. Execution Modes
-8.1 Quick Mode
+## 8. Execution Modes
+### 8.1 Quick Mode
 Purpose: Factual lookup with minimal latency
 
 Flow: Hybrid retrieve → single‑pass extraction → single‑agent synthesis (no debate)
@@ -430,7 +430,7 @@ Latency: ~5-10 seconds per query on M3 Max
 
 Use case: "What model system was used in Avery et al. 2025?"
 
-8.2 Deep Mode (Reference Implementation)
+### 8.2 Deep Mode (Reference Implementation)
 Purpose: Rigorous evidence synthesis with debate and anchoring
 
 Flow: Full pipeline: category discovery → two‑pass extraction → KG construction → 3‑role heterogeneous debate → evidence anchoring (1-2 passes) → scrub
@@ -439,7 +439,7 @@ Latency: ~30-60 seconds per query (4-5 LLM calls + programmatic checks)
 
 Use case: "Synthesize what's known about immune response to titanium implants in obese models"
 
-8.3 Survey Mode (Phase 4)
+### 8.3 Survey Mode (Phase 4)
 Purpose: Systematic field mapping across many papers
 
 Flow: Broad PubMed retrieval → theme clustering → per‑theme representative paper selection → per‑theme deep synthesis → cross‑theme gap analysis
@@ -448,8 +448,8 @@ Latency: ~5-10 minutes for a subfield survey
 
 Use case: "Map the current understanding of biomaterial surface modifications and immune response"
 
-9. LangGraph Orchestration & State Machine
-9.1 State Definition
+## 9. LangGraph Orchestration & State Machine
+### 9.1 State Definition
 ```python
 class AgentState(TypedDict):
     user_query: str
@@ -469,7 +469,7 @@ class AgentState(TypedDict):
     human_approved: bool
     routes: Optional[Dict]
 ```
-9.2 Node Graph (Deep Mode)
+### 9.2 Node Graph (Deep Mode)
 ```text
 Start
   │
@@ -522,7 +522,7 @@ Start
 End → output to user
 ```
 
-10. Implementation Phases
+## 10. Implementation Phases
 Phase 1: Foundation (Weeks 1-2)
 Goal: Tested primitives for state, Unicode, citation management, and dual retrieval indexes.
 
@@ -621,17 +621,77 @@ InputRouter → Retrieve → Summarize → CategoryDiscovery
 - **27 tests passing** (5 new integration tests, 22 existing)
 - **6 pre-existing failures**: `test_synthesis_agents.py` mocks `langchain_ollama.ChatOllama` which was replaced by `langchain_openai.ChatOpenAI` during the Ollama→DeepSeek migration; not yet updated
 
-#### Remaining Phase 3 optimization (before Phase 4)
+#### Planned improvements (before Phase 4)
 
-| Priority | Task | Rationale |
-|----------|------|-----------|
-| **High** | Replace fixed `n_results=10` with similarity-threshold retrieval | Adaptive chunk count improves quality at scale; prevents noise chunks from diluting LLM context or relevant chunks from being excluded |
-| **High** | Reduce extraction prompt size | Extraction is the bottleneck (~5 min); cut by capping NER entities at top-30 and removing redundant category examples from prompt |
-| **High** | KG-driven synthesis | Knowledge graph is built but minimally used; add graph reasoning layer to surface central/bridge entities and meaningful relationships to the drafter |
-| **Medium** | Reduce summarization latency | Lower `max_tokens=512`, switch to cheaper model tier, or pre-summarize chunks at ingest time to eliminate the query-time summarization LLM call entirely |
-| **Medium** | Cache LLM responses | Hash (prompt, chunks) → store; category discovery and summarization become instant for similar queries |
-| **Low** | Update Ollama→DeepSeek migration tests | Fix 6 pre-existing test failures in `test_synthesis_agents.py` |
-| **Future** | Structured pre-summarization with entity links | Store chunk summaries + entity lists at ingest time; KG edges link related chunks; enables cross-cutting theme discovery and relationship-aware context assembly |
+These optimizations address the latency and scaling limitations identified during Phase 3 testing. Each is designed to maintain or improve output quality while reducing per-query cost and time.
+
+**1. Similarity‑threshold retrieval (replaces fixed n_results=10)**
+
+*Problem:* Fixed n_results=10 has two failure modes: (a) fewer than 10 chunks are truly relevant, injecting noise into the LLM context; (b) more than 10 chunks are relevant, arbitrarily excluding evidence.
+
+*Design:* Replace `n_results=10` with `similarity_threshold=0.5, max_chunks=20`. The hybrid retriever returns all chunks whose ChromaDB cosine distance falls below the threshold, capped at max_chunks to prevent context-window overflow.
+
+*Rationale:* This is the standard pattern used in production RAG frameworks (LlamaIndex, LangChain's `ParentDocumentRetriever`). The threshold adapts to the corpus — a query about "macrophage polarization" in a 1‑document corpus might return 8 chunks; the same query in a 100‑document corpus might return 18 across 4 papers. The cap prevents pathological cases (50+ matching chunks). The threshold is calibrated per domain and self‑correcting: too strict → missed evidence (anchoring score drops); too loose → token bloat (latency increases).
+
+**2. Pre‑summarization at ingest time with entity links**
+
+*Problem:* Query‑time summarization adds one LLM call per query (currently 30–80s). At scale (100s of queries/day across a lab), this compounds.
+
+*Design:* At PDF ingestion, each chunk receives a structured summary stored in metadata:
+```
+Chunk 3:
+  summary: "Obese mice had elevated leptin which activated T‑cell leptin
+           receptors, promoting Th1/Th17 polarization and suppressing Treg
+           expansion."
+  entities: [leptin, T cells, Th1, Th17, Treg, leptin receptor]
+  linked_to: [Chunk 2 (adipokines), Chunk 5 (IL‑17A), Chunk 8 (bone formation)]
+```
+
+At query time, retrieval returns pre‑summarized chunks. The `Summarize` node is replaced by concatenation of pre‑written summaries — zero LLM calls.
+
+*Relationship preservation:* Entity links between chunks (derived from co‑occurrence via the KG) ensure that related findings are surfaced even when they don't match the query directly. A query about "IL‑17A" would retrieve Chunk 5, and the KG traversal would pull in Chunk 3 (leptin → T‑cell activation) and Chunk 8 (bone formation) as related context. No finding sits in isolation.
+
+*Risk mitigation:* Pre‑written summaries are generic (not query‑aware). To prevent missing cross‑cutting themes, each chunk summary is supplemented with an explicit entity list. The extraction agent still receives raw chunk text for evidence‑grounding quotes, so nothing is permanently lost. Additional risk: the ingest‑time summarization LLM may hallucinate or omit details. Mitigation: require the ingest summarizer to cite specific sentences from the source chunk (same evidence‑grounding pattern used by extraction), and run the anchoring check against the raw chunk text to verify fidelity.
+
+**3. KG‑driven synthesis with graph reasoning**
+
+*Problem:* The knowledge graph is built from extracted entities and persisted, but the drafter receives the raw subgraph JSON — a giant node‑link dict the LLM cannot meaningfully process.
+
+*Design:* Before drafting, a graph reasoning layer processes the subgraph:
+- **Central entities:** nodes with highest degree (most co‑occurrence edges) — these are the concepts that connect everything across the corpus
+- **Bridge entities:** nodes whose removal disconnects the graph into separate clusters — these represent cross‑cutting themes that link otherwise‑separate research areas
+- **2‑hop subgraph:** for entities directly matching the query, extract all entities within 2 edge traversals and format as a structured summary
+
+The drafter receives: *"Key connecting concepts: leptin (links obesity → immune dysfunction, 12 edges), macrophage polarization (links surface properties → bone outcomes, 18 edges), IL‑17A (links T cells → inflammation, 5 edges). Cross‑cutting theme: leptin‑mediated T‑cell reprogramming bridges adipokine signaling and peri‑implant osteogenesis."*
+
+*Rationale:* This replicates how a human researcher thinks — find central papers, follow their references, notice shared cell types across studies. The KG already captures these relationships; they just need to be surfaced meaningfully rather than dumped as raw JSON.
+
+**4. Extraction prompt reduction**
+
+*Problem:* Extraction is the bottleneck (~5 min per query). The prompt contains redundant information: full category descriptions with examples (already generated by category_discovery) and all 155 NER entities (many irrelevant).
+
+*Design:*
+- Cap NER entities at top‑30 (by SciSpaCy confidence or frequency) instead of sending all 155
+- Send category names + 1‑line descriptions only; omit the `examples_found` arrays (the LLM generated them 30 seconds ago in `category_discovery`)
+- Estimated prompt reduction: ~8000 → ~4000 tokens
+
+*Why this doesn't hurt quality:* The LLM doesn't need to re‑read its own examples. It needs the category structure (names), the raw evidence (chunks), and the most salient NER hints. Downstream synthesis quality is gated by evidence completeness, not by how many times the LLM re‑reads its prior output.
+
+**5. LLM response caching**
+
+*Problem:* Identical or near‑identical queries re‑run the full pipeline. Category discovery on the same 10 chunks with the same query → same output every time.
+
+*Design:* Hash `(system_prompt, user_prompt)` → store LLM response in an on‑disk cache (TTL: 24h). Before making an API call, check the cache. Applies to: summarization, category discovery, and extraction (which have deterministic outputs at temperature=0).
+
+*Expected impact:* For repeated or similar queries, category discovery + summarization become instant (<1ms). Combined with pre‑summarization, this eliminates 2 of 7 LLM calls for most queries.
+
+**6. Cheaper model tier for summarization**
+
+*Problem:* Summarization uses DeepSeek v4 Pro (the most expensive tier) for a task that requires extraction fidelity, not advanced reasoning.
+
+*Design:* Switch summarization to a cheaper model tier (e.g., DeepSeek Chat). Risk is low because: (a) summarization is inherently safer than generation — the model condenses existing text rather than creating new findings; (b) raw chunks remain available to downstream extraction for evidence grounding, so any omission is recoverable; (c) the anchoring check verifies final synthesis against raw evidence regardless of summary quality.
+
+*Verification:* Run 10 queries side‑by‑side (DeepSeek v4 Pro vs DeepSeek Chat) and compare: (a) final anchoring scores, (b) extraction entity counts, (c) synthesis BERTScore similarity. If scores are within 5%, switch permanently.
 
 #### Known limitations
 
@@ -694,7 +754,7 @@ Neo4jStorage adapter (optional upgrade path)
 
 Final Docker Compose production configuration
 
-11. Component Interfaces
+## 11. Component Interfaces
 11.1 Hybrid Retriever
 ```python
 class HybridRetriever:
@@ -765,8 +825,8 @@ class Neo4jStorage(BaseGraphStorage):
     def __init__(self, uri: str, user: str, password: str): ...
     # Implements all abstract methods via Cypher
 ```
-12. Testing Strategy
-12.1 Test Layers
+## 12. Testing Strategy
+### 12.1 Test Layers
 | Layer | Scope | Tool | Target Coverage |
 |-------|-------|------|-----------------|
 | Unit | Individual functions/classes | pytest | ≥90% per module |
@@ -776,7 +836,7 @@ class Neo4jStorage(BaseGraphStorage):
 | Security | Penetration tests | Custom scripts | No leaks |
 | End-to-End | Full query → output | Pytest + manual | 5+ real biomedical queries |
 
-12.2 Key Test Cases
+### 12.2 Key Test Cases
 Unicode scrubbing: Greek letters, subscripts, microgram symbol → correct ASCII
 
 Hybrid retrieval: "bone growth" returns "osseointegration" (dense); "IL-6" returns only IL-6 chunks (sparse)
@@ -793,8 +853,8 @@ Air‑gap enforcement: Secure‑scope queries never reach public network
 
 ASCII enforcement: Final output contains zero non-ASCII characters
 
-13. Deployment & Containerization
-13.1 Development (Current)
+## 13. Deployment & Containerization
+### 13.1 Development (Current)
 Single machine, single directory
 
 Ollama running as background service
@@ -803,7 +863,7 @@ ChromaDB with persistent local storage
 
 KG stored as JSON in project directory
 
-13.2 Lab‑Wide (Phase 6)
+### 13.2 Lab‑Wide (Phase 6)
 Docker Compose services:
 ```yaml
 services:
@@ -838,7 +898,7 @@ networks:
     driver: bridge
     internal: true
 ```
-14. Appendices
+## 14. Appendices
 A. Dependency Version Pinnings
 ```text
 chromadb==0.4.24
