@@ -1,3 +1,13 @@
+Full Phase Recap
+Phase	Name	Status
+Phase 1	Foundation (state, Unicode, citation, retrieval primitives)	✅ Complete
+Phase 2	PDF Ingestion & Hybrid Retrieval	⚠️ Functional; needs 3 small upgrades to match v3.0
+Phase 3	LLM Agents & LangGraph Core (extraction, debate synthesis, KG, anchoring, Deep Mode)	🔜 Next
+Phase 4	Live Citation & Survey Mode (real Zotero API, systematic field mapping)	
+Phase 5	Security Hardening & Air‑Gap (Docker isolation, boundary scrubber, penetration testing)	
+Phase 6	UI, Polish & Deployment (Streamlit/Gradio, session history, Neo4j adapter, Docker Compose)	
+___
+
 # 🔬 Secure Federated RAG System – Technical Architecture v3.0
 
 **A Production‑Grade, Local‑First, Multi‑Agent Retrieval‑Augmented Generation Platform
