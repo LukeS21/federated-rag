@@ -37,7 +37,6 @@ from src.streaming_handler import TokenStreamHandler
 # ---------------------------------------------------------------------------
 #  Configuration
 # ---------------------------------------------------------------------------
-PDF_PATH = Path("data/test.pdf")
 PROJECT_DIR = Path("projects/default")
 PROJECT_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_PATH = str(PROJECT_DIR / "chroma_data")
@@ -107,7 +106,7 @@ def warn_if_large(prompt_text: str, label: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-#  Step 1: Ingest PDF
+#  Step 1: Ingest PDFs (incremental)
 # ---------------------------------------------------------------------------
 print("=" * 70)
 print("PHASE 3 DEEP MODE DEMO (with streaming & timeout)")
@@ -118,31 +117,45 @@ chroma = ChromaClient(collection_name="public_corpus", persist_directory=CHROMA_
 bm25 = BM25Index()
 retriever = HybridRetriever(chroma_client=chroma, bm25_index=bm25)
 
-existing_docs = _chroma_doc_count(chroma)
+# Discover which PDFs are already indexed (by metadata.source)
+pdf_dir = Path("data")
+existing_pdfs = set()
+if _chroma_doc_count(chroma) > 0:
+    try:
+        all_meta = chroma.collection.get(include=["metadatas"])
+        for m in (all_meta.get("metadatas") or []):
+            src = (m or {}).get("source", "")
+            if src:
+                existing_pdfs.add(src)
+    except Exception:
+        pass
 
-if existing_docs == 0:
-    logger.info(f"Ingesting PDF: {PDF_PATH}")
-    chunks = pdf_parser.parse(PDF_PATH)
-    for ch in chunks:
-        ch["text"] = scrub_unicode(ch["text"])
+# Find all PDFs in data/ and ingest only new ones
+pdf_files = sorted(pdf_dir.glob("*.pdf"))
+new_pdfs = [p for p in pdf_files if p.name not in existing_pdfs]
+pre_summarizer = PreSummarizer()
 
-    # Pre-summarize chunks at ingest time (one-time LLM cost per document).
-    # Stored in chunk metadata so query-time Summarize node can skip the LLM call.
-    pre_summarizer = PreSummarizer()
-    chunks = pre_summarizer.summarize_all(chunks)
-
-    retriever.ingest(chunks)
-    bm25_corpus = [ch["text"] for ch in chunks]
-    with open(BM25_CORPUS_PATH, "w", encoding="utf-8") as f:
-        json.dump(bm25_corpus, f)
-    logger.info(f"Ingested {len(chunks)} chunks (pre-summarized).")
+if new_pdfs:
+    logger.info(f"Found {len(new_pdfs)} new PDF(s) to ingest.")
+    for pdf_path in new_pdfs:
+        logger.info(f"Ingesting: {pdf_path.name}")
+        chunks = pdf_parser.parse(pdf_path)
+        for ch in chunks:
+            ch["text"] = scrub_unicode(ch["text"])
+        chunks = pre_summarizer.summarize_all(chunks)
+        retriever.ingest(chunks)
+        logger.info(f"  → {len(chunks)} chunks ingested (pre-summarized).")
+    # Force BM25 rebuild from ChromaDB (disk cache is stale after new ingestion)
+    Path(BM25_CORPUS_PATH).unlink(missing_ok=True)
 else:
-    logger.info(f"Using existing index with ~{existing_docs} documents.")
-    _ensure_bm25_loaded_from_disk_or_chroma(
-        chroma_client=chroma,
-        bm25=bm25,
-        bm25_corpus_path=BM25_CORPUS_PATH,
-    )
+    logger.info(f"All {len(pdf_files)} PDF(s) already indexed (~{_chroma_doc_count(chroma)} chunks).")
+
+# Rebuild BM25 corpus from all indexed chunks (covers both old and new)
+_ensure_bm25_loaded_from_disk_or_chroma(
+    chroma_client=chroma,
+    bm25=bm25,
+    bm25_corpus_path=BM25_CORPUS_PATH,
+)
 
 # ---------------------------------------------------------------------------
 #  Step 2: Knowledge graph
