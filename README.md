@@ -440,11 +440,13 @@ Latency: ~30-60 seconds per query (4-5 LLM calls + programmatic checks)
 Use case: "Synthesize what's known about immune response to titanium implants in obese models"
 
 ### 8.3 Survey Mode (Phase 4)
-Purpose: Systematic field mapping across many papers
+Purpose: Comprehensive, evidence‑grounded literature survey across many papers.
 
-Flow: Broad PubMed retrieval → theme clustering → per‑theme representative paper selection → per‑theme deep synthesis → cross‑theme gap analysis
+Flow: Broad retrieval (all papers) → thematic clustering (LLM, assigns every paper to 1+ themes) → per‑document lightweight extraction (parallel, feeds shared KG) → per‑theme deep synthesis (full Drafter→Critic→Arbiter debate on all papers in that theme) → cross‑theme synthesis & gap analysis.
 
-Latency: ~5-10 minutes for a subfield survey
+*Why not representative paper selection?* Picking a few "representative" papers per theme loses outlier findings, contradictory evidence, and interdisciplinary assignments. Instead, every paper gets extracted into the KG (fast, ~5 sec/paper), and the expensive full debate synthesis runs only per‑theme (5–8 calls), not per‑paper (100+). This preserves completeness while controlling cost — the KG acts as the shared truth cache across all stages.
+
+Latency: ~5-10 minutes for a subfield survey (100 papers)
 
 Use case: "Map the current understanding of biomaterial surface modifications and immune response"
 
@@ -702,7 +704,18 @@ The drafter receives: *"Key connecting concepts: leptin (links obesity → immun
 - **Survey Mode not implemented**: broad retrieval → theme clustering → per-theme synthesis → gap analysis is deferred to Phase 4
 
 Phase 4: Live Citation & Survey Mode (Weeks 8-9)
-Goal: Real Zotero integration + systematic literature surveying.
+Goal: Real Zotero integration + comprehensive literature surveying.
+
+Revised architecture (May 2026): Two‑stage hybrid approach replacing the original representative‑paper model.
+
+Survey Mode flow:
+1. **Broad retrieval** — fetch all matching papers from PubMed + local corpus
+2. **Thematic clustering** — LLM assigns every paper to 1+ themes; no paper is excluded
+3. **Per‑document lightweight extraction** — structured entities (materials, methods, findings) extracted per paper in parallel (~5 sec/paper). All extractions feed the shared persistent KG.
+4. **Per‑theme deep synthesis** — full Drafter→Critic→Arbiter debate on ALL papers in each theme (not just representatives). The KG enriches cross‑document context.
+5. **Cross‑theme synthesis & gap analysis** — single debate synthesis across all theme outputs + KG, identifying contradictions, missing evidence, and research gaps.
+
+*Why hybrid instead of pure per‑document synthesis?* Per‑document debate (100 papers × 30 sec = 50 min) is too slow. Per‑document extraction (100 papers × 5 sec = 8 min) is fast and lossless. The expensive debate synthesis runs only 5–8 times (per theme), preserving depth without sacrificing completeness.
 
 Deliverables:
 
@@ -714,9 +727,17 @@ Ingest pipeline: on PDF addition, automatically create Zotero item
 
 Citation keys propagated through extraction (entity → source paper) and synthesis (inline @keys)
 
-Survey Mode: broad retrieval → theme clustering → per‑theme deep synthesis → gap analysis
+Query decomposition agent: breaks complex research questions into theme‑discovery sub‑queries
 
-Expanded human‑in‑the‑loop gates for survey results
+Thematic clustering agent: assigns papers to 1+ themes using lightweight LLM call
+
+Per‑document extraction agent: reuses Phase 3 ExtractionAgent with source‑filtered chunks; runs in parallel
+
+Per‑theme deep synthesis: reuses Phase 3 debate chain (Drafter→Critic→Arbiter) on all papers in each theme
+
+Cross‑theme synthesis agent: consumes all theme syntheses + KG to produce final survey with gap analysis
+
+Expanded human‑in‑the‑loop gates for survey results (theme review, gap acceptance)
 
 Phase 5: Security Hardening & Air‑Gap (Weeks 10-11)
 Goal: True dual‑corpus isolation with network enforcement.
