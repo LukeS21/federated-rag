@@ -92,7 +92,7 @@ class ExtractionAgent:
 
         user_prompt = (
             f"Research Query: {query}\n\n"
-            f"Retrieved Chunks (format: [Chunk N] text):\n{chunk_summaries}\n\n"
+            f"Retrieved Chunks (format: [Chunk N | source.pdf] text):\n{chunk_summaries}\n\n"
             "Discover the categories, key variables, and experimental methods."
         )
 
@@ -161,7 +161,7 @@ class ExtractionAgent:
             "ARE PROVIDED in the user message below. Do NOT state that data is missing. "
             "Extract all specific entities that fall under each category. For each entity you MUST:\n"
             ' - include an "evidence" field quoting the exact sentence(s) from the chunks.\n'
-            ' - include a "source" field with the chunk number (e.g. "Chunk 3") the evidence came from.\n'
+            ' - include a "source" field with the full chunk label including source PDF (e.g. "Chunk 3 | test.pdf").\n'
             ' - normalise synonyms (e.g. "TNF-\u03b1" and "TNF-alpha" become "TNF-alpha").\n'
             "Output a JSON object whose keys are EXACTLY the category names provided. "
             "The value for each key must be a list of objects. Every object must contain the "
@@ -186,12 +186,13 @@ class ExtractionAgent:
     #  Internal helpers
     # ------------------------------------------------------------------
     def _format_chunks_for_prompt(self, chunks: List[Dict[str, Any]]) -> str:
-        """Compress chunk list into a numbered text block."""
+        """Compress chunk list into a numbered text block with PDF source labels."""
         lines = []
         for i, ch in enumerate(chunks):
             text = ch.get("text", "")
             clean = " ".join(text.split())
-            lines.append(f"[Chunk {i}] {clean}")
+            src = (ch.get("metadata", {}) or {}).get("source", "?")
+            lines.append(f"[Chunk {i} | {src}] {clean}")
         return "\n".join(lines)
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:

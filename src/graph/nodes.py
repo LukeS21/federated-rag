@@ -196,6 +196,10 @@ def drafter_node(state: AgentState) -> Dict[str, Any]:
     kg_snapshot = state.get("knowledge_graph_snapshot", {})
     # Compute structured KG insights instead of dumping raw node‑link JSON
     kg_context = compute_graph_insights(kg_snapshot, query=state["user_query"])
+    if kg_context:
+        logger.info("KG insights computed: %d chars for drafter.", len(kg_context))
+    else:
+        logger.info("KG snapshot empty — no insights to inject.")
     callback = state.get("callback")
 
     drafter = SynthesisDrafter(
