@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from src.cache.llm_cache import get_cache
 from src.unicode_map import sanitize_api_key, scrub_unicode
 
 logger = logging.getLogger(__name__)
@@ -134,9 +135,23 @@ class ExtractionAgent:
 
         categories_str = json.dumps(categories, indent=2, ensure_ascii=False)
 
+        # Build a stripped version of categories (no examples_found) to reduce prompt size.
+        # The LLM generated these examples 30 seconds ago in category_discovery — it doesn't
+        # need to re-read them. Keep names and descriptions only.
+        stripped_categories = {
+            k: [
+                {sk: sv for sk, sv in c.items() if sk != "examples_found"}
+                for c in v
+            ]
+            if isinstance(v, list)
+            else v
+            for k, v in categories.items()
+        }
+        categories_str = json.dumps(stripped_categories, indent=2, ensure_ascii=False)
+
         ner_hint = ""
         if ner_entities:
-            ner_lines = [f"  - {e['text']} ({e['label']}) [Chunk {e.get('source_chunk', '?')}]" for e in ner_entities[:50]]
+            ner_lines = [f"  - {e['text']} ({e['label']}) [Chunk {e.get('source_chunk', '?')}]" for e in ner_entities[:30]]
             ner_hint = "Deterministic NER entities (use as hints; verify with evidence):\n" + "\n".join(ner_lines) + "\n\n"
 
         system_prompt = (
@@ -179,7 +194,16 @@ class ExtractionAgent:
         return "\n".join(lines)
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Send a prompt to Ollama and return the full response text."""
+        """Send a prompt to the LLM and return the full response text.
+
+        Responses are cached by (system_prompt, user_prompt) hash with 24h TTL
+        since temperature=0 makes outputs deterministic.
+        """
+        cache = get_cache()
+        cached = cache.get(system_prompt, user_prompt)
+        if cached is not None:
+            return cached
+
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
@@ -188,7 +212,9 @@ class ExtractionAgent:
         if self.callback:
             config["callbacks"] = [self.callback]
         response = self._llm.invoke(messages, config=config)
-        return (response.content or "").strip()
+        result = (response.content or "").strip()
+        cache.set(system_prompt, user_prompt, result)
+        return result
 
     def _parse_json_safely(self, raw_text: str, context: str) -> Dict[str, Any]:
         """Parse JSON after ASCII-scrubbing; up to two parse attempts (second uses looser extraction)."""

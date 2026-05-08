@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from src.cache.llm_cache import get_cache
 from src.unicode_map import sanitize_api_key, scrub_unicode
 
 
@@ -30,11 +31,11 @@ class Summarizer:
         if client_kwargs is None:
             client_kwargs = {}
         self.llm = ChatOpenAI(
-            model="deepseek-v4-pro",
+            model="deepseek-chat",
             temperature=0.0,
             api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
             base_url="https://api.deepseek.com/v1",
-            max_tokens=1024,
+            max_tokens=512,
             timeout=120,
             default_headers={
                 "User-Agent": "federated-rag",
@@ -72,8 +73,17 @@ class Summarizer:
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
+
+        # Check cache first (LLM responses at temperature=0 are deterministic)
+        cache = get_cache()
+        cached = cache.get(system_prompt, user_prompt)
+        if cached is not None:
+            return scrub_unicode(cached)
+
         config = {}
         if self.callback:
             config["callbacks"] = [self.callback]
         response = self.llm.invoke(messages, config=config)
-        return scrub_unicode((response.content or "").strip())
+        result = scrub_unicode((response.content or "").strip())
+        cache.set(system_prompt, user_prompt, result)
+        return result

@@ -51,13 +51,16 @@ class SynthesisDrafter:
         entities: Dict[str, Any],
         chunks: List[Dict[str, Any]],
         citations: List[str],
-        kg_context: Dict[str, Any],
+        kg_context: Dict[str, Any] | str,
     ) -> str:
         """Produce a draft synthesis paragraph (README §5.2)."""
         system_prompt = (
             "You are a biomedical literature synthesis drafter. Given extracted entities, "
-            "evidence summaries, and citation keys, write a concise literature review paragraph. "
+            "evidence summaries, citation keys, and knowledge graph insights, write a "
+            "concise literature review paragraph. "
             "Every factual claim must be traceable to a provided evidence chunk. "
+            "Use the knowledge graph to identify cross‑cutting themes and relationships "
+            "between entities across the evidence. "
             "Use inline citation keys (@author2025). Output plain ASCII only."
         )
 
@@ -67,14 +70,14 @@ class SynthesisDrafter:
         ]
         chunk_texts = "\n\n".join(f"[Chunk {i}] {ch.get('text', '')}" for i, ch in enumerate(chunks))
         cite_keys = ", ".join(citations) if citations else "none provided"
-        subgraph_json = json.dumps(kg_context or {}, indent=2, ensure_ascii=False)
+        kg_text = kg_context if isinstance(kg_context, str) else json.dumps(kg_context or {}, indent=2, ensure_ascii=False)
 
         user_prompt = (
             f"Query: {query}\n"
             f"Extracted Entities: {entities_json}\n"
             f"Evidence Summaries: {chunk_texts}\n"
             f"Available Citations: {cite_keys}\n"
-            f"Knowledge Graph Context: {subgraph_json}\n"
+            f"Knowledge Graph Context: {kg_text}\n"
             "Write a draft paragraph synthesizing this information."
         )
 

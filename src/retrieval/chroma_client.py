@@ -12,5 +12,8 @@ class ChromaClient:
     def add_documents(self, ids, documents, metadatas=None):
         self.collection.add(ids=ids, documents=documents, metadatas=metadatas)
 
-    def query(self, query_text: str, n_results: int = 5):
-        return self.collection.query(query_texts=[query_text], n_results=n_results)
+    def query(self, query_text: str, n_results: int = 5, include_distances: bool = False):
+        include = ["documents", "metadatas"]
+        if include_distances:
+            include.append("distances")
+        return self.collection.query(query_texts=[query_text], n_results=n_results, include=include)

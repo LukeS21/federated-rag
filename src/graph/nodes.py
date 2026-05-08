@@ -15,6 +15,7 @@ from src.agents.sci_ner import extract_ner_entities
 from src.anchoring.evidence_check import compute_anchoring_score, decompose_claims
 from src.graph.base_graph import BaseGraphStorage
 from src.graph.graph_builder import GraphBuilder
+from src.graph.graph_reasoning import compute_graph_insights
 from src.retrieval.hybrid_retriever import HybridRetriever
 from src.scrubber import final_scrub
 
@@ -36,12 +37,21 @@ def input_router_node(state: AgentState) -> Dict[str, Any]:
 #  Node 2: Hybrid Retriever
 # ---------------------------------------------------------------------------
 def retrieve_node(state: AgentState, hybrid_retriever: HybridRetriever) -> Dict[str, Any]:
-    """Query the hybrid retriever, filtering references."""
+    """Query the hybrid retriever, filtering references.
+
+    Uses similarity-threshold retrieval (L2 distance ≤ 1.0, max 20 chunks)
+    to adaptively select only relevant chunks instead of a fixed n_results=10.
+    """
 
     query = state["user_query"]
     scope = state["query_scope"]
 
-    chunks = hybrid_retriever.query(query, n_results=10, filter_references=True)
+    chunks = hybrid_retriever.query(
+        query,
+        similarity_threshold=1.0,
+        max_chunks=20,
+        filter_references=True,
+    )
 
     updates: Dict[str, Any] = {}
     if scope in ("public", "both"):
@@ -57,14 +67,31 @@ def retrieve_node(state: AgentState, hybrid_retriever: HybridRetriever) -> Dict[
 def summarize_node(state: AgentState) -> Dict[str, Any]:
     """Condense retrieved chunks into an evidence abstract.
 
-    Downstream agents consume this summary instead of raw chunks, cutting
-    token usage ~5x per subsequent LLM call.
+    If all chunks carry pre‑computed ``chunk_summary`` metadata (from ingest‑time
+    pre‑summarization), concatenate those directly — no LLM call needed.
+    Otherwise, fall back to query‑time summarization via the Summarizer agent.
     """
 
     chunks = state.get("public_context") or state.get("secure_context", [])
     if not chunks:
         return {"chunk_summary": ""}
 
+    # Check for pre‑computed summaries (ingest‑time pre‑summarization)
+    pre_summaries = []
+    for ch in chunks:
+        meta = ch.get("metadata", {}) or {}
+        cs = meta.get("chunk_summary", "")
+        if cs:
+            pre_summaries.append(cs)
+
+    if pre_summaries and len(pre_summaries) == len(chunks):
+        summary = "\n\n".join(
+            f"[Chunk {i}] {s}" for i, s in enumerate(pre_summaries)
+        )
+        logger.info("Using %d pre‑computed chunk summaries (no LLM call).", len(pre_summaries))
+        return {"chunk_summary": summary}
+
+    # Fall back to query‑time summarization
     callback = state.get("callback")
     summarizer = Summarizer(
         num_ctx=int(state.get("num_ctx", 16384) or 16384),
@@ -167,6 +194,8 @@ def drafter_node(state: AgentState) -> Dict[str, Any]:
         chunks = raw_chunks
     citations = list({(ch.get("metadata", {}) or {}).get("source", "unknown") for ch in raw_chunks})
     kg_snapshot = state.get("knowledge_graph_snapshot", {})
+    # Compute structured KG insights instead of dumping raw node‑link JSON
+    kg_context = compute_graph_insights(kg_snapshot, query=state["user_query"])
     callback = state.get("callback")
 
     drafter = SynthesisDrafter(
@@ -179,7 +208,7 @@ def drafter_node(state: AgentState) -> Dict[str, Any]:
         entities=entities,
         chunks=chunks,
         citations=citations,
-        kg_context=kg_snapshot,
+        kg_context=kg_context,
     )
     return {"synthesis_draft": draft, "citations_used": citations}
 

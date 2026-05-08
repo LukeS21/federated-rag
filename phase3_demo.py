@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from langgraph.errors import GraphRecursionError
 
 from src.ingestion.pdf_parser import PDFParser
+from src.ingestion.pre_summarizer import PreSummarizer
 from src.retrieval.chroma_client import ChromaClient
 from src.retrieval.bm25_index import BM25Index
 from src.retrieval.hybrid_retriever import HybridRetriever
@@ -124,11 +125,17 @@ if existing_docs == 0:
     chunks = pdf_parser.parse(PDF_PATH)
     for ch in chunks:
         ch["text"] = scrub_unicode(ch["text"])
+
+    # Pre-summarize chunks at ingest time (one-time LLM cost per document).
+    # Stored in chunk metadata so query-time Summarize node can skip the LLM call.
+    pre_summarizer = PreSummarizer()
+    chunks = pre_summarizer.summarize_all(chunks)
+
     retriever.ingest(chunks)
     bm25_corpus = [ch["text"] for ch in chunks]
     with open(BM25_CORPUS_PATH, "w", encoding="utf-8") as f:
         json.dump(bm25_corpus, f)
-    logger.info(f"Ingested {len(chunks)} chunks.")
+    logger.info(f"Ingested {len(chunks)} chunks (pre-summarized).")
 else:
     logger.info(f"Using existing index with ~{existing_docs} documents.")
     _ensure_bm25_loaded_from_disk_or_chroma(

@@ -47,14 +47,45 @@ class HybridRetriever:
         # BM25 (only needs texts)
         self.bm25.add_documents(texts)
 
-    def query(self, query: str, n_results: int = 5, filter_references: bool = True) -> List[Dict]:
+    def query(
+        self,
+        query: str,
+        n_results: int = 5,
+        filter_references: bool = True,
+        similarity_threshold: float | None = None,
+        max_chunks: int = 20,
+    ) -> List[Dict]:
+        """Query both indexes and fuse results.
+
+        When ``similarity_threshold`` is set, ChromaDB results are filtered
+        by L2 distance before fusion (lower = more similar).  The final result
+        list is capped at ``max_chunks`` to prevent context‑window overflow.
+        """
+        fetch_n = max(n_results * 5, max_chunks * 2, 50)
+
         # Dense
-        chroma_res = self.chroma.collection.query(query_texts=[query], n_results=n_results)
+        chroma_res = self.chroma.query(
+            query_text=query,
+            n_results=fetch_n,
+            include_distances=similarity_threshold is not None,
+        )
         dense_texts = chroma_res["documents"][0] if chroma_res["documents"] else []
         dense_metadatas = chroma_res["metadatas"][0] if chroma_res["metadatas"] else []
+        dense_distances = chroma_res.get("distances", [[]])[0] if similarity_threshold is not None else []
+
+        # Filter dense results by distance threshold (if provided)
+        if similarity_threshold is not None and dense_distances:
+            filtered_texts = []
+            filtered_metadatas = []
+            for t, m, d in zip(dense_texts, dense_metadatas, dense_distances):
+                if d <= similarity_threshold:
+                    filtered_texts.append(t)
+                    filtered_metadatas.append(m)
+            dense_texts = filtered_texts
+            dense_metadatas = filtered_metadatas
 
         # Sparse
-        sparse_texts = self.bm25.query(query, n_results=n_results * 2)
+        sparse_texts = self.bm25.query(query, n_results=fetch_n)
 
         # Map text -> metadata for Chroma results
         text_meta = {t: m for t, m in zip(dense_texts, dense_metadatas)}
@@ -71,11 +102,10 @@ class HybridRetriever:
             seen.add(text)
             meta = text_meta.get(text, {})
 
-            # Skip reference chunks when filter_references is True
             if filter_references and meta.get("chunk_type") == "reference":
                 continue
 
             results.append({"text": text, "metadata": meta})
-            if len(results) >= n_results:
+            if len(results) >= max_chunks:
                 break
         return results
