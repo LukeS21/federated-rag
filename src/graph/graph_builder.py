@@ -226,3 +226,50 @@ def build_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
         interrupt_before=["human_gate", "sci_ner"],
         checkpointer=MemorySaver(),
     )
+
+
+def build_survey_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
+    """Construct the Survey Mode LangGraph state graph (Phase 4).
+
+    Implements the two-stage hybrid architecture:
+      1. Query decomposition → broad retrieval → thematic clustering
+      2. Per-document parallel extraction → per-theme debate → cross-theme synthesis
+    """
+    from langgraph.graph import END, StateGraph
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from src.state import AgentState
+    from src.graph.survey_nodes import (
+        survey_cross_theme_synthesize_node,
+        survey_per_document_extract_node,
+        survey_per_theme_synthesize_node,
+        survey_query_decompose_node,
+        survey_retrieve_node,
+        survey_scrub_node,
+        survey_thematic_cluster_node,
+    )
+
+    workflow = StateGraph(AgentState)
+
+    workflow.add_node("survey_query_decompose", survey_query_decompose_node)
+    workflow.add_node("survey_retrieve", lambda state: survey_retrieve_node(state, hybrid_retriever))
+    workflow.add_node("survey_thematic_cluster", survey_thematic_cluster_node)
+    workflow.add_node("survey_per_document_extract", lambda state: survey_per_document_extract_node(state, graph_storage))
+    workflow.add_node("survey_per_theme_synthesize",
+                      lambda state: survey_per_theme_synthesize_node(state, graph_storage))
+    workflow.add_node("survey_cross_theme_synthesize", survey_cross_theme_synthesize_node)
+    workflow.add_node("survey_scrub", survey_scrub_node)
+
+    workflow.set_entry_point("survey_query_decompose")
+    workflow.add_edge("survey_query_decompose", "survey_retrieve")
+    workflow.add_edge("survey_retrieve", "survey_thematic_cluster")
+    workflow.add_edge("survey_thematic_cluster", "survey_per_document_extract")
+    workflow.add_edge("survey_per_document_extract", "survey_per_theme_synthesize")
+    workflow.add_edge("survey_per_theme_synthesize", "survey_cross_theme_synthesize")
+    workflow.add_edge("survey_cross_theme_synthesize", "survey_scrub")
+    workflow.add_edge("survey_scrub", END)
+
+    return workflow.compile(
+        checkpointer=MemorySaver(),
+        interrupt_before=["survey_scrub"],
+    )

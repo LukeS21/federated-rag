@@ -24,15 +24,15 @@ class LLMCache:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._ttl = ttl_seconds
 
-    def _key(self, system_prompt: str, user_prompt: str) -> str:
-        raw = f"{system_prompt}|||{user_prompt}"
+    def _key(self, system_prompt: str, user_prompt: str, model: str = "") -> str:
+        raw = f"{system_prompt}|||{user_prompt}|||{model}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _path(self, key: str) -> Path:
         return self._cache_dir / f"{key}.json"
 
-    def get(self, system_prompt: str, user_prompt: str) -> Optional[str]:
-        key = self._key(system_prompt, user_prompt)
+    def get(self, system_prompt: str, user_prompt: str, model: str = "") -> Optional[str]:
+        key = self._key(system_prompt, user_prompt, model)
         p = self._path(key)
         if not p.exists():
             return None
@@ -45,8 +45,8 @@ class LLMCache:
         except (json.JSONDecodeError, OSError):
             return None
 
-    def set(self, system_prompt: str, user_prompt: str, response: str) -> None:
-        key = self._key(system_prompt, user_prompt)
+    def set(self, system_prompt: str, user_prompt: str, response: str, model: str = "") -> None:
+        key = self._key(system_prompt, user_prompt, model)
         self._path(key).write_text(
             json.dumps({"ts": time.time(), "response": response}, ensure_ascii=False),
             encoding="utf-8",

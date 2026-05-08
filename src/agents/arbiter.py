@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from src.cache.llm_cache import get_cache
 from src.unicode_map import sanitize_api_key, scrub_unicode
 
 
@@ -27,11 +28,13 @@ class Arbiter:
         num_ctx: int = 8192,
         client_kwargs: dict | None = None,
         callback=None,
+        model: str | None = None,
     ) -> None:
         if client_kwargs is None:
             client_kwargs = {}
+        self._model = model or "deepseek-v4-pro"
         self.llm = ChatOpenAI(
-            model="deepseek-v4-pro",
+            model=self._model,
             temperature=0.0,
             api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
             base_url="https://api.deepseek.com/v1",
@@ -75,10 +78,18 @@ class Arbiter:
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
+
+        cache = get_cache()
+        cached = cache.get(system_prompt, user_prompt, model=self._model)
+        if cached is not None:
+            return scrub_unicode(cached)
+
         config = {}
         if self.callback:
             config["callbacks"] = [self.callback]
         response = self.llm.invoke(messages, config=config)
         raw = _strip_thinking((response.content or "").strip())
-        return scrub_unicode(raw)
+        result = scrub_unicode(raw)
+        cache.set(system_prompt, user_prompt, result, model=self._model)
+        return result
 

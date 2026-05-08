@@ -76,7 +76,7 @@ class Summarizer:
 
         # Check cache first (LLM responses at temperature=0 are deterministic)
         cache = get_cache()
-        cached = cache.get(system_prompt, user_prompt)
+        cached = cache.get(system_prompt, user_prompt, model="deepseek-chat")
         if cached is not None:
             return scrub_unicode(cached)
 
@@ -85,5 +85,5 @@ class Summarizer:
             config["callbacks"] = [self.callback]
         response = self.llm.invoke(messages, config=config)
         result = scrub_unicode((response.content or "").strip())
-        cache.set(system_prompt, user_prompt, result)
+        cache.set(system_prompt, user_prompt, result, model="deepseek-chat")
         return result

@@ -1,0 +1,822 @@
+"""Survey Mode node functions for the LangGraph pipeline (Phase 4).
+
+These nodes implement the two-stage hybrid Survey Mode architecture:
+  1. Query decomposition → thematic clusters
+  2. Broad retrieval → per-document parallel extraction → per-theme debate → cross-theme synthesis
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List
+
+import tiktoken
+
+from src.agents.arbiter import Arbiter
+from src.agents.extraction_agent import ExtractionAgent
+from src.agents.query_decomposer import QueryDecomposer
+from src.agents.socratic_critic import SocraticCritic
+from src.agents.synthesis_drafter import SynthesisDrafter
+from src.agents.thematic_clusterer import ThematicClusterer
+from src.anchoring.evidence_check import compute_anchoring_score, decompose_claims
+from src.graph.base_graph import BaseGraphStorage
+from src.graph.graph_builder import GraphBuilder
+from src.graph.graph_reasoning import compute_graph_insights
+from src.graph.networkx_json_storage import NetworkXJSONStorage
+from src.cache.query_cache import (
+    cache_query_decomposition, load_query_decomposition,
+    cache_theme_synthesis, load_theme_synthesis,
+    cache_cross_theme, load_cross_theme,
+)
+from src.ingestion.pre_extractor import PreExtractor
+from src.retrieval.hybrid_retriever import HybridRetriever
+from src.scrubber import final_scrub
+from src.state import AgentState
+from src.unicode_map import scrub_unicode
+
+logger = logging.getLogger(__name__)
+
+# Threshold below which the Critic is invoked in multi-paper themes.
+# Drafts with anchoring score >= this threshold skip Critic (EGSR pattern).
+# Adjust based on benchmark results.
+CONDITIONAL_CRITIC_THRESHOLD = 0.35
+
+# Default model tiering: per-theme tasks use the fast/cheap tier.
+# Cross-theme synthesis and gap analysis use the full reasoning tier.
+PER_THEME_DRAFTER_MODEL = "deepseek-chat"
+CROSS_THEME_DRAFTER_MODEL = "deepseek-v4-pro"
+
+# Tokenizer for accurate context-window estimation (lazy init)
+_tokenizer: tiktoken.Encoding | None = None
+
+
+def _get_tokenizer() -> tiktoken.Encoding:
+    global _tokenizer
+    if _tokenizer is None:
+        _tokenizer = tiktoken.get_encoding("cl100k_base")
+    return _tokenizer
+
+
+# ---------------------------------------------------------------------------
+#  Memoized agent constructors (shared across themes — avoids redundant
+#  ChatOpenAI instantiations for identical config)
+# ---------------------------------------------------------------------------
+_drafter_cache: Dict[str, SynthesisDrafter] = {}
+_critic_cache: Dict[str, SocraticCritic] = {}
+_arbiter_cache: Dict[str, Arbiter] = {}
+
+
+def _clear_agent_caches() -> None:
+    """Clear memoized agent instances (useful for testing)."""
+    _drafter_cache.clear()
+    _critic_cache.clear()
+    _arbiter_cache.clear()
+
+
+def _get_drafter(
+    num_ctx: int,
+    client_kwargs: dict | None,
+    model: str | None = None,
+) -> SynthesisDrafter:
+    key = f"drafter:{model or 'default'}"
+    if key not in _drafter_cache:
+        _drafter_cache[key] = SynthesisDrafter(
+            num_ctx=num_ctx, client_kwargs=client_kwargs, model=model,
+        )
+    return _drafter_cache[key]
+
+
+def _get_critic(
+    num_ctx: int,
+    client_kwargs: dict | None,
+) -> SocraticCritic:
+    if "critic" not in _critic_cache:
+        _critic_cache["critic"] = SocraticCritic(
+            num_ctx=num_ctx, client_kwargs=client_kwargs,
+        )
+    return _critic_cache["critic"]
+
+
+def _get_arbiter(
+    num_ctx: int,
+    client_kwargs: dict | None,
+) -> Arbiter:
+    if "arbiter" not in _arbiter_cache:
+        _arbiter_cache["arbiter"] = Arbiter(
+            num_ctx=num_ctx, client_kwargs=client_kwargs,
+        )
+    return _arbiter_cache["arbiter"]
+
+
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
+def _fit_summaries_to_context(
+    summaries: List[str],
+    num_ctx: int,
+    max_ratio: float = 0.7,
+    overhead_tokens: int = 3000,
+) -> List[str]:
+    """Dynamically cap summaries to fit within the context window.
+
+    Replaces hardcoded ``summaries[:20]`` with a dynamic cap based on
+    available context window size.  Fills summaries until approximately
+    *max_ratio* of the context window is consumed (default 70%), reserving
+    *overhead_tokens* for the system prompt, entity JSON, and citations.
+
+    Uses tiktoken (cl100k_base) for exact token counting.
+    """
+    if not summaries:
+        return []
+    enc = _get_tokenizer()
+    max_tokens = max(1, int(num_ctx * max_ratio) - overhead_tokens)
+    selected: List[str] = []
+    token_count = 0
+    for s in summaries:
+        est_tokens = len(enc.encode(s))
+        if token_count + est_tokens > max_tokens and selected:
+            break
+        selected.append(s)
+        token_count += est_tokens
+    return selected
+
+
+# ---------------------------------------------------------------------------
+#  Node S1: Query Decomposition
+# ---------------------------------------------------------------------------
+def survey_query_decompose_node(state: AgentState) -> Dict[str, Any]:
+    """Decompose broad research question into thematic sub-queries.
+
+    Uses Level 1 query cache — if the same query has been decomposed
+    before (same text + same # of papers), the cached decomposition is
+    returned instantly.
+    """
+    query = state["user_query"]
+
+    # Count unique papers for cache invalidation
+    from pathlib import Path as _Path
+    doc_count = 0
+    extractions_dir = _Path("projects/default/extractions")
+    if extractions_dir.exists():
+        doc_count = len(list(extractions_dir.glob("*.json")))
+
+    # Level 1 cache check
+    cached = load_query_decomposition(query, doc_count)
+    if cached is not None:
+        return {"decomposed_themes": cached}
+
+    decomposer = QueryDecomposer()
+    result = decomposer.decompose(query)
+    themes = result.get("themes", [])
+    logger.info("Query decomposed into %d themes: %s", len(themes),
+                 [t.get("theme", "?") for t in themes])
+
+    # Cache for future queries
+    cache_query_decomposition(query, doc_count, themes)
+
+    return {
+        "decomposed_themes": themes,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Node S2: Broad Retrieval
+# ---------------------------------------------------------------------------
+def survey_retrieve_node(
+    state: AgentState, hybrid_retriever: HybridRetriever
+) -> Dict[str, Any]:
+    """Broad retrieval — fetch chunks from all matching papers, no exclusions.
+
+    Uses a looser threshold (L2 ≤ 1.5) and higher max (50 chunks) to ensure
+    full paper coverage for thematic clustering.
+    """
+    query = state["user_query"]
+    chunks = hybrid_retriever.query(
+        query,
+        similarity_threshold=1.5,
+        max_chunks=50,
+        filter_references=True,
+    )
+    logger.info("Survey retrieve: %d chunks across papers", len(chunks))
+    return {"public_context": chunks}
+
+
+# ---------------------------------------------------------------------------
+#  Node S3: Thematic Clustering
+# ---------------------------------------------------------------------------
+def survey_thematic_cluster_node(state: AgentState) -> Dict[str, Any]:
+    """Assign every paper to one or more themes."""
+    chunks = state.get("public_context") or []
+    themes = state.get("decomposed_themes", [])
+
+    if not themes:
+        logger.warning("No themes to cluster — skipping.")
+        return {"thematic_clusters": {}}
+
+    # Build paper summaries from pre-summarized chunks, excluding unknown sources
+    papers_by_source: Dict[str, Dict[str, Any]] = {}
+    for ch in chunks:
+        meta = ch.get("metadata", {}) or {}
+        src = meta.get("source", "unknown")
+        if not src or src == "unknown":
+            continue
+        if src not in papers_by_source:
+            papers_by_source[src] = {
+                "id": src,
+                "title": src,
+                "summary_parts": [],
+            }
+        summary = meta.get("chunk_summary", ch.get("text", "")[:300])
+        papers_by_source[src]["summary_parts"].append(summary)
+
+    papers = []
+    paper_id_by_index: Dict[str, str] = {}  # "0" → "test.pdf" mapping for fallback
+    for idx, (src, info) in enumerate(papers_by_source.items()):
+        papers.append({
+            "id": src,
+            "title": src,
+            "summary": " ".join(info["summary_parts"][:10]),
+        })
+        paper_id_by_index[str(idx)] = src
+
+    clusterer = ThematicClusterer()
+    result = clusterer.cluster(papers, themes)
+    clusters = result.get("clusters", {})
+    unassigned = result.get("unassigned", [])
+
+    # Fix numeric IDs → actual paper IDs (LLM sometimes returns indices despite prompt)
+    fixed_clusters: Dict[str, list] = {}
+    for theme_name, paper_ids in clusters.items():
+        if isinstance(paper_ids, list):
+            fixed = []
+            for pid in paper_ids:
+                pid_str = str(pid)
+                if pid_str in paper_id_by_index:
+                    fixed.append(paper_id_by_index[pid_str])
+                elif pid_str in papers_by_source:
+                    fixed.append(pid_str)
+                else:
+                    logger.warning("Unknown paper ID in cluster '%s': %s", theme_name, pid_str)
+            if fixed:
+                fixed_clusters[theme_name] = fixed
+        else:
+            fixed_clusters[theme_name] = paper_ids
+
+    logger.info("Thematic clustering: %d clusters, %d unassigned papers",
+                 len(fixed_clusters), len(unassigned))
+    if unassigned:
+        logger.info("Unassigned papers: %s", unassigned)
+
+    return {"thematic_clusters": fixed_clusters}
+
+
+# ---------------------------------------------------------------------------
+#  Node S4: Per-Document Extraction (pre-extracted entities priority)
+# ---------------------------------------------------------------------------
+def _extract_one_paper(
+    chunks: List[Dict[str, Any]],
+    query: str,
+    extraction_model: str,
+) -> Dict[str, Any]:
+    """LLM extraction fallback for papers without pre-extracted entities."""
+    agent = ExtractionAgent(model=extraction_model)
+    summary_chunks = []
+    for ch in chunks:
+        meta = ch.get("metadata", {}) or {}
+        s = meta.get("chunk_summary", ch.get("text", "")[:200])
+        summary_chunks.append({"text": s, "metadata": meta})
+    categories = agent.discover_categories(summary_chunks, query)
+    entities = agent.extract_entities(chunks, categories, query)
+    return entities
+
+
+def survey_per_document_extract_node(
+    state: AgentState, graph_storage: BaseGraphStorage
+) -> Dict[str, Any]:
+    """Retrieve per-paper entities — pre-extracted from disk first, LLM fallback.
+
+    Pre-extraction at ingest time eliminates ~60% of query-time LLM calls.
+    Only papers without pre-extracted entities trigger fresh LLM extraction.
+    """
+    chunks = state.get("public_context") or []
+    query = state["user_query"]
+
+    # Group chunks by source paper (exclude unknown sources)
+    chunks_by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for ch in chunks:
+        meta = ch.get("metadata", {}) or {}
+        src = meta.get("source", "") or ""
+        if not src or src == "unknown":
+            continue
+        if src not in chunks_by_source:
+            chunks_by_source[src] = []
+        chunks_by_source[src].append(ch)
+
+    paper_ids = sorted(chunks_by_source.keys())
+    if not paper_ids:
+        logger.info("Per-document extraction: no papers to process.")
+        return {"per_paper_extractions": {}, "extracted_entities": {}}
+
+    per_paper: Dict[str, Any] = {}
+    all_entities: Dict[str, List[Dict[str, Any]]] = {}
+    papers_needing_extraction: List[str] = []
+
+    # Load pre-extracted entities for each paper
+    for src in paper_ids:
+        cached = PreExtractor.load(src)
+        if cached is not None:
+            per_paper[src] = cached
+            for cat, ent_list in cached.items():
+                key = f"{src}::{cat}"
+                if key not in all_entities:
+                    all_entities[key] = []
+                all_entities[key].extend(ent_list if isinstance(ent_list, list) else [])
+            logger.info("  %s: loaded %d pre-extracted entity groups", src, len(cached))
+        else:
+            papers_needing_extraction.append(src)
+
+    # LLM extraction for papers not pre-extracted
+    if papers_needing_extraction:
+        logger.info("Per-document extraction: %d paper(s) need LLM extraction",
+                     len(papers_needing_extraction))
+        extraction_model = "deepseek-chat"
+        max_workers = min(len(papers_needing_extraction), 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for src in papers_needing_extraction:
+                future = executor.submit(
+                    _extract_one_paper,
+                    chunks_by_source[src],
+                    query,
+                    extraction_model,
+                )
+                futures[future] = src
+
+            for future in as_completed(futures):
+                src = futures[future]
+                try:
+                    entities = future.result()
+                    per_paper[src] = entities
+                    for cat, ent_list in entities.items():
+                        key = f"{src}::{cat}"
+                        if key not in all_entities:
+                            all_entities[key] = []
+                        all_entities[key].extend(ent_list if isinstance(ent_list, list) else [])
+                    # Cache for future queries
+                    PreExtractor()._save(src, entities)
+                    # Feed to KG
+                    try:
+                        GraphBuilder().build(entities, chunks_by_source[src], graph_storage)
+                    except Exception:
+                        pass
+                    logger.info("  %s: %d entity groups extracted + cached", src, len(entities))
+                except Exception as e:
+                    logger.error("  %s: extraction failed — %s", src, e)
+                    per_paper[src] = {}
+
+    logger.info("Per-document extraction complete: %d papers, %d entity groups",
+                 len(per_paper), len(all_entities))
+
+    return {
+        "per_paper_extractions": per_paper,
+        "extracted_entities": all_entities,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Node S5: Per-Theme Deep Synthesis
+# ---------------------------------------------------------------------------
+def _run_debate_for_theme(
+    theme_name: str,
+    theme_chunks: List[Dict[str, Any]],
+    theme_entities: Dict[str, Any],
+    query: str,
+    num_ctx: int,
+    client_kwargs: dict | None,
+    num_papers: int = 1,
+    drafter_model: str | None = None,
+    graph_storage: BaseGraphStorage | None = None,
+) -> Dict[str, Any]:
+    """Run Drafter→[Critic→Arbiter]→Anchoring for one theme.
+
+    Optimizations:
+      - Single-paper themes: format pre-extracted entities directly,
+        skipping the Drafter LLM call entirely.
+      - Configurable Drafter model (deepseek-chat for per-theme,
+        v4-pro for cross-theme).
+      - Debate regression guard: if the debate chain produces a worse
+        anchoring score than the draft, the draft is kept.
+      - KG insights injected into the drafter prompt when available.
+    """
+    single_paper = num_papers <= 1
+
+    # Build summary from chunk summaries, entity evidence, or fallback text
+    summaries: List[str] = []
+    for ch in theme_chunks:
+        meta = ch.get("metadata", {}) or {}
+        cs = meta.get("chunk_summary", ch.get("text", "")[:300])
+        if cs:
+            summaries.append(cs)
+
+    if not summaries and theme_entities:
+        for key, ent_list in theme_entities.items():
+            if isinstance(ent_list, list):
+                for ent in ent_list:
+                    if isinstance(ent, dict):
+                        ev = ent.get("evidence", "")
+                        if ev:
+                            summaries.append(f"[{ent.get('entity', '?')}] {ev}")
+        if summaries:
+            logger.info("  '%s': using %d entity evidence phrases", theme_name, len(summaries))
+
+    # Dynamic evidence cap
+    fitted_summaries = _fit_summaries_to_context(summaries, num_ctx)
+    logger.debug("  '%s': %d/%d summaries fit in context window (num_ctx=%d)",
+                 theme_name, len(fitted_summaries), len(summaries), num_ctx)
+    summary_text = "\n\n".join(fitted_summaries)
+    summary_chunks = [{"text": summary_text, "metadata": {"source": f"theme:{theme_name}"}}]
+
+    citations = sorted({(ch.get("metadata", {}) or {}).get("cite_key") or
+                         (ch.get("metadata", {}) or {}).get("source", "unknown")
+                         for ch in theme_chunks})
+    if not citations and theme_entities:
+        for key, ent_list in theme_entities.items():
+            if isinstance(ent_list, list):
+                for ent in ent_list:
+                    if isinstance(ent, dict):
+                        src = ent.get("source_paper") or ent.get("cite_key") or ""
+                        if src:
+                            citations.append(src)
+        citations = sorted(set(citations))
+
+    # ── Level 2 cache: theme synthesis ──────────────────────────────────
+    # Paper IDs for this theme (from the chunks, unique sources)
+    theme_paper_ids = sorted({(ch.get("metadata", {}) or {}).get("source", "unknown")
+                               for ch in theme_chunks if (ch.get("metadata", {}) or {}).get("source")})
+    cached_theme = load_theme_synthesis(theme_name, theme_paper_ids, query, theme_chunks)
+    if cached_theme is not None:
+        return cached_theme
+
+    def _return_with_cache(result: Dict[str, Any]) -> Dict[str, Any]:
+        cache_theme_synthesis(theme_name, theme_paper_ids, query, theme_chunks, result)
+        return result
+
+    # ── Single-paper themes: format entities directly, no Drafter ──────
+    if single_paper:
+        logger.info("  '%s': single-paper theme — formatting entities (no Drafter)", theme_name)
+        synthesis = _format_single_paper_synthesis(theme_name, theme_entities, summary_text, citations)
+        claims = decompose_claims(synthesis)
+        score, ungrounded = compute_anchoring_score(claims, theme_chunks or summary_chunks)
+        return _return_with_cache({
+            "theme": theme_name,
+            "synthesis": synthesis,
+            "anchoring_score": round(score, 3),
+            "ungrounded_claims": ungrounded,
+            "num_papers": num_papers,
+        })
+
+    # ── Multi-paper: Drafter with KG insights ──────────────────────────
+    kg_context: Dict[str, Any] | str = {}
+    if graph_storage is not None:
+        try:
+            kg_snapshot = graph_storage.get_subgraph([])
+            if kg_snapshot and kg_snapshot.get("nodes"):
+                kg_context = compute_graph_insights(kg_snapshot, query=query)
+                if kg_context:
+                    logger.debug("  '%s': KG insights (%d chars) injected into Drafter",
+                                 theme_name, len(_kg_str(kg_context)))
+        except Exception:
+            pass
+
+    drafter = _get_drafter(num_ctx, client_kwargs, model=drafter_model)
+    draft = drafter.draft(
+        query=f"{query} [Theme: {theme_name}]",
+        entities=theme_entities,
+        chunks=summary_chunks,
+        citations=citations,
+        kg_context=kg_context,
+    )
+
+    # ── EGSR: Conditional Critic ────────────────────────────────────────
+    draft_claims = decompose_claims(draft)
+    draft_score, draft_ungrounded = compute_anchoring_score(
+        draft_claims, theme_chunks or summary_chunks,
+    )
+    logger.info("  '%s': draft anchoring=%.3f (%d claims, %d ungrounded)",
+                theme_name, draft_score, len(draft_claims), len(draft_ungrounded))
+
+    if draft_score >= 0.85:
+        logger.info("  '%s': draft is well-grounded (>=0.85) — skipping Critic/Arbiter",
+                     theme_name)
+        return _return_with_cache({
+            "theme": theme_name,
+            "synthesis": draft,
+            "anchoring_score": round(draft_score, 3),
+            "ungrounded_claims": draft_ungrounded,
+            "num_papers": num_papers,
+        })
+
+    if draft_score >= CONDITIONAL_CRITIC_THRESHOLD:
+        logger.info("  '%s': draft is moderately grounded (>=%.2f) — skipping Critic/Arbiter",
+                     theme_name, CONDITIONAL_CRITIC_THRESHOLD)
+        return _return_with_cache({
+            "theme": theme_name,
+            "synthesis": draft,
+            "anchoring_score": round(draft_score, 3),
+            "ungrounded_claims": draft_ungrounded,
+            "num_papers": num_papers,
+        })
+
+    # Poorly grounded — run full debate chain
+    logger.info("  '%s': draft is poorly grounded (<%.2f) — invoking Critic→Arbiter",
+                theme_name, CONDITIONAL_CRITIC_THRESHOLD)
+    critic = _get_critic(num_ctx, client_kwargs)
+    critique = critic.critique(draft, summary_chunks, theme_entities)
+
+    arbiter = _get_arbiter(num_ctx, client_kwargs)
+    if critique.startswith("NO_CRITIQUE"):
+        revised = draft
+    else:
+        revised = arbiter.revise(draft, critique, summary_chunks)
+        claims = decompose_claims(revised)
+        score, _ = compute_anchoring_score(claims, theme_chunks or summary_chunks)
+        if score < 0.85:
+            critique2 = critic.critique(revised, summary_chunks, theme_entities)
+            if not critique2.startswith("NO_CRITIQUE"):
+                revised = arbiter.revise(revised, critique2, summary_chunks)
+
+    claims = decompose_claims(revised)
+    score, ungrounded = compute_anchoring_score(claims, theme_chunks or summary_chunks)
+
+    # ── Debate regression guard ────────────────────────────────────────
+    if score < draft_score:
+        logger.info("  '%s': debate regression (%.3f → %.3f) — keeping draft",
+                     theme_name, draft_score, score)
+        return _return_with_cache({
+            "theme": theme_name,
+            "synthesis": draft,
+            "anchoring_score": round(draft_score, 3),
+            "ungrounded_claims": draft_ungrounded,
+            "num_papers": num_papers,
+        })
+
+    return _return_with_cache({
+        "theme": theme_name,
+        "synthesis": revised,
+        "anchoring_score": round(score, 3),
+        "ungrounded_claims": ungrounded,
+        "num_papers": num_papers,
+    })
+
+
+def _kg_str(kg: Any) -> str:
+    """Extract string from KG context regardless of type."""
+    if isinstance(kg, str):
+        return kg
+    if isinstance(kg, dict):
+        return json.dumps(kg, default=str)
+    return str(kg)
+
+
+def _format_single_paper_synthesis(
+    theme_name: str,
+    theme_entities: Dict[str, Any],
+    summary_text: str,
+    citations: List[str],
+) -> str:
+    """Format pre-extracted entities into a structured synthesis paragraph.
+
+    Used for single-paper themes where there is no cross-paper evidence
+    to reconcile — a formatted entity listing is faster and equally
+    informative as a Drafter call for one-paper coverage.
+    """
+    source = citations[0] if citations else "unknown"
+    parts = [f"Key findings from {source} related to '{theme_name}':"]
+
+    for category, ent_list in sorted((theme_entities or {}).items()):
+        if not isinstance(ent_list, list) or not ent_list:
+            continue
+        item_strs: List[str] = []
+        for ent in ent_list:
+            if isinstance(ent, dict):
+                name = ent.get("entity", str(ent))
+                evidence = str(ent.get("evidence", ""))[:200]
+                item_strs.append(f"{name} ({evidence})" if evidence else name)
+        if item_strs:
+            parts.append(f"\n{category}: {'; '.join(item_strs[:8])}")
+
+    if len(parts) == 1:
+        parts.append(f"\nSummary: {summary_text[:500]}")
+    return "\n".join(parts)
+
+
+def survey_per_theme_synthesize_node(
+    state: AgentState,
+    graph_storage: BaseGraphStorage | None = None,
+) -> Dict[str, Any]:
+    """Run per-theme deep synthesis in parallel across all themes.
+
+    Themes are processed concurrently via ThreadPoolExecutor.  Each
+    theme still runs its Drafter→[Critic→Arbiter] chain sequentially,
+    but all themes run in parallel.  The wall-clock time is bounded
+    by the slowest single theme rather than the sum of all themes.
+    """
+    clusters = state.get("thematic_clusters", {})
+    per_paper = state.get("per_paper_extractions", {})
+    all_chunks = state.get("public_context") or []
+    query = state["user_query"]
+    num_ctx = int(state.get("num_ctx", 16384) or 16384)
+    client_kwargs = state.get("client_kwargs")
+
+    if not clusters:
+        logger.warning("No clusters — running single synthesis on all papers.")
+        clusters = {"all_papers": list(per_paper.keys())}
+
+    theme_syntheses: Dict[str, Dict[str, Any]] = {}
+
+    def _prepare_and_run(theme_name: str, paper_ids: list) -> Dict[str, Any] | None:
+        """Gather chunks/entities for one theme and invoke the debate chain."""
+        if not paper_ids:
+            return None
+
+        theme_chunks = [
+            ch for ch in all_chunks
+            if (ch.get("metadata", {}) or {}).get("source") in paper_ids
+        ]
+        theme_entities: Dict[str, Any] = {}
+        for pid in paper_ids:
+            if pid in per_paper:
+                for cat, ent_list in per_paper[pid].items():
+                    key = f"{pid}::{cat}"
+                    theme_entities[key] = ent_list if isinstance(ent_list, list) else []
+            else:
+                logger.warning("  '%s': paper '%s' not found in per_paper (keys: %s)",
+                               theme_name, pid, sorted(per_paper.keys()))
+
+        logger.info("Per-theme synthesis: '%s' (%d papers)", theme_name, len(paper_ids))
+        logger.debug("  '%s': %d chunks, %d entity groups",
+                      theme_name, len(theme_chunks), len(theme_entities))
+
+        try:
+            result = _run_debate_for_theme(
+                theme_name, theme_chunks, theme_entities, query,
+                num_ctx, client_kwargs,
+                num_papers=len(paper_ids),
+                drafter_model=PER_THEME_DRAFTER_MODEL,
+                graph_storage=graph_storage,
+            )
+            logger.info("  '%s': score=%.2f, %d chars",
+                         theme_name, result["anchoring_score"], len(result["synthesis"]))
+            return result
+        except Exception as e:
+            logger.error("  '%s': synthesis failed — %s", theme_name, e)
+            return {
+                "theme": theme_name,
+                "synthesis": f"Synthesis failed for theme '{theme_name}': {e}",
+                "anchoring_score": 0.0,
+                "ungrounded_claims": [],
+                "num_papers": len(paper_ids),
+            }
+
+    # Parallel fan-out to all themes
+    max_workers = min(len(clusters), 8)  # cap to avoid API rate limits
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for theme_name, paper_ids in clusters.items():
+            futures[executor.submit(_prepare_and_run, theme_name, paper_ids)] = theme_name
+
+        for future in as_completed(futures):
+            theme_name = futures[future]
+            try:
+                result = future.result()
+                if result is not None:
+                    theme_syntheses[theme_name] = result
+            except Exception as e:
+                logger.error("  '%s': unhandled synthesis failure — %s", theme_name, e)
+                theme_syntheses[theme_name] = {
+                    "theme": theme_name,
+                    "synthesis": f"Synthesis failed for theme '{theme_name}': {e}",
+                    "anchoring_score": 0.0,
+                    "ungrounded_claims": [],
+                    "num_papers": 1,
+                }
+
+    return {"per_theme_syntheses": theme_syntheses}
+
+
+# ---------------------------------------------------------------------------
+#  Node S6: Cross-Theme Synthesis & Gap Analysis
+# ---------------------------------------------------------------------------
+def survey_cross_theme_synthesize_node(state: AgentState) -> Dict[str, Any]:
+    """Synthesize across all per-theme outputs + identify research gaps.
+
+    Cross-theme synthesis and gap analysis run in parallel —
+    gap analysis uses the per-theme syntheses directly rather than
+    waiting for the cross-theme output.
+    """
+    theme_syntheses = state.get("per_theme_syntheses", {})
+    query = state["user_query"]
+    num_ctx = int(state.get("num_ctx", 16384) or 16384)
+    client_kwargs = state.get("client_kwargs")
+
+    if not theme_syntheses:
+        return {
+            "cross_theme_synthesis": "No per-theme syntheses to combine.",
+            "gap_analysis": "",
+        }
+
+    combined = []
+    for theme_name, ts in theme_syntheses.items():
+        score = ts.get("anchoring_score", 0)
+        text = ts.get("synthesis", "")
+        combined.append(f"## {theme_name} (anchoring: {score:.2f})\n{text}")
+    combined_text = "\n\n".join(combined)
+    citations = sorted(theme_syntheses.keys())
+
+    # ── Level 3 cache: cross-theme synthesis ────────────────────────────
+    cached_cross = load_cross_theme(query, theme_syntheses)
+    if cached_cross is not None:
+        return cached_cross
+
+    # Cross-theme prompt chunks
+    cross_chunks = [{"text": combined_text, "metadata": {"source": "cross_theme"}}]
+    # Gap prompt chunks (uses per-theme syntheses directly — no dependency on cross-theme output)
+    gap_chunks = [{
+        "text": f"Individual theme syntheses:\n{combined_text}",
+        "metadata": {"source": "gap_analysis"},
+    }]
+
+    cross_synthesis = ""
+    gap_analysis = ""
+
+    def _run_cross_theme() -> str:
+        drafter = _get_drafter(num_ctx, client_kwargs, model=CROSS_THEME_DRAFTER_MODEL)
+        return drafter.draft(
+            query=f"{query}\n\nSynthesize across all themes below into a unified narrative. "
+                  "Identify agreements, contradictions, and gaps in the evidence.",
+            entities={},
+            chunks=cross_chunks,
+            citations=citations,
+            kg_context={},
+        )
+
+    def _run_gap_analysis() -> str:
+        gap_drafter = _get_drafter(num_ctx, client_kwargs, model=CROSS_THEME_DRAFTER_MODEL)
+        return gap_drafter.draft(
+            query=(
+                "Based on the per-theme syntheses below, identify specific research gaps, "
+                "unanswered questions, and areas where evidence is contradictory or missing. "
+                "List each gap as a clear, actionable research question."
+            ),
+            entities={},
+            chunks=gap_chunks,
+            citations=citations,
+            kg_context={},
+        )
+
+    # Run cross-theme synthesis and gap analysis in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        cross_future = executor.submit(_run_cross_theme)
+        gap_future = executor.submit(_run_gap_analysis)
+        try:
+            cross_synthesis = cross_future.result()
+        except Exception as e:
+            logger.error("Cross-theme synthesis failed: %s", e)
+            cross_synthesis = f"Cross-theme synthesis failed: {e}"
+        try:
+            gap_analysis = gap_future.result()
+        except Exception as e:
+            logger.error("Gap analysis failed: %s", e)
+            gap_analysis = f"Gap analysis failed: {e}"
+
+    cache_cross_theme(query, theme_syntheses, cross_synthesis, gap_analysis)
+
+    return {
+        "cross_theme_synthesis": cross_synthesis,
+        "gap_analysis": gap_analysis,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Node S7: Survey Scrub
+# ---------------------------------------------------------------------------
+def survey_scrub_node(state: AgentState) -> Dict[str, Any]:
+    """Final ASCII scrub and output formatting for Survey Mode."""
+    cross_synth = state.get("cross_theme_synthesis", "")
+    gap = state.get("gap_analysis", "")
+    theme_syntheses = state.get("per_theme_syntheses", {})
+
+    # Build final output
+    parts = ["# SURVEY SYNTHESIS\n"]
+    parts.append(final_scrub(cross_synth))
+    parts.append("\n\n# RESEARCH GAPS\n")
+    parts.append(final_scrub(gap))
+    parts.append("\n\n# PER-THEME DETAILS\n")
+    for name, ts in theme_syntheses.items():
+        parts.append(f"\n## {name} (score: {ts.get('anchoring_score', '?')})\n")
+        parts.append(final_scrub(ts.get("synthesis", "")))
+
+    final = "\n".join(parts)
+    return {"final_output": final}

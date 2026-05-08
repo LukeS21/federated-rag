@@ -51,5 +51,5 @@ def test_format_chunks_for_prompt():
             {"text": "c", "metadata": {}},
         ]
     )
-    assert "[Chunk 0] a b" in text
-    assert "[Chunk 1] c" in text
+    assert "[Chunk 0 | ?] a b" in text
+    assert "[Chunk 1 | ?] c" in text

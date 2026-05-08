@@ -39,11 +39,13 @@ class ExtractionAgent:
         num_ctx: int = 16384,
         client_kwargs: dict | None = None,
         callback=None,
+        model: str = "deepseek-v4-pro",
     ) -> None:
         if client_kwargs is None:
             client_kwargs = {}
+        self.model = model
         self._llm = ChatOpenAI(
-            model="deepseek-v4-pro",
+            model=model,
             temperature=temperature,
             api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
             base_url="https://api.deepseek.com/v1",
@@ -202,7 +204,7 @@ class ExtractionAgent:
         since temperature=0 makes outputs deterministic.
         """
         cache = get_cache()
-        cached = cache.get(system_prompt, user_prompt)
+        cached = cache.get(system_prompt, user_prompt, model=self.model)
         if cached is not None:
             return cached
 
@@ -215,7 +217,7 @@ class ExtractionAgent:
             config["callbacks"] = [self.callback]
         response = self._llm.invoke(messages, config=config)
         result = (response.content or "").strip()
-        cache.set(system_prompt, user_prompt, result)
+        cache.set(system_prompt, user_prompt, result, model=self.model)
         return result
 
     def _parse_json_safely(self, raw_text: str, context: str) -> Dict[str, Any]:

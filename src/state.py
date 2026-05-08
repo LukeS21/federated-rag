@@ -29,6 +29,14 @@ class AgentState(TypedDict):
     chunk_summary: str
     ner_entities: List[Dict]
 
+    # Phase 4 Survey Mode fields
+    decomposed_themes: List[Dict]
+    thematic_clusters: Dict
+    per_paper_extractions: Dict
+    per_theme_syntheses: Dict
+    cross_theme_synthesis: str
+    gap_analysis: str
+
     # Runtime configuration (optional)
     num_ctx: NotRequired[int]
     client_kwargs: NotRequired[Dict[str, Any]]

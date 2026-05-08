@@ -3,7 +3,6 @@
 Uses Gemma 4 26B A4B to resist peer-pressure convergence.
 """
 
-import json
 import os
 import re
 from typing import Any, Dict, List
@@ -11,6 +10,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from src.cache.llm_cache import get_cache
 from src.unicode_map import sanitize_api_key, scrub_unicode
 
 
@@ -31,11 +31,13 @@ class SocraticCritic:
         num_ctx: int = 8192,
         client_kwargs: dict | None = None,
         callback=None,
+        model: str | None = None,
     ) -> None:
         if client_kwargs is None:
             client_kwargs = {}
+        self._model = model or "deepseek-v4-pro"
         self.llm = ChatOpenAI(
-            model="deepseek-v4-pro",
+            model=self._model,
             temperature=0.0,
             api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
             base_url="https://api.deepseek.com/v1",
@@ -54,7 +56,11 @@ class SocraticCritic:
         chunks: List[Dict[str, Any]],
         entities: Dict[str, Any],
     ) -> str:
-        """Return a list of critiques or ``NO_CRITIQUE`` (README §5.2)."""
+        """Return a list of critiques or ``NO_CRITIQUE`` (README §5.2).
+
+        Note: ``entities`` is accepted for API compatibility but is NOT sent
+        to the LLM — the evidence chunks already contain sufficient context.
+        """
         system_prompt = (
             "You are a Socratic critic. Your job is to identify claims in the draft that lack "
             "sufficient evidence or overstate what the evidence supports.\n"
@@ -69,12 +75,11 @@ class SocraticCritic:
             {**ch, "text": scrub_unicode(ch["text"])} for ch in chunks
         ]
         original_chunks = "\n\n".join(f"[Chunk {i}] {ch.get('text', '')}" for i, ch in enumerate(chunks))
-        extracted_entities = json.dumps(entities, indent=2, ensure_ascii=False)
 
+        # Entities are redundant with evidence chunks — omit to reduce prompt size.
         user_prompt = (
             f"Draft: {draft}\n"
             f"Evidence: {original_chunks}\n"
-            f"Entities: {extracted_entities}\n"
             "Identify unsupported claims and state the gap."
         )
 
@@ -82,10 +87,17 @@ class SocraticCritic:
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
+
+        cache = get_cache()
+        cached = cache.get(system_prompt, user_prompt, model=self._model)
+        if cached is not None:
+            return scrub_unicode(cached)
+
         config = {}
         if self.callback:
             config["callbacks"] = [self.callback]
         response = self.llm.invoke(messages, config=config)
         raw = _strip_thinking((response.content or "").strip())
-        return scrub_unicode(raw)
-
+        result = scrub_unicode(raw)
+        cache.set(system_prompt, user_prompt, result, model=self._model)
+        return result

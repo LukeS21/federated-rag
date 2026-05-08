@@ -13,8 +13,20 @@ __pycache__/
 
 # ChromaDB runtime data
 projects/*/chroma_data/**/*.bin
+projects/*/chroma_data/*.sqlite3
+projects/*/chroma_data/**/*.pickle
+projects/*/bm25_corpus.json
+projects/*/project_graph.json
+projects/*/extractions/
+projects/*/embeddings/
+projects/*/query_cache/
+projects/*/survey_result.json
 
 # Temp test artifacts
 data/tmp_*.json
 data/*.pdf
 projects/default/cache/
+projects/default/query_cache/
+
+# R history
+.Rhistory
