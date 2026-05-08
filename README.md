@@ -735,6 +735,40 @@ The drafter receives: *"Key connecting concepts: leptin (links obesity → immun
 4. Then per‑theme deep synthesis (reuse existing debate chain)
 5. Finally cross‑theme synthesis & gap analysis
 
+**Early Phase 4 benchmark experiment (DeepSeek Chat vs v4 Pro for extraction):**
+
+Before building the parallel extraction pipeline, run a controlled comparison to determine whether DeepSeek Chat can replace v4 Pro for per‑document extraction without quality loss.
+
+*Method:*
+1. Select 5 papers from the corpus with diverse content (surface chemistry, immunology, bone biology, methods)
+2. Run per‑document extraction on each paper twice — once with `model="deepseek-v4-pro"`, once with `model="deepseek-chat"`
+3. Compare outputs on: (a) entity count per paper, (b) evidence phrase completeness (do extracted evidence sentences contain the claimed finding?), (c) category coverage (are all expected entity types present?), (d) latency and token cost per extraction
+4. If entity counts are within 10%, evidence phrases are verifiable, and no category types are consistently missing → switch to Chat for Phase 4 per‑document extraction
+
+*Rationale:* Per‑document extraction is the volume step in Survey Mode (100 papers × 1 extraction each). A 50% cost reduction here compounds across the entire survey. Extraction is a lower‑risk task than synthesis (it condenses existing text rather than creating new claims), making model downgrade safer.
+
+**How parallel extraction works on a local system:**
+
+Parallelism in this architecture does NOT mean running multiple local LLMs simultaneously. It means firing multiple concurrent HTTP requests to the DeepSeek API. The local system is a thin client — it sends extraction prompts and waits for responses. The heavy compute happens on DeepSeek's servers.
+
+```
+Local (M3 Max)                          DeepSeek Servers
+┌─────────────────┐                    ┌──────────────────────┐
+│ paper_1 → POST ─┼────────────────────┤→ extract paper_1     │
+│ paper_2 → POST ─┼────────────────────┤→ extract paper_2     │
+│ paper_3 → POST ─┼────────────────────┤→ extract paper_3     │  ← all run in parallel
+│    ...          │                    │      ...             │
+│ paper_N → POST ─┼────────────────────┤→ extract paper_N     │
+│                 │                    └──────────────────────┘
+│ collect ←───────┼────────────────────── responses stream back
+│ responses       │
+└─────────────────┘
+```
+
+*Why this works:* Python's `concurrent.futures.ThreadPoolExecutor` can manage 10–20 concurrent HTTP connections trivially (network I/O is not CPU‑bound). Each paper's context is small (~20–30 paragraphs, ~5000 words) — well within DeepSeek's 128K token window. The local system's only job is to format prompts, dispatch requests, and collect structured JSON responses — no heavy local compute required.
+
+*Expected latency:* If one extraction takes ~30 seconds, 10 parallel extractions complete in ~30 seconds (not 300). 100 papers ≈ 3–4 minutes with a thread pool of 10–20 workers. This is what makes the Phase 4 hybrid architecture viable on consumer hardware.
+
 Phase 4: Live Citation & Survey Mode (Weeks 8-9)
 Goal: Real Zotero integration + comprehensive literature surveying.
 
