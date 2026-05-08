@@ -141,6 +141,7 @@ class ExtractionAgent:
         stripped_categories = {
             k: [
                 {sk: sv for sk, sv in c.items() if sk != "examples_found"}
+                if isinstance(c, dict) else c
                 for c in v
             ]
             if isinstance(v, list)
