@@ -16,3 +16,5 @@ projects/*/chroma_data/**/*.bin
 
 # Temp test artifacts
 data/tmp_*.json
+data/*.pdf
+projects/default/cache/
