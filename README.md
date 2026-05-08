@@ -697,11 +697,43 @@ The drafter receives: *"Key connecting concepts: leptin (links obesity → immun
 
 #### Known limitations
 
-- **~5–10 minute latency per query**: 7 sequential LLM calls; extraction alone is ~5 minutes due to large prompt (raw chunks + 155 NER entities + full categories)
-- **Single-document scale**: `n_results=10` is tuned for one PDF; multi-document retrieval not yet tested
-- **No cross-query learning**: each query runs independently; no caching, no session memory
-- **Knowledge graph underutilized**: built but not meaningfully traversed during synthesis
-- **Survey Mode not implemented**: broad retrieval → theme clustering → per-theme synthesis → gap analysis is deferred to Phase 4
+- **Extraction is the remaining bottleneck**: ~5–7 min per query with 2 PDFs (20 chunks). Extraction time scales linearly with chunk count; the 6 optimizations eliminated other bottlenecks (summarization instant, cache hits for repeat queries, adaptive retrieval) but extraction still processes full raw chunks + NER hints.
+- **Multi-document synthesis works but is unoptimized**: 2‑PDF cross‑document synthesis confirmed. At 50+ PDFs, retrieval may surface 50+ relevant chunks, causing extraction times of 20+ minutes. The Phase 4 hybrid architecture (per‑document lightweight extraction → per‑theme deep synthesis) is designed to address this.
+- **No parallel agent execution**: all 7 LLM calls run sequentially. LangGraph supports fan‑out/fan‑in patterns but they are not yet implemented.
+- **6 pre‑existing test failures**: `test_synthesis_agents.py` mocks `langchain_ollama.ChatOllama` removed during DeepSeek migration; not yet updated.
+
+#### Phase 3 → Phase 4 handoff notes
+
+*For the next developer picking up Phase 4. Read this section first.*
+
+**Current state of the codebase:**
+
+- All agents use DeepSeek API via `langchain_openai.ChatOpenAI` (not local Ollama). API key from `DEEPSEEK_API_KEY` env var, sanitized via `sanitize_api_key()`.
+- The demo loads `.env` with `load_dotenv(override=True)` — add your key there, not in shell profiles.
+- PDFs go in `data/`. The demo auto‑discovers new PDFs and pre‑summarizes them at ingest (one‑time LLM cost). Already‑indexed PDFs are skipped on subsequent runs.
+- Cache lives in `projects/default/cache/`. Delete the directory to force fresh LLM calls.
+- Run with `OLLAMA_KEEP_ALIVE=30s python phase3_demo.py` (the env var is unused but harmless).
+
+**Key architectural decisions carried forward:**
+
+1. **ExtractionAgent already supports per‑document scoping** — pass chunks filtered by `metadata.source` to extract from a single paper. No code change needed for Phase 4's per‑document extraction pipeline.
+2. **KG is the shared truth cache** — `NetworkXJSONStorage` persists to `project_graph.json`. Phase 4 should use it as the cross‑stage knowledge accumulator (per‑document extractions feed it; per‑theme synthesis reads from it).
+3. **Similarity‑threshold retrieval** (L2 distance ≤ 1.0, max_chunks=20) replaces fixed n_results. Adaptive to corpus size.
+4. **TF‑IDF cosine anchoring (threshold 0.35)** correctly distinguishes grounded vs speculative claims. Low scores on inferential synthesis are expected — that's the system correctly identifying that synthesis goes beyond verbatim quoting.
+5. **Pre‑summarization at ingest** stores chunk summaries in ChromaDB metadata. The `summarize_node` automatically uses them when available, falling back to query‑time LLM summarization.
+
+**What NOT to change:**
+- The 17‑node LangGraph graph structure (proven stable)
+- The interrupt/resume pattern with `MemorySaver` checkpointer
+- The SciSpaCy NER integration (feeds extraction agent)
+- The debate chain (Drafter→Critic→Arbiter→Pass2) — this is reused in Phase 4 per‑theme synthesis
+
+**Where to start Phase 4:**
+1. Build the query decomposition agent first — it's the entry point for Survey Mode
+2. Then thematic clustering (can reuse category_discovery prompt pattern)
+3. Then parallel per‑document extraction (ExtractionAgent + source‑filtered chunks)
+4. Then per‑theme deep synthesis (reuse existing debate chain)
+5. Finally cross‑theme synthesis & gap analysis
 
 Phase 4: Live Citation & Survey Mode (Weeks 8-9)
 Goal: Real Zotero integration + comprehensive literature surveying.
