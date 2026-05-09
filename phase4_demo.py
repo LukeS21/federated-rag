@@ -25,9 +25,15 @@ from src.ingestion.pdf_parser import PDFParser
 from src.ingestion.pre_summarizer import PreSummarizer
 from src.ingestion.pre_extractor import PreExtractor
 from src.citation_manager.citekey_utils import (
-    parse_cite_key_from_filename,
+    resolve_cite_key,
     parse_paper_metadata,
     try_zotero_add,
+)
+from src.ingestion.pdf_parser import (
+    compute_content_hash,
+    extract_title_from_chunks,
+    check_content_duplicate,
+    save_content_hash,
 )
 from src.retrieval.chroma_client import ChromaClient
 from src.retrieval.bm25_index import BM25Index
@@ -121,19 +127,37 @@ if new_pdfs:
         chunks = pdf_parser.parse(pdf_path)
         for ch in chunks:
             ch["text"] = scrub_unicode(ch["text"])
-        # Generate cite key from filename and store in chunk metadata
-        cite_key = parse_cite_key_from_filename(pdf_path.name)
+
+        # ── Content deduplication ──
+        content_hash = compute_content_hash(chunks)
+        existing_duplicate = check_content_duplicate(content_hash)
+        if existing_duplicate:
+            logger.info("SKIP: content identical to '%s' (hash: %s). Using existing data.",
+                         existing_duplicate, content_hash)
+            continue
+
+        # ── Tiered cite key resolution ──
+        extracted_title = extract_title_from_chunks(chunks)
+        cite_key = resolve_cite_key(pdf_path.name, extracted_title)
         for ch in chunks:
             ch["metadata"]["cite_key"] = cite_key
-        # Try to create a Zotero item from filename metadata
+
+        # ── Zotero integration (create or find existing) ──
         paper_meta = parse_paper_metadata(pdf_path.name)
+        # Override title from chunks if available (better for Zotero search)
+        if extracted_title:
+            paper_meta["title"] = extracted_title
         zotero_key = try_zotero_add(paper_meta)
         if zotero_key:
-            logger.info("Zotero: item created — %s (cite key: %s)", zotero_key, cite_key)
+            logger.info("Zotero: item -> %s (cite key: %s)", zotero_key, cite_key)
             for ch in chunks:
                 ch["metadata"]["zotero_key"] = zotero_key
         else:
             logger.debug("Zotero: no item created (API not configured or failed)")
+
+        # ── Register content hash ──
+        save_content_hash(content_hash, pdf_path.name)
+
         # TF-IDF extractive pre-summarization
         chunks = pre_summarizer.summarize_all(chunks)
         # Pre-extract entities into KG + disk cache

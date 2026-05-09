@@ -118,15 +118,27 @@ def try_zotero_add(
     library_id: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> Optional[str]:
-    """Try to create a Zotero item via the real API.
+    """Create a Zotero item, or return existing item if already present.
 
-    Returns the item key on success, None on failure (no credentials,
-    API error, etc.).
+    Checks Zotero for an existing item by title before creating a new one.
+    This prevents duplicates when the same paper is ingested under
+    different filenames.
+
+    Returns the item key on success, None on failure.
     """
     library_id = library_id or os.getenv("ZOTERO_LIBRARY_ID", "").strip()
     api_key = api_key or os.getenv("ZOTERO_API_KEY", "").strip()
     if not library_id or not api_key:
         return None
+
+    title = metadata.get("title", "") or ""
+
+    # ── Check for existing item first ──
+    if len(title) >= 20:
+        existing = search_zotero_by_title(title)
+        if existing:
+            logger.info("Zotero: found existing item %s (skipping create)", existing)
+            return existing
 
     try:
         from pyzotero import zotero
@@ -155,7 +167,7 @@ def try_zotero_add(
         resp = zot.create_items([template])
         if resp and "success" in resp and resp["success"]:
             item_key = resp["success"].get("0", metadata.get("cite_key", ""))
-            logger.info("Zotero: created item %s", item_key)
+            logger.info("Zotero: created item %s for '%s...'", item_key, title[:60])
             return str(item_key)
     except Exception as e:
         logger.debug("Zotero API call failed (credentials may be missing): %s", e)
@@ -174,3 +186,120 @@ def extract_doi_from_docling(doc_metadata: Dict[str, Any]) -> Optional[str]:
             if m:
                 return m.group(1)
     return None
+
+
+# ── Zotero search & dedup ────────────────────────────────────────────────────
+def _get_zotero_client() -> Optional[Any]:
+    """Return a pyzotero client if credentials are available."""
+    library_id = os.getenv("ZOTERO_LIBRARY_ID", "").strip()
+    api_key = os.getenv("ZOTERO_API_KEY", "").strip()
+    if not library_id or not api_key:
+        return None
+    try:
+        from pyzotero import zotero
+        return zotero.Zotero(library_id, "user", api_key)
+    except Exception:
+        return None
+
+
+def search_zotero_by_title(title: str) -> Optional[str]:
+    """Search Zotero for an existing item by title.
+
+    Returns the Zotero item key if a match is found, None otherwise.
+    Also returns None if Zotero credentials are not configured.
+    """
+    if not title or len(title) < 20:
+        return None
+    zot = _get_zotero_client()
+    if zot is None:
+        return None
+    try:
+        # Truncate to avoid overly long queries
+        q = title[:150].strip()
+        items = zot.top(q=q, limit=5)
+        for item in items:
+            data = item.get("data", {})
+            item_title = (data.get("title", "") or "").lower()
+            q_lower = q.lower()
+            # Partial match: query substring in item title, or vice versa
+            if q_lower[:50] in item_title or item_title[:50] in q_lower:
+                logger.info("Zotero: found existing item %s for title '%s...'",
+                            item.get("key"), q[:60])
+                return item.get("key")
+    except Exception as e:
+        logger.debug("Zotero search failed: %s", e)
+    return None
+
+
+def get_zotero_cite_key(item_key: str) -> Optional[str]:
+    """Generate a cite key from a Zotero item's metadata.
+
+    Returns e.g. @morandini2024 or None if metadata is insufficient.
+    """
+    zot = _get_zotero_client()
+    if zot is None:
+        return None
+    try:
+        item = zot.item(item_key)
+        data = item.get("data", {})
+        # Get first author's surname
+        creators = data.get("creators", [])
+        surname = ""
+        if creators:
+            surname = creators[0].get("lastName", "")
+        else:
+            # Fallback: try parsed first author from filename
+            pass
+        year = str(data.get("date", "") or "")[:4]
+        if surname and year:
+            cite_key = f"@{surname.lower().replace(' ', '').replace('-', '')}{year}"
+            logger.info("Zotero: cite key %s from item %s", cite_key, item_key)
+            return cite_key
+    except Exception as e:
+        logger.debug("Zotero cite key lookup failed: %s", e)
+    return None
+
+
+# ── Three-tier cite key resolution ────────────────────────────────────────────
+def resolve_cite_key(filename: str, chunks_text: str = "") -> str:
+    """Resolve a cite key using three tiers of information.
+
+    Tier 1: Zotero search by extracted title → get author/year → @surnameYYYY
+    Tier 2: Filename parsing (e.g., "Avery et al. - 2024 - Title.pdf")
+    Tier 3: Content hash fallback (@ref_XXXXXXXX)
+
+    Args:
+        filename: The PDF filename.
+        chunks_text: First 500 chars of body text (for title extraction).
+
+    Returns a cite key like @avery2024 or @ref_a3f2b1c4.
+    """
+    # ── Tier 1: Zotero search ──
+    title = chunks_text[:200] if chunks_text else ""
+    if title:
+        item_key = search_zotero_by_title(title)
+        if item_key:
+            cite_key = get_zotero_cite_key(item_key)
+            if cite_key:
+                logger.info("CiteKey (zotero): '%s' → %s", filename[:40], cite_key)
+                return cite_key
+
+    # ── Tier 2: Filename parsing ──
+    cite_key = parse_cite_key_from_filename(filename)
+    # Check if the parsed key looks meaningful (not a raw filename fallback)
+    stem = re.sub(r"\.pdf$", "", filename, flags=re.IGNORECASE).strip().lower()
+    if cite_key.startswith("@test") and stem.startswith("test"):
+        # "test.pdf" → fallback to Tier 3
+        pass
+    elif not cite_key.startswith("@ref_") and not cite_key.startswith("@paper"):
+        logger.info("CiteKey (filename): '%s' → %s", filename[:40], cite_key)
+        return cite_key
+
+    # ── Tier 3: Content hash fallback ──
+    if chunks_text:
+        import hashlib
+        hash_key = f"@ref_{hashlib.sha256(chunks_text[:2000].encode()).hexdigest()[:8]}"
+        logger.info("CiteKey (hash): '%s' → %s", filename[:40], hash_key)
+        return hash_key
+
+    return cite_key  # last resort
