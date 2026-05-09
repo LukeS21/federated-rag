@@ -1152,6 +1152,18 @@ MedQA) test single‑document fact retrieval or multiple‑choice reasoning.  Th
 test multi‑document literature synthesis, cross‑paper inference, or gap analysis —
 which are the core value of this system.
 
+**Automated benchmark creation:** LLMs can generate evaluation data that is better
+than human‑written references for summarization tasks (arXiv:2309.09558).  Combined
+with RAGAS (arXiv:2309.15217) for reference‑free evaluation, an 80–100 sample
+benchmark can be built with ~2 hours of human spot‑checking.  The approach:
+(1) LLM generates research questions from papers, (2) LLM generates "gold" synthesis
+answers, (3) RAGAS validates faithfulness claim‑by‑claim against evidence, (4) self‑
+consistency (3× runs) filters stochastic variance, (5) human spot‑checks 5% of
+claims.  This produces quasi‑ground‑truth datasets without manual annotation at scale.
+
+**Scale note:** Benchmarking across 10s–100s of papers requires search capabilities
+(Phase 8) for auto‑discovery, and progress indicators for overnight/multi‑day runs.
+
 ## 13. Deployment & Containerization
 ### 13.1 Development (Current)
 Single machine, single directory

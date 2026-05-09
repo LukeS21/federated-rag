@@ -320,24 +320,114 @@ Run the same 3–5 cached queries through config A vs config B, diff all metrics
 |--------|------------|
 | Boundary scrubber false positive rate | Inject synthetic biomedical text with 0 PHI, verify no redactions |
 | Boundary scrubber false negative rate | Inject synthetic clinical note with known PHI, verify all caught |
-| Audit log completeness | Verify every LLM call, boundary crossing, and scope routing decision produces a log entry |
+ | Audit log completeness | Verify every LLM call, boundary crossing, and scope routing decision produces a log entry |
+
+### Existing benchmarks — what's available (May 2026)
+
+**No multi-document biomedical engineering synthesis benchmarks exist.**  HuggingFace
+dataset registry returns 0 results for biomaterial/immune-response/implant synthesis.
+The closest datasets test very different capabilities:
+
+| Dataset | Tests | Why not usable |
+|---------|-------|----------------|
+| PubMedQA | Single-abstract yes/no/maybe | No multi-paper synthesis, no evidence anchoring |
+| BioASQ | Factoid retrieval from PubMed snippets | No cross-paper reasoning, no gap analysis |
+| MedQA | USMLE multiple-choice | Clinical diagnosis, not research synthesis |
+| MedBench | Clinical data from EHRs | Structured patient data, not literature |
+| Biomedical Q&A (Shushant) | General biomedical QA | No multi-document reasoning, no citation tracing |
+
+None test the core value of this system: reading N papers, synthesizing claims across them,
+anchoring each claim to specific evidence chunks, identifying cross-paper contradictions,
+and proposing research gaps.
+
+### Automated benchmark creation — feasible for 1 person + AI
+
+LLMs can generate evaluation data that is *better than human-written references* for
+summarization tasks (arXiv:2309.09558 — LLM-generated summaries preferred over human
+ones for factual consistency).  Combined with RAGAS (arXiv:2309.15217) for reference-free
+evaluation, a 80–100 sample benchmark can be built with ~2 hours of human effort:
+
+| Step | Automated by | How |
+|------|-------------|-----|
+| Generate questions | gemma4:e4b | Feed paper chunks → "generate 5 research questions this paper can answer" |
+| Generate "gold" answers | qwen3.6:35b | Feed full paper → "produce a complete synthesis answering this question" |
+| Extract key entities | Pre-extraction | Existing entity data per paper (already built) |
+| Validate against source | RAGAS faithfulness | LLM-as-judge checks claim-by-claim against evidence (arXiv:2309.15217) |
+| Filter hallucinated claims | Anchoring + self-consistency | Run 3×, keep only claims appearing in ≥2 runs |
+| Human spot-check | You | 5 random claims per 20 questions ≈ 30–45 min |
+
+Result: 80–100 high-confidence benchmark samples with quasi-ground-truth answers.
+This is the same methodology behind published evaluation datasets — but adapted
+to multi-document synthesis, which no existing benchmark covers.
+
+**Scale note:** Benchmarking across 10s–100s of papers should come AFTER search
+capabilities (Phase 8) so papers can be auto-discovered rather than manually
+curated.  Long-running benchmarks (overnight/multi-day) need a progress indicator
+(log lines showing questions completed / total, ETA) so stalls are visible.
+
+### Holes in current benchmarking approach
+
+These failure modes are NOT caught by the current metrics.  Each needs a specific test:
+
+| Hole | Risk | Fix |
+|------|------|-----|
+| No negative control queries | System may confidently hallucinate on topics the corpus can't answer | Add 2 "out-of-corpus" queries. System should return "insufficient evidence" or skip themes entirely |
+| No known-false claim injection | Critic might miss subtle fabrications that pass anchoring | Plant 1-2 false assertions per cached synthesis, verify anchoring/critic flag them |
+| No multilingual/messy input test | Real PDFs have OCR errors, Unicode, special chars | Add 1 noisy PDF test case with known OCR errors, measure synthesis degradation |
+| No scale test | Can't predict behavior at 50 or 500 papers | Simulate by duplicating chunk entries 10× in a test corpus, measure retrieval + synthesis latency scaling |
+| Scrubber false negatives untested | Only positive cases tested (PHI detected); silent passes on new PHI formats untested | Build a fuzzer: generate 1000 random PHI-like strings, measure detection rate |
+| Cache staleness | Old cached answers from prior code version may mislead benchmarks | Add cache key versioning — bump version constant when output format changes |
+| Single-run variance | Stochastic outputs may cause false positives/negatives in benchmark | Run each query 3×, report mean ± std for all metrics |
+
+### What 1 person + AI can accomplish (May 2026 perspective)
+
+The entire Phase 5 — LLM provider unification, security module, sandbox, 25 tests,
+model tiering, dense claim optimization, diagnostic logging — was built by 1 person
++ AI in ~12 hours of interaction.  This is roughly 3,000+ lines of working, tested
+code across 17 new files and 13 modified files.  A year ago, this would have been
+a 2-person, 2-week sprint.
+
+For benchmarking, this means:
+
+**Feasible (Phase 6, ~1 week elapsed with AI):**
+- RAGAS integration with programmatic benchmark runner (`phase5_benchmark.py`)
+- 80–100 sample automated dataset (LLM writes questions, answers, validates)
+- Configuration comparison matrix (diff tool runs all configs, outputs heatmap)
+- Negative control queries + false claim injection tests
+- Scrubber fuzzer for false negative detection (~500 lines)
+- Cache key versioning (~20 lines)
+
+**Stretch (Phase 7, ~2 weeks):**
+- Scale simulation with chunk duplication for 100+ paper behavior prediction
+- Progress indicators for overnight multi-query benchmarks
+- Publishable benchmark report with generated dataset (if validation shows strong
+  agreement with your spot-checks)
 
 ### What NOT to benchmark (waste of time for single developer)
 
 - Retrieval precision — threshold-based retrieval is self-calibrating (already validated in Phase 4)
-- Human-scored factual accuracy at scale — impossible for one person across 20+ queries
-- Human-scored completeness rubrics — same problem; impractical at scale
-- NOTE: this does NOT mean no human checks.  The golden query tripwire (3 queries, 6 min/week) catches catastrophic regressions.  It's a tripwire, not a survey.
+- Human-scored factual accuracy at scale — not needed when RAGAS + self-consistency + anchoring provide automated alternatives
+- Human-scored completeness rubrics — same; automated entity appearance rate + cross-theme coverage ratio replace this
+- Building a benchmark from scratch manually — LLMs can generate 80–100 sample QAs; invest the 2 hours in spot-checking, not in writing every question
+- NOTE: this does NOT mean eliminate human checks entirely.  The golden query tripwire (3 queries, 6 min/week) still catches catastrophic regressions.  And the initial 30–45 min spot-check of the automated dataset is essential for validation.
 
 ### Action items for Phase 6
 
-1. **Build `phase5_benchmark.py`** — Tier A programmatic benchmark.  Runs on 3–5 cached queries (no live LLM calls).  Outputs a scorecard with pass/warn/fail thresholds.  Runs with `pytest` to catch regressions automatically.
+1. **Build `phase5_benchmark.py`** — Tier A programmatic benchmark.  Runs on 3–5 cached queries (no live LLM calls).  Outputs a scorecard with pass/warn/fail thresholds.  Runs with `pytest` to catch regressions automatically.  Include progress indicator (X/Y queries complete, elapsed/ETA).
 
 2. **Gap analysis model comparison** — run the benchmark with gemma4:e4b vs qwen3.6:35b for gap analysis.  Measure anchoring, gap specificity, and latency diff.  Switch to gemma4:e4b if quality is within acceptable range.
 
 3. **API vs local comparison** — run the same 3–5 queries against both DeepSeek v4-pro API and local Ollama.  Compare: anchoring scores, claim count, entity appearance rate, latency.  Determine the quality gap (if any) between cloud and local models.
 
-4. **Security benchmark** — build the false positive/negative rate tests for BoundaryScrubber using synthetic data.
+4. **Automated 80–100 sample dataset** — use LLMs to generate benchmark questions, gold answers, key entities, and RAGAS validation.  2 hours human spot-check.  This is the foundation for all future benchmarking.
+
+5. **Negative control queries** — add 2 "out-of-corpus" queries.  System should produce "insufficient evidence" or empty themes.  Verifies hallucination detection.
+
+6. **False claim injection test** — plant 1-2 false assertions in cached syntheses.  Verify critic/anchoring flags them.  Tests the debate chain's error detection.
+
+7. **Security benchmark** — build the false positive/negative rate tests for BoundaryScrubber.  Add scrubber fuzzer (1000 random PHI-like strings).
+
+8. **Cache key versioning** — bump version constant when output format changes.  Prevents stale cached syntheses from misleading benchmarks.
 
 ## Future directions (next session priorities)
 
@@ -349,9 +439,15 @@ Run the same 3–5 cached queries through config A vs config B, diff all metrics
 
 2. **Build Tier A programmatic benchmark** — produce `phase5_benchmark.py` with
    automated metrics as specified in the benchmarking strategy above.  Must run
-   with `pytest` and catch regressions.
+   with `pytest` and catch regressions.  Include progress indicators for
+   long-running multi-query benchmarks (X/Y complete, elapsed/ETA).
 
-3. **API vs local comparison** — run same queries through DeepSeek v4-pro API and
+3. **Automated dataset generation** — use LLMs to generate 80–100 benchmark QA
+   pairs from your corpus.  2 hours human spot-check.  Foundation for all
+   future evaluation.  Includes negative controls, false claim injection, and
+   RAGAS validation.
+
+4. **API vs local comparison** — run same queries through DeepSeek v4-pro API and
    local Ollama.  Diff anchoring, claims, latency.  Publish results as Phase 5
    sign‑off validation.
 
@@ -391,10 +487,11 @@ qwen3.6:35b) at ~5-8 minutes per query on M3 Max 36GB.
 Your priority is Phase 6: UI, Polish & Deployment.
 See README §Phase 6 for the deliverables.  The highest-impact immediate items are:
   1. Build Tier A programmatic benchmark (phase5_benchmark.py) per §Benchmarking strategy
-  2. Switch gap analysis to gemma4:e4b + benchmark quality impact
-  3. API vs local comparison (DeepSeek v4-pro vs local Ollama on 3-5 queries)
-  4. Integrate NVIDIA GLiNER-PII privacy model
-  5. Build Streamlit/Gradio UI
+  2. Generate automated 80–100 sample benchmark dataset using LLMs + RAGAS
+  3. Switch gap analysis to gemma4:e4b + benchmark quality impact
+  4. API vs local comparison (DeepSeek v4-pro vs local Ollama on 3-5 queries)
+  5. Integrate NVIDIA GLiNER-PII privacy model
+  6. Build Streamlit/Gradio UI
 
 Before making any changes:
   1. Run the test suite: python -m pytest tests/ -v
