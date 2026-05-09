@@ -218,12 +218,26 @@ python phase4_benchmark.py                        # v4 Pro vs Chat extraction
 python phase4_benchmark_batch2.py                 # conditional Critic calibration
 python phase4_benchmark_batch2.py --compare       # conditional vs unconditional
 
-# Clear everything for fresh start
+# Clean everything for fresh start
 rm -rf projects/default/cache projects/default/query_cache \
        projects/default/chroma_data projects/default/bm25_corpus.json \
        projects/default/extractions projects/default/embeddings
 python phase4_demo.py
 ```
+
+## Planned: Formal benchmarking suite (Phase 5)
+
+A reproducible benchmark of 20–30 curated biomedical QA pairs with ground‑truth
+annotations is planned for late Phase 5.  Rationale for deferring:
+
+- Phase 5 replaces DeepSeek API with local Ollama, changing the inference surface.
+- Benchmarking now would be invalidated when local models are deployed.
+- Running the same benchmark against BOTH pipelines (API baseline, local target)
+  produces a defensible comparison for Phase 5 sign‑off.
+- The existing corpus (6 papers) is small enough for manual annotation; public
+  biomedical QA datasets (PubMedQA, BioASQ) do not test multi‑document synthesis.
+
+See README §12.3 for full benchmark design.
 
 ## Prompt for next AI session
 

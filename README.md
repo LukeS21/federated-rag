@@ -918,6 +918,13 @@ Penetration testing: attempt prompt injection, verify no data leaks
 
 Security audit log
 
+**Formal benchmarking suite** (see §12.3): Build a reproducible benchmark of 20–30
+curated biomedical QA pairs with ground‑truth annotations from the local corpus. Run
+against both the DeepSeek API pipeline (baseline) and the local Ollama pipeline (target).
+The local pipeline must match or exceed the API pipeline on factual accuracy and entity
+recall, and stay within 20 % on anchoring and completeness. Results published alongside
+the security audit as Phase 5 sign‑off.
+
 Phase 6: UI, Polish & Deployment (Weeks 12-13)
 Goal: Professional, lab‑ready package.
 
@@ -1035,6 +1042,54 @@ Debate fidelity: Synthesis after critique has higher anchoring score than before
 Air‑gap enforcement: Secure‑scope queries never reach public network
 
 ASCII enforcement: Final output contains zero non-ASCII characters
+
+### 12.3 Benchmarking Strategy
+
+Two ad‑hoc benchmark scripts exist today (`phase4_benchmark.py` for model selection,
+`phase4_benchmark_batch2.py` for Critic threshold calibration).  A formal, reproducible
+benchmark suite is planned for late Phase 5 — **intentionally deferred** because Phase 5
+replaces the DeepSeek API with local Ollama models, fundamentally changing the inference
+surface.  Benchmarking against the API pipeline now would be invalidated the moment
+local models are deployed.
+
+**Rationale for deferring:**
+
+| Concern | Why defer |
+|---------|-----------|
+| Inference surface changes | Phase 5 swaps DeepSeek API → local Qwen 35B at Q4. All latency, cost, and quality measurements shift. |
+| Avoid double work | Building a benchmark against the API pipeline, then rebuilding it for local models, is wasted effort. |
+| Baseline comparison is more valuable | Running the same benchmark against BOTH pipelines (API as baseline, local as target) produces a defensible comparison for deployment sign‑off. |
+| Corpus is small and stable | 6 papers today, growing slowly. A custom benchmark per‑corpus is manageable to annotate and directly relevant. |
+
+**Planned benchmark design (Phase 5, post‑local‑deployment):**
+
+1. **Question set** — 20–30 curated biomedical questions with ground‑truth answers drawn from the local corpus. Each question includes:
+   - Expected papers that should contribute to the answer
+   - Key entities (materials, cell types, cytokines, methods) that should appear in the synthesis
+   - A factual accuracy rubric (does the synthesis contain any claims contradicted by the source evidence?)
+
+2. **Metrics (per query):**
+
+   | Metric | What it measures | Target |
+   |--------|-----------------|--------|
+   | Retrieval precision | Fraction of retrieved chunks that are relevant | ≥ 0.80 |
+   | Entity recall | Fraction of key entities found in extraction | ≥ 0.85 |
+   | Anchoring score | TF‑IDF cosine grounding of claims in evidence | ≥ 0.35 (current threshold) |
+   | Factual accuracy | Human‑scored: no claims contradicted by source | 100 % |
+   | Synthesis completeness | Human‑scored: all major themes covered | ≥ 4/5 rubric items |
+   | Latency | Wall‑clock time from query to final output | ≤ 3 min (local), ≤ 2 min (API) |
+
+3. **Comparison** — each question run through both the local Ollama pipeline and the
+   DeepSeek API pipeline.  Results diffed on all six metrics.  The local pipeline must
+   match or exceed the API pipeline on factual accuracy and entity recall, and stay
+   within 20 % on anchoring and completeness, to be considered production‑ready.
+
+4. **Why not an established dataset?**  Public biomedical QA datasets (PubMedQA, BioASQ,
+   MedQA) test single‑document fact retrieval or multiple‑choice reasoning.  They do not
+   test multi‑document literature synthesis, cross‑paper inference, or gap analysis —
+   which are the core value of this system.  A custom benchmark against the lab's own
+   corpus produces ground truth that is directly useful for evaluating the system's
+   intended use case.
 
 ## 13. Deployment & Containerization
 ### 13.1 Development (Current)
