@@ -14,8 +14,7 @@ python phase4_demo.py                   # Survey Mode demo (local models, ~5-8 m
 **Phase 5 is complete.** 97 tests passing (zero failures — the 6 pre-existing
 `langchain_ollama` mock failures from Phase 4 were fixed).  The system runs
 entirely on local Ollama models (gemma4:e4b + qwen3.6:35b) with no cloud API
-dependency.  Per-query latency is ~5-8 minutes on M3 Max 36GB — limited by
-local model generation speed, not architecture.
+dependency.  Per-query latency is ~5-8 minutes on M3 Max 36GB
 
 ## What was accomplished in Phase 5
 
@@ -65,7 +64,7 @@ Key capabilities:
 | 2 | granite4.1:8b | qwen3.6:35b | 12-39 min (local, KV cache explosion + parallelism queue) |
 | 3 | gemma4:e4b | qwen3.6:35b | 8-12 min (2× faster 4B active params vs 8B) |
 | 4 | gemma4:e4b + medgemma:4b (dual) | qwen3.6:35b | 5-8 min (dual-model, then medgemma proved too slow — 10+ min/theme) |
-| 5 | gemma4:e4b solo | qwen3.6:35b | ~5-8 min (current, reliable) |
+| 5 | gemma4:e4b solo | qwen3.6:35b | ~5-8 min (current, reliable, but would like to improve latency (while retaining information accuracy/reliability) if possible) |
 
 ### Test suite improvements
 
@@ -79,7 +78,7 @@ Key capabilities:
 The Phase 4 "1-2 minute" benchmark was against DeepSeek's A100/H100 clusters.  Local
 models on M3 Max generate tokens at 10-25 tok/s vs 50-100+ tok/s on cloud GPUs.
 You cannot close this gap on consumer silicon.  The goal shifted from "match cloud
-speed" to "reliable quality at acceptable local latency."
+speed" to "reliable quality at acceptable local latency." Still, effort should be made to have maximum quality and minimum latency, as possible on the local system.
 
 ### 2. Ollama parallelism (`OLLAMA_NUM_PARALLEL`) + `max_workers` must respect KV cache memory
 Running 4 concurrent requests with 32K context each caused KV cache exhaustion
@@ -279,37 +278,102 @@ Note: The 5-8 min latency is NOT an architecture problem — it's the physics of
 running 35B + 9GB models on consumer silicon at 32K context with token-by-token
 generation.  Cloud API (A100/H100 clusters) cannot be matched on a local machine.
 
+## Benchmarking strategy (Phase 6 priority)
+
+### Philosophy
+
+The goal is not to prove the system is correct.  The goal is to know if your
+next commit made things worse.  All programmatic metrics measure direction, not
+absolute quality.  If you run the same queries before and after a change and
+anchoring drops 0.15, you caught a regression — no human needed.
+
+### What to measure (all automated, zero human effort)
+
+| Metric | Why it matters | How to compute |
+|--------|---------------|----------------|
+| Anchoring score distribution (mean, min, std, % below threshold) | Quality proxy — catches hallucination regressions | Aggregate `anchoring_score` across cached queries |
+| Per-phase latency breakdown | Shows exactly where time goes (gap analysis = 49% of current runtime) | Parse diagnostic timing logs; aggregate by phase |
+| Claim density (claims per char) | Measures information efficiency of dense format | `decompose_claims()` count / output chars |
+| Entity appearance rate | Verifies pre-extracted knowledge surfaces in output | grep pre-extracted entity names from `projects/default/extractions/` in synthesis |
+| Debate invocation rate (% themes scoring < threshold) | Rising rate = model quality degrading | Count themes with score < threshold / total themes |
+| Cross-theme coverage ratio | Does cross-theme drop per-theme findings? | Unique claims in cross-theme / total unique claims across all per-themes |
+| Redundancy score | Are decomposer themes overlapping? | Claims appearing in ≥2 themes / total unique claims |
+| Gap analysis specificity | Are gap questions vague or specific? (proxy: avg words per question) | Split gap output by question marks, count avg tokens per question |
+| Citation provenance (spot-check) | Do inline citations point to the correct paper? | Pick 5 random claims, verify cited paper actually contains the claim (5 min/check, semi-automated) |
+
+### Configuration comparison matrix
+
+Run the same 3–5 cached queries through config A vs config B, diff all metrics side-by-side:
+
+| Parameter to vary | Values to test | Primary metrics to compare |
+|-------------------|---------------|---------------------------|
+| Gap analysis model | gemma4:e4b vs qwen3.6:35b | Gap specificity, latency, cross-theme coverage |
+| `LLM_MAX_TOKENS` | 2048 vs 4096 vs 8192 | Per-theme claim count, anchoring, latency |
+| `CONDITIONAL_CRITIC_THRESHOLD` | 0.35 vs 0.50 vs 0.65 | Debate invocation rate, final anchoring scores |
+| Fast tier model | gemma4:e4b vs granite4.1:8b | Per-theme anchoring, claim density, latency |
+| Dense claim vs verbose prose | Compare cached verbose run vs dense-claim run | Anchoring, latency, claim count per theme |
+| **API vs local comparison** | DeepSeek v4-pro API vs local Ollama | Factual correctness, claim accuracy, anchoring scores, latency — validates whether local models produce comparable synthesis quality to cloud API |
+
+### Security benchmark
+
+| Metric | How to test |
+|--------|------------|
+| Boundary scrubber false positive rate | Inject synthetic biomedical text with 0 PHI, verify no redactions |
+| Boundary scrubber false negative rate | Inject synthetic clinical note with known PHI, verify all caught |
+| Audit log completeness | Verify every LLM call, boundary crossing, and scope routing decision produces a log entry |
+
+### What NOT to benchmark (waste of time for single developer)
+
+- Retrieval precision — threshold-based retrieval is self-calibrating (already validated in Phase 4)
+- Human-scored factual accuracy at scale — impossible for one person across 20+ queries
+- Human-scored completeness rubrics — same problem; impractical at scale
+- NOTE: this does NOT mean no human checks.  The golden query tripwire (3 queries, 6 min/week) catches catastrophic regressions.  It's a tripwire, not a survey.
+
+### Action items for Phase 6
+
+1. **Build `phase5_benchmark.py`** — Tier A programmatic benchmark.  Runs on 3–5 cached queries (no live LLM calls).  Outputs a scorecard with pass/warn/fail thresholds.  Runs with `pytest` to catch regressions automatically.
+
+2. **Gap analysis model comparison** — run the benchmark with gemma4:e4b vs qwen3.6:35b for gap analysis.  Measure anchoring, gap specificity, and latency diff.  Switch to gemma4:e4b if quality is within acceptable range.
+
+3. **API vs local comparison** — run the same 3–5 queries against both DeepSeek v4-pro API and local Ollama.  Compare: anchoring scores, claim count, entity appearance rate, latency.  Determine the quality gap (if any) between cloud and local models.
+
+4. **Security benchmark** — build the false positive/negative rate tests for BoundaryScrubber using synthetic data.
+
 ## Future directions (next session priorities)
 
 ### Immediate (Phase 6)
 
 1. **Gap analysis model switch** — run gap analysis on gemma4:e4b instead of
-   qwen3.6:35b.  Cut 328s from runtime (368s → 40s).  Benchmark quality impact.
+   qwen3.6:35b.  Cut 328s from runtime (368s → 40s).  Benchmark quality impact
+   using the configuration comparison matrix above.
 
 2. **Build Tier A programmatic benchmark** — produce `phase5_benchmark.py` with
-   automated metrics: anchoring score distribution, per-phase latency, claim
-   density, entity appearance rate, debate invocation rate.  Catch regressions
-   without human effort.
+   automated metrics as specified in the benchmarking strategy above.  Must run
+   with `pytest` and catch regressions.
 
-3. **NVIDIA GLiNER-PII integration** — drop-in implementation of the
+3. **API vs local comparison** — run same queries through DeepSeek v4-pro API and
+   local Ollama.  Diff anchoring, claims, latency.  Publish results as Phase 5
+   sign‑off validation.
+
+4. **NVIDIA GLiNER-PII integration** — drop-in implementation of the
    `PrivacyModel` interface from `src/security/privacy_model.py`.  570M params,
    55+ entity types, ~1GB at FP16.  `pip install gliner`.
 
-4. **UI & polish** (per README Phase 6): Streamlit/Gradio, session history,
+5. **UI & polish** (per README Phase 6): Streamlit/Gradio, session history,
    export formats, Neo4j adapter.
 
 ### Near-term (Phase 7)
 
-5. **Vision pipeline** — extract and analyze figures from PDFs.  Load a small
+6. **Vision pipeline** — extract and analyze figures from PDFs.  Load a small
    multimodal model (LLaVA 7B, Qwen-VL, or Granite vision variant).  Memory:
    unload text model, load vision model per figure.
 
-6. **Multi-turn section writing** — extend LangGraph with stateful section
+7. **Multi-turn section writing** — extend LangGraph with stateful section
    tracking across Introduction → Methods → Results → Discussion sections.
 
 ### Scale (Phase 8)
 
-7. **Publication-scale retrieval** — hierarchical clustering for 100-1000s of
+8. **Publication-scale retrieval** — hierarchical clustering for 100-1000s of
    papers.  Per-theme top-K retrieval instead of loading all evidence.  Neo4j
    graph storage for >10K edges.
 
@@ -325,10 +389,12 @@ Air-Gap) is complete. The system runs on local Ollama models (gemma4:e4b +
 qwen3.6:35b) at ~5-8 minutes per query on M3 Max 36GB.
 
 Your priority is Phase 6: UI, Polish & Deployment.
-See README §Phase 6 for the deliverables. The highest-impact immediate items are:
-  1. Switch gap analysis to gemma4:e4b (currently 368s on qwen3.6:35b)
-  2. Build Tier A programmatic benchmark (anchoring + latency + density)
-  3. Integrate NVIDIA GLiNER-PII privacy model
+See README §Phase 6 for the deliverables.  The highest-impact immediate items are:
+  1. Build Tier A programmatic benchmark (phase5_benchmark.py) per §Benchmarking strategy
+  2. Switch gap analysis to gemma4:e4b + benchmark quality impact
+  3. API vs local comparison (DeepSeek v4-pro vs local Ollama on 3-5 queries)
+  4. Integrate NVIDIA GLiNER-PII privacy model
+  5. Build Streamlit/Gradio UI
 
 Before making any changes:
   1. Run the test suite: python -m pytest tests/ -v
@@ -346,4 +412,6 @@ Do NOT:
   - Remove security modules (BoundaryScrubber, AuditLogger, PrivacyModel interface)
   - Change the debate chain structure (now single-pass Critic→Arbiter)
   - Revert CONDITIONAL_CRITIC_THRESHOLD below 0.50 without benchmark data
+  - Build human-scored factual accuracy benchmarks — impractical for 1 person
+  - Skip programmatic benchmarks before making quality-impacting changes — measure first, change second
 ```
