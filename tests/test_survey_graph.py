@@ -121,7 +121,7 @@ def test_run_debate_moderately_grounded_skips_critic(
     mock_get_arbiter, mock_get_critic, mock_get_drafter,
     mock_load_theme, mock_decompose, mock_anchoring,
 ):
-    """Draft with anchoring >= 0.35 but < 0.85 skips Critic (moderately grounded)."""
+    """Draft with anchoring >= 0.50 but < 0.85 skips Critic (moderately grounded)."""
     from src.graph.survey_nodes import _run_debate_for_theme, _clear_agent_caches
     _clear_agent_caches()
 
@@ -129,7 +129,7 @@ def test_run_debate_moderately_grounded_skips_critic(
     mock_drafter.draft.return_value = "Moderately grounded draft."
     mock_get_drafter.return_value = mock_drafter
     mock_decompose.return_value = ["Moderately grounded draft."]
-    score = 0.45
+    score = 0.55
     mock_anchoring.return_value = (score, [{"claim": "test", "best_evidence_sentence": "ev", "similarity": score}])
 
     result = _run_debate_for_theme(

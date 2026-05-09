@@ -18,6 +18,8 @@ from src.graph.graph_builder import GraphBuilder
 from src.graph.graph_reasoning import compute_graph_insights
 from src.retrieval.hybrid_retriever import HybridRetriever
 from src.scrubber import final_scrub
+from src.security.audit_log import get_audit_logger
+from src.security.boundary_scrubber import default_boundary_scrubber
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +28,27 @@ logger = logging.getLogger(__name__)
 #  Node 1: Input Router
 # ---------------------------------------------------------------------------
 def input_router_node(state: AgentState) -> Dict[str, Any]:
-    """Determines retrieval scope and sets mode.
-    Since we have nothing to change, return a no‑op update.
-    """
+    """Inspect query_scope and log the routing decision.
 
-    return {"routes": state.get("routes", {})}   # write back existing routes (or empty dict)
+    Determines retrieval scope and sets routing metadata for downstream
+    boundary scrubbing decisions.
+    """
+    scope = state.get("query_scope", "public")
+    mode = state.get("mode", "deep")
+
+    try:
+        audit = get_audit_logger()
+        audit.log_scope_routing(
+            query_scope=scope,
+            mode=mode,
+            routing_decision="deep_pipeline",
+            context_keys=["public_context", "secure_context"],
+        )
+    except Exception:
+        pass
+
+    logger.info("Input router: scope=%s mode=%s", scope, mode)
+    return {"routes": state.get("routes", {})}
 
 
 # ---------------------------------------------------------------------------
@@ -284,10 +302,75 @@ def anchoring_check_node(state: AgentState, pass2_flag: bool = False) -> Dict[st
 #  Node 10: Final Scrubber
 # ---------------------------------------------------------------------------
 def scrub_node(state: AgentState) -> Dict[str, Any]:
-    """Apply final ASCII scrub to the chosen synthesis."""
+    """Apply final ASCII scrub to the chosen synthesis.
 
+    Also applies boundary scrubbing when query_scope is 'both',
+    redacting sensitive content from secure corpus data before
+    it flows into the public output.
+    """
     final_text = state.get("synthesis_revised") or state.get("synthesis_draft", "")
-    return {"final_output": final_scrub(final_text)}
+    final_text = final_scrub(final_text)
+
+    scope = state.get("query_scope", "public")
+    if scope == "both":
+        scrubber = default_boundary_scrubber()
+        before_len = len(final_text)
+        final_text = scrubber.scrub(final_text)
+        after_len = len(final_text)
+        if scrubber.redaction_count > 0:
+            logger.info("Boundary scrub: %d redactions applied (%d → %d chars)",
+                         scrubber.redaction_count, before_len, after_len)
+            try:
+                audit = get_audit_logger()
+                audit.log_boundary_crossing(
+                    direction="secure_to_public",
+                    redaction_count=scrubber.redaction_count,
+                    output_chars_before=before_len,
+                    output_chars_after=after_len,
+                )
+            except Exception:
+                pass
+
+    return {"final_output": final_text, "human_approved": True}
+
+
+# ---------------------------------------------------------------------------
+#  Boundary Scrub Node (scope-based conditional routing)
+# ---------------------------------------------------------------------------
+def boundary_scrub_node(state: AgentState) -> Dict[str, Any]:
+    """Redact sensitive content when secure data crosses to public output.
+
+    This node is invoked only when query_scope is 'both'.  It applies
+    the BoundaryScrubber regex patterns to the final output, removing
+    PHI, internal codes, and other sensitive identifiers before the
+    synthesis is returned to the user.
+    """
+    final_text = state.get("final_output", "")
+    scrubber = default_boundary_scrubber()
+    before_len = len(final_text)
+    final_text = scrubber.scrub(final_text)
+    after_len = len(final_text)
+
+    redacted = scrubber.redaction_count
+    logger.info("Boundary scrub node: %d redactions (%d → %d chars)",
+                 redacted, before_len, after_len)
+
+    try:
+        audit = get_audit_logger()
+        audit.log_boundary_crossing(
+            direction="secure_to_public",
+            redaction_count=redacted,
+            output_chars_before=before_len,
+            output_chars_after=after_len,
+        )
+        audit.log_access(
+            operation="boundary_scrub",
+            resource="final_output",
+        )
+    except Exception:
+        pass
+
+    return {"final_output": final_text}
 
 
 # ---------------------------------------------------------------------------

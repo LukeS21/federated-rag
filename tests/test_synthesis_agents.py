@@ -8,14 +8,20 @@ from src.agents.arbiter import Arbiter
 
 
 # ---------------------------------------------------------------------------
-# Mocks
+# Mocks — agents now use langchain_openai.ChatOpenAI via src.llm provider
 # ---------------------------------------------------------------------------
 
-def _mock_ollama_invoke(return_ascii: str = "Draft with citation @smith2024"):
+def _mock_llm_invoke(return_ascii: str = "Draft with citation @smith2024"):
     """Return a MagicMock that, when called, returns an object with .content"""
     mock_response = MagicMock()
     mock_response.content = return_ascii
     return mock_response
+
+
+# Cache bypass context manager — ensures mock invoke is always reached
+def _bypass_cache():
+    """Patch the LLM cache to always return None (cache miss)."""
+    return patch("src.cache.llm_cache.LLMCache.get", return_value=None)
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +37,8 @@ def test_drafter_constructs_prompt_and_scrubs_output():
 
     # Simulate LLM returning a string with a non-ASCII character (Greek alpha)
     raw_output = "Draft with α and β."
-    with patch("langchain_ollama.ChatOllama.invoke", return_value=_mock_ollama_invoke(raw_output)) as mock_invoke:
+    with _bypass_cache(), \
+         patch("langchain_openai.ChatOpenAI.invoke", return_value=_mock_llm_invoke(raw_output)) as mock_invoke:
         result = drafter.draft(
             query="Test?",
             entities=entities,
@@ -62,7 +69,8 @@ def test_drafter_no_citations():
     kg_context = {}
     raw_output = "Simple draft."
 
-    with patch("langchain_ollama.ChatOllama.invoke", return_value=_mock_ollama_invoke(raw_output)) as mock_invoke:
+    with _bypass_cache(), \
+         patch("langchain_openai.ChatOpenAI.invoke", return_value=_mock_llm_invoke(raw_output)) as mock_invoke:
         result = drafter.draft("Q", entities, chunks, citations, kg_context)
     assert result == "Simple draft."
     # The user prompt should mention citations as "none provided"
@@ -82,7 +90,8 @@ def test_critic_returns_no_critique():
 
     # LLM returns the exact NO_CRITIQUE string (with possible non-ASCII)
     raw = "NO_CRITIQUE: All claims are evidence-grounded."
-    with patch("langchain_ollama.ChatOllama.invoke", return_value=_mock_ollama_invoke(raw)) as mock_invoke:
+    with _bypass_cache(), \
+         patch("langchain_openai.ChatOpenAI.invoke", return_value=_mock_llm_invoke(raw)) as mock_invoke:
         result = critic.critique(draft, chunks, entities)
     assert result == raw  # after scrubbing it's already ASCII
     assert "NO_CRITIQUE" in result
@@ -98,7 +107,7 @@ def test_critic_with_unicode_scrub():
     chunks = [{"text": "data."}]
     entities = {}
     raw = "Claim μ is unsupported."  # mu
-    with patch("langchain_ollama.ChatOllama.invoke", return_value=_mock_ollama_invoke(raw)):
+    with patch("langchain_openai.ChatOpenAI.invoke", return_value=_mock_llm_invoke(raw)):
         result = critic.critique(draft, chunks, entities)
     assert "μ" not in result
     # In the current mapping, μ becomes plain ASCII "u"
@@ -116,7 +125,8 @@ def test_arbiter_revise_scrubs_and_includes_critique():
     chunks = [{"text": "Evidence for X.", "metadata": {}}]
 
     raw = "Revised draft with σ symbol."  # sigma
-    with patch("langchain_ollama.ChatOllama.invoke", return_value=_mock_ollama_invoke(raw)) as mock_invoke:
+    with _bypass_cache(), \
+         patch("langchain_openai.ChatOpenAI.invoke", return_value=_mock_llm_invoke(raw)) as mock_invoke:
         result = arbiter.revise(draft, critique, chunks)
     assert "σ" not in result
     # scrub_unicode maps σ→sigma
@@ -134,6 +144,6 @@ def test_arbiter_no_critique():
     critique = "NO_CRITIQUE: All claims are evidence-grounded."
     chunks = [{"text": "Evidence."}]
     raw = "Good draft unchanged."
-    with patch("langchain_ollama.ChatOllama.invoke", return_value=_mock_ollama_invoke(raw)):
+    with patch("langchain_openai.ChatOpenAI.invoke", return_value=_mock_llm_invoke(raw)):
         result = arbiter.revise(draft, critique, chunks)
     assert result == raw

@@ -11,6 +11,7 @@ Adds:
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -45,7 +46,8 @@ GRAPH_PATH = str(PROJECT_DIR / "project_graph.json")
 
 # Context window & timeout
 NUM_CTX = 16384
-LLM_TIMEOUT = 600  # seconds (10 minutes)
+LLM_TIMEOUT = 900  # seconds (15 minutes)
+os.environ.setdefault("LLM_TIMEOUT", str(LLM_TIMEOUT))
 CLIENT_KWARGS = {"timeout": LLM_TIMEOUT}
 
 # Rough token estimate threshold for warnings (4 chars ≈ 1 token)

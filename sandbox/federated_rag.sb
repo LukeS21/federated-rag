@@ -1,0 +1,30 @@
+;; macOS Seatbelt Sandbox Profile — Federated RAG Phase 5
+;;
+;; Provides best-effort kernel-level isolation for single-user local use.
+;;
+;; IMPORTANT: macOS sandbox-exec does not reliably block TCP socket
+;; connections from user-space processes.  For guaranteed network
+;; isolation, use Docker (docker-compose.yml) which provides full
+;; network-namespace separation via the Linux VM.
+;;
+;; What this profile DOES provide:
+;;   - Filesystem read/write restrictions (if deny-default pattern is used)
+;;   - Process execution restrictions
+;;   - A baseline defense-in-depth layer
+;;
+;; For the strongest local security:
+;;   1. Docker: docker compose up    (full network + filesystem isolation)
+;;   2. App layer: BoundaryScrubber  (regex + AI privacy detection)
+;;   3. This profile: sandbox-exec   (best-effort kernel sandbox)
+;;
+;; Usage:
+;;   sandbox-exec -f sandbox/federated_rag.sb python phase4_demo.py
+
+(version 1)
+(allow default)
+
+;; Best-effort network restriction (see note above about TCP limitations)
+(deny network-outbound)
+(allow network-outbound
+  (local tcp "localhost:11434")
+  (local tcp "localhost:*"))

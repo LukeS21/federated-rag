@@ -7,15 +7,14 @@ evidence-grounded entities from retrieved document chunks.
 
 import json
 import logging
-import os
 import re
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from src.cache.llm_cache import get_cache
-from src.unicode_map import sanitize_api_key, scrub_unicode
+from src.llm import get_chat_model
+from src.unicode_map import scrub_unicode
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +43,9 @@ class ExtractionAgent:
         if client_kwargs is None:
             client_kwargs = {}
         self.model = model
-        self._llm = ChatOpenAI(
+        self._llm = get_chat_model(
             model=model,
             temperature=temperature,
-            api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
-            base_url="https://api.deepseek.com/v1",
-            max_tokens=8192,
-            timeout=120,
-            default_headers={
-                "User-Agent": "federated-rag",
-                "Accept": "application/json",
-            },
         )
         self.callback = callback
 

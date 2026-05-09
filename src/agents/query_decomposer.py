@@ -8,14 +8,13 @@ can each be used for focused retrieval and per-theme synthesis.
 
 import json
 import logging
-import os
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from src.cache.llm_cache import get_cache
-from src.unicode_map import sanitize_api_key, scrub_unicode
+from src.llm import get_chat_model
+from src.unicode_map import scrub_unicode
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +29,10 @@ class QueryDecomposer:
 
     def __init__(self, model: str = "deepseek-chat") -> None:
         self.model = model
-        self._llm = ChatOpenAI(
+        self._llm = get_chat_model(
             model=model,
             temperature=0.0,
-            api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
-            base_url="https://api.deepseek.com/v1",
             max_tokens=2048,
-            timeout=120,
-            default_headers={
-                "User-Agent": "federated-rag",
-                "Accept": "application/json",
-            },
         )
 
     def decompose(self, query: str) -> Dict[str, Any]:
@@ -66,7 +58,10 @@ class QueryDecomposer:
             "Given a broad research question, decompose it into distinct thematic sub-questions "
             "that each target a specific aspect of the question.\n\n"
             "Rules:\n"
-            "- Identify 3-8 distinct themes. Each theme should be independently searchable.\n"
+            "- Identify ALL semantically distinct themes. A narrow question may have only "
+            "1-2 themes; a broad survey may have 10+. Do not merge themes to hit a target "
+            "count — report each genuinely distinct theme. Each theme should be independently "
+            "searchable.\n"
             "- Each sub-query should be a complete, self-contained question suitable for "
             "retrieval from a biomedical corpus.\n"
             "- Include cross-cutting themes that span multiple sub-queries (e.g., shared "

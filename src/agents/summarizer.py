@@ -3,14 +3,13 @@
 Runs once after retrieval, before downstream agents, to cut token usage ~5x.
 """
 
-import os
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from src.cache.llm_cache import get_cache
-from src.unicode_map import sanitize_api_key, scrub_unicode
+from src.llm import get_chat_model
+from src.unicode_map import scrub_unicode
 
 
 class Summarizer:
@@ -30,17 +29,10 @@ class Summarizer:
     ) -> None:
         if client_kwargs is None:
             client_kwargs = {}
-        self.llm = ChatOpenAI(
+        self.llm = get_chat_model(
             model="deepseek-chat",
             temperature=0.0,
-            api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
-            base_url="https://api.deepseek.com/v1",
             max_tokens=512,
-            timeout=120,
-            default_headers={
-                "User-Agent": "federated-rag",
-                "Accept": "application/json",
-            },
         )
         self.callback = callback
 

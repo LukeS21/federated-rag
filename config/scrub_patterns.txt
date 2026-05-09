@@ -1,0 +1,59 @@
+# Boundary Scrub Patterns — Custom Regex Redaction Rules
+# 
+# One regex pattern per line. Lines starting with # are comments.
+# Matching text is replaced with "[REDACTED]".
+#
+# These patterns are IN ADDITION to the built-in defaults (MRN, SSN, 
+# email, phone, IP, API keys, grant IDs, etc.).
+#
+# Edit this file to add institution-specific patterns for your lab.
+
+# ── Biomedical / BME-specific patterns ─────────────────────────────────
+
+# NIH grant numbers (R01, K23, U01, P01, etc.) — already built-in,
+# but can add variant formats below:
+# Grant\s*#?\s*\d{2}[A-Z]{2}\d{6}
+
+# Proprietary compound / drug candidate codes
+CMPD-\d{4,6}
+DRUG-\d{3,5}[A-Z]?
+
+# Gene target identifiers (custom lab naming; uncomment and adapt)
+# GENE-TARGET-[A-Z]{2,4}\d{2,3}
+
+# Protein construct / plasmid identifiers
+p[A-Z]{2,4}\d{2,5}
+PLASMID-\d{3,5}
+
+# Internal project codes
+PROJ[-\s]?\d{4}[-\s]?\d{3,4}
+
+# Animal protocol / IACUC numbers
+IACUC-\d{4}-\d{4}
+PROTOCOL-\d{3,5}
+
+# IRB / ethics approval numbers
+IRB-\d{4,8}
+
+# Patient cohort identifiers (adapt for your studies)
+# COHORT-[A-Z]{3}-\d{4}
+
+# Custom lab identifiers (uncomment and adapt)
+# LAB\d{5,8}
+
+# Funding source internal codes
+FUND-\d{4,6}
+
+# Named patient cohorts (adapt format)
+# Cohort\s+\d{2,4}-[A-Z]{2,3}
+
+# Biorepository / biobank specimen IDs
+SPECIMEN-\d{5,8}
+BIOBANK-\d{4,6}
+
+# Proprietary algorithm / tool names (uncomment and adapt)
+# ALGO-[A-Z]{3,4}-\d{2,3}
+
+# Clinical trial registry numbers (NCT — registered on clinicaltrials.gov)
+# NOTE: NCT numbers are public — only scrub if linked to your institution
+# NCT\d{8}

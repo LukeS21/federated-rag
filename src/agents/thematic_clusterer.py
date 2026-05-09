@@ -10,16 +10,15 @@ clustering. An LLM-based fallback is preserved for edge cases.
 
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from sentence_transformers import SentenceTransformer
 
 from src.cache.llm_cache import get_cache
-from src.unicode_map import sanitize_api_key, scrub_unicode
+from src.llm import get_chat_model
+from src.unicode_map import scrub_unicode
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +51,10 @@ class ThematicClusterer:
         self.model = model
         self.use_embeddings = use_embeddings
         if not use_embeddings:
-            self._llm = ChatOpenAI(
+            self._llm = get_chat_model(
                 model=model,
                 temperature=0.0,
-                api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
-                base_url="https://api.deepseek.com/v1",
                 max_tokens=4096,
-                timeout=120,
-                default_headers={
-                    "User-Agent": "federated-rag",
-                    "Accept": "application/json",
-                },
             )
         else:
             self._llm = None
@@ -248,17 +240,10 @@ class ThematicClusterer:
                 HumanMessage(content=user_prompt),
             ]
             if self._llm is None:
-                self._llm = ChatOpenAI(
+                self._llm = get_chat_model(
                     model=self.model,
                     temperature=0.0,
-                    api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
-                    base_url="https://api.deepseek.com/v1",
                     max_tokens=4096,
-                    timeout=120,
-                    default_headers={
-                        "User-Agent": "federated-rag",
-                        "Accept": "application/json",
-                    },
                 )
             response = self._llm.invoke(messages)
             raw = scrub_unicode((response.content or "").strip())

@@ -9,6 +9,7 @@ Usage:
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -52,7 +53,8 @@ BM25_CORPUS_PATH = str(PROJECT_DIR / "bm25_corpus.json")
 GRAPH_PATH = str(PROJECT_DIR / "project_graph.json")
 
 NUM_CTX = 16384
-LLM_TIMEOUT = 600
+LLM_TIMEOUT = 900
+os.environ.setdefault("LLM_TIMEOUT", str(LLM_TIMEOUT))
 CLIENT_KWARGS = {"timeout": LLM_TIMEOUT}
 
 logging.basicConfig(

@@ -5,8 +5,8 @@ Phase 1 Foundation (state, Unicode, citation, retrieval primitives)   ✅ Comple
 Phase 2 PDF Ingestion & Hybrid Retrieval   ✅ Functional
 Phase 3 LLM Agents & LangGraph Core (extraction, debate synthesis, KG, anchoring, Deep Mode)   ✅ Complete (May 2026)
 Phase 4 Live Citation & Survey Mode (real Zotero API, systematic field mapping)   ✅ Complete (May 2026)
-Phase 5 Security Hardening & Air‑Gap (Docker isolation, boundary scrubber, penetration testing)   🔜 Next
-Phase 6 UI, Polish & Deployment (Streamlit/Gradio, session history, Neo4j adapter, Docker Compose)   📋 Planned
+Phase 5 Security Hardening & Air‑Gap (Docker isolation, boundary scrubber, penetration testing)   ✅ Complete (May 2026)
+Phase 6 UI, Polish & Deployment (Streamlit/Gradio, session history, Neo4j adapter, Docker Compose)   🔜 Next
 ```
 ___
 
@@ -918,12 +918,46 @@ Penetration testing: attempt prompt injection, verify no data leaks
 
 Security audit log
 
-**Formal benchmarking suite** (see §12.3): Build a reproducible benchmark of 20–30
-curated biomedical QA pairs with ground‑truth annotations from the local corpus. Run
-against both the DeepSeek API pipeline (baseline) and the local Ollama pipeline (target).
-The local pipeline must match or exceed the API pipeline on factual accuracy and entity
-recall, and stay within 20 % on anchoring and completeness. Results published alongside
-the security audit as Phase 5 sign‑off.
+**Formal benchmarking suite** (redesigned for single-developer workflow — see §12.3): Deferred to Phase 6.  The original plan (20–30 human-annotated QA pairs) was impractical for one person.  Redesigned as a three-tier approach: (A) automated programmatic metrics (anchoring, latency, claim density), (B) RAGAS LLM-as-judge evaluation, (C) golden query tripwires (3 queries, 6 min/week).  Tier A will be built in Phase 6 alongside the UI.
+
+#### Phase 5.5: Local Model Optimization & Speed
+
+During Phase 5, the DeepSeek API was replaced with local Ollama models on an
+M3 Max (36 GB unified memory).  Initial latency was 12–39 minutes due to three
+issues: (a) 32K default Ollama context creating enormous KV caches, (b) parallel
+requests exceeding GPU memory, (c) verbose Drafter output producing 1000–2200 char
+per-theme syntheses.  Multiple optimization rounds brought latency to ~5–8 min:
+
+**Model selection:**
+- Fast tier: `gemma4:e4b` (~4B active experts, 9.6 GB) — 2‑3× faster than granite4.1:8b
+- Reasoning tier: `qwen3.6:35b` (~3B active MoE, 23 GB)
+- Dual‑model parallelism tested (gemma4:e4b + medgemma:4b) but medgemma proved
+  too slow (10+ min/theme on older Gemma 3 architecture)
+
+**Output format optimization:**
+- Drafter system prompt changed from "write a concise paragraph" to "produce
+  evidence‑backed claims, one per line, no preamble"
+- Per‑theme output reduced from 1000–2200 chars to 250–600 chars per theme
+- Anchoring scores maintained at 0.88–0.95 (well‑grounded)
+- LLM‑based compression step between per‑theme and cross‑theme was removed —
+  dense claims feed directly to the cross‑theme model
+- "3–8 themes" hardcoded limit removed from query decomposer — replaced with
+  quality‑driven "ALL semantically distinct themes"
+
+**Debate chain simplification:**
+- Second Critic→Arbiter pass removed (was 5 LLM calls per debated theme, now 3)
+- Conditional critic threshold raised to 0.50 for local models (from 0.35)
+- `LLM_MAX_TOKENS=4096` (env var), `LLM_TIMEOUT=900s` (env var)
+- `max_workers=1` — sequential per‑theme execution to avoid KV cache exhaustion
+
+**Diagnostic logging:**
+- Per‑call timing (Drafter invoke start/done with prompt chars, output chars, latency)
+- Per‑theme phase timing with model and score reporting
+- Phase‑level latency breakdown visible in logs
+
+**32 hardcoded numeric limits identified** across 9 files (thresholds, truncation
+chars, top‑N caps, worker limits).  Four were fixed in Phase 5; the remaining 28
+are deferred to Phase 6+ (see HANDOFF.md for full inventory).
 
 Phase 6: UI, Polish & Deployment (Weeks 12-13)
 Goal: Professional, lab‑ready package.
@@ -943,6 +977,44 @@ Comprehensive documentation: README, quickstart guide, architecture reference
 Neo4jStorage adapter (optional upgrade path)
 
 Final Docker Compose production configuration
+
+AI privacy detection layer: integrate NVIDIA GLiNER-PII (570M params, Apache 2.0) as the Layer 3 privacy model.  Detects 55+ entity types including PHI (SSN, MRN, DOB, email, phone, IP, credit card, health insurance ID, medical conditions, etc.).  Runs ~50ms per text block on CPU, ~1GB at FP16.  Implemented via the ``PrivacyModel`` abstract interface (``src/security/privacy_model.py``) created in Phase 5 — drop-in replacement for the ``NoOpPrivacyModel``.  See ``src/security/boundary_scrubber.py`` line ~80 for the integration point.
+
+### Phase 7: Vision Pipeline & Multi-Turn Synthesis (Weeks 14-15)
+
+Goal: Analyze figures and images from PDFs and support iterative section writing for publication-grade output.
+
+Deliverables:
+
+Vision ingestion pipeline: extract figures from PDFs (Docling already supports figure extraction via ``generate_page_images=True`` and ``TableItem.get_image()``). Convert figures and tables to structured text via a vision-capable model.
+
+Vision model integration: load a lightweight multimodal model (e.g., LLaVA 7B, Qwen-VL, or Granite 4.1 vision variants) alongside the text pipeline. Model rotation: unload text model, load vision model per figure, swap back. Target: ~3-5GB vision model, ~5-15s per figure.
+
+Figure-to-text embedding: embed generated figure descriptions alongside chunk text for hybrid retrieval, enabling cross-modal search.
+
+Multi-turn section writing: extend LangGraph with stateful section tracking. User iterates sections (Introduction → Methods → Results → Discussion), each turn carries forward prior citations, claims, and terminology. Knowledge graph anchors cross-section consistency.
+
+Claim/citation ledger: programmatic tracking of every claim→citation mapping across sections. Prevents duplicate claims, ensures citation coverage, flags ungrounded assertions during multi-section writing.
+
+Memory impact: vision model loaded separately (unload text model first). Peak ~26GB (text model 23GB or vision model 5GB, never both). Fits 36GB.
+
+### Phase 8: Publication-Scale Retrieval (Weeks 16-17)
+
+Goal: Scale from 5-10 papers to 100s-1000s with sub-minute query times.
+
+Deliverables:
+
+Hierarchical thematic clustering: two-level clustering for large corpora. Level 1: broad topic assignment (cheap, embedding-based). Level 2: per-topic fine-grained themes (LLM-assisted if needed).
+
+Per-theme top-K retrieval: instead of loading all evidence from all papers into each theme's context, retrieve only the top-K most relevant chunks per theme via hybrid search (dense + sparse). This eliminates the O(n_papers) context scaling problem.
+
+Scalable graph storage: migrate from NetworkX JSON (≤10K edges) to Neo4j adapter for 100K+ edges. Enable graph traversal queries (centrality, bridging, path analysis) across entire paper corpora.
+
+Corpus-level claim extraction: pre-extract claims from all papers at ingest time, indexed for fast retrieval. Query-time synthesis draws from pre-indexed claim store rather than re-extracting entities per query.
+
+Multi-tier caching: extend the existing 3-level cache (L1: decomposition, L2: per-theme, L3: cross-theme) with L0: corpus-level claim index and L4: publication-section output cache.
+
+Target performance: 30-90s per query on 1000 papers (vs. current 5-8 min on 5 papers) via retrieval-augmented synthesis + multi-tier caching.
 
 ## 11. Component Interfaces
 11.1 Hybrid Retriever
@@ -1046,50 +1118,39 @@ ASCII enforcement: Final output contains zero non-ASCII characters
 ### 12.3 Benchmarking Strategy
 
 Two ad‑hoc benchmark scripts exist today (`phase4_benchmark.py` for model selection,
-`phase4_benchmark_batch2.py` for Critic threshold calibration).  A formal, reproducible
-benchmark suite is planned for late Phase 5 — **intentionally deferred** because Phase 5
-replaces the DeepSeek API with local Ollama models, fundamentally changing the inference
-surface.  Benchmarking against the API pipeline now would be invalidated the moment
-local models are deployed.
+`phase4_benchmark_batch2.py` for Critic threshold calibration).  Phase 5 local
+models are now deployed, enabling objective measurement of optimization impact.
 
-**Rationale for deferring:**
+**Redesigned benchmark approach (Phase 6):**
 
-| Concern | Why defer |
-|---------|-----------|
-| Inference surface changes | Phase 5 swaps DeepSeek API → local Qwen 35B at Q4. All latency, cost, and quality measurements shift. |
-| Avoid double work | Building a benchmark against the API pipeline, then rebuilding it for local models, is wasted effort. |
-| Baseline comparison is more valuable | Running the same benchmark against BOTH pipelines (API as baseline, local as target) produces a defensible comparison for deployment sign‑off. |
-| Corpus is small and stable | 6 papers today, growing slowly. A custom benchmark per‑corpus is manageable to annotate and directly relevant. |
+The original plan (20–30 human‑annotated QA pairs with manual rubric scoring) was
+redesigned for a single‑developer workflow.  The new design uses three tiers:
 
-**Planned benchmark design (Phase 5, post‑local‑deployment):**
+**Tier A — Automated programmatic (built in Phase 6, runs with tests):**
+No human effort.  Runs on 3–5 cached queries.  Reports:
+- Anchoring score distribution (mean, min, % below threshold) — quality proxy
+- Per‑phase latency breakdown — identifies bottlenecks
+- Claim density (claims per character) — measures information efficiency
+- Entity appearance rate — measures pre‑extracted knowledge surfaced
+- Debate invocation rate — signals model quality issues
 
-1. **Question set** — 20–30 curated biomedical questions with ground‑truth answers drawn from the local corpus. Each question includes:
-   - Expected papers that should contribute to the answer
-   - Key entities (materials, cell types, cytokines, methods) that should appear in the synthesis
-   - A factual accuracy rubric (does the synthesis contain any claims contradicted by the source evidence?)
+**Tier B — RAGAS LLM‑as‑judge (Phase 6):**
+Uses RAGAS faithfulness metric (LLM breaks output into claims, checks each against
+evidence).  ~5 min compute, zero human time.  Catches anchoring false positives
+(lexically similar but semantically different claims).
 
-2. **Metrics (per query):**
+**Tier C — Golden query tripwires (Phase 6, 6 min/week):**
+3 queries about the user's own research.  Automated check: do 3–5 expected entity
+names appear in output?  Spot‑read 2–3 random claims for obvious errors.
 
-   | Metric | What it measures | Target |
-   |--------|-----------------|--------|
-   | Retrieval precision | Fraction of retrieved chunks that are relevant | ≥ 0.80 |
-   | Entity recall | Fraction of key entities found in extraction | ≥ 0.85 |
-   | Anchoring score | TF‑IDF cosine grounding of claims in evidence | ≥ 0.35 (current threshold) |
-   | Factual accuracy | Human‑scored: no claims contradicted by source | 100 % |
-   | Synthesis completeness | Human‑scored: all major themes covered | ≥ 4/5 rubric items |
-   | Latency | Wall‑clock time from query to final output | ≤ 3 min (local), ≤ 2 min (API) |
+The key insight: you don't need to know what "perfect" looks like.  You need to
+know if your next commit made things worse.  All three tiers measure direction,
+not absolute quality.
 
-3. **Comparison** — each question run through both the local Ollama pipeline and the
-   DeepSeek API pipeline.  Results diffed on all six metrics.  The local pipeline must
-   match or exceed the API pipeline on factual accuracy and entity recall, and stay
-   within 20 % on anchoring and completeness, to be considered production‑ready.
-
-4. **Why not an established dataset?**  Public biomedical QA datasets (PubMedQA, BioASQ,
-   MedQA) test single‑document fact retrieval or multiple‑choice reasoning.  They do not
-   test multi‑document literature synthesis, cross‑paper inference, or gap analysis —
-   which are the core value of this system.  A custom benchmark against the lab's own
-   corpus produces ground truth that is directly useful for evaluating the system's
-   intended use case.
+**Why not an established dataset?**  Public biomedical QA datasets (PubMedQA, BioASQ,
+MedQA) test single‑document fact retrieval or multiple‑choice reasoning.  They do not
+test multi‑document literature synthesis, cross‑paper inference, or gap analysis —
+which are the core value of this system.
 
 ## 13. Deployment & Containerization
 ### 13.1 Development (Current)

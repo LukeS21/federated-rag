@@ -1,15 +1,18 @@
 """Synthesis Drafter – first-pass literature review synthesis."""
 
 import json
-import os
+import logging
 import re
+import time
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from src.cache.llm_cache import get_cache
-from src.unicode_map import sanitize_api_key, scrub_unicode
+from src.llm import get_chat_model
+from src.unicode_map import scrub_unicode
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_thinking(text: str) -> str:
@@ -34,17 +37,9 @@ class SynthesisDrafter:
         if client_kwargs is None:
             client_kwargs = {}
         self._model = model or "deepseek-v4-pro"
-        self.llm = ChatOpenAI(
+        self.llm = get_chat_model(
             model=self._model,
             temperature=0.0,
-            api_key=sanitize_api_key(os.getenv("DEEPSEEK_API_KEY")),
-            base_url="https://api.deepseek.com/v1",
-            max_tokens=8192,
-            timeout=120,
-            default_headers={
-                "User-Agent": "federated-rag",
-                "Accept": "application/json",
-            },
         )
         self.callback = callback
 
@@ -58,13 +53,13 @@ class SynthesisDrafter:
     ) -> str:
         """Produce a draft synthesis paragraph (README §5.2)."""
         system_prompt = (
-            "You are a biomedical literature synthesis drafter. Given extracted entities, "
-            "evidence summaries, citation keys, and knowledge graph insights, write a "
-            "concise literature review paragraph. "
-            "Every factual claim must be traceable to a provided evidence chunk. "
-            "Use the knowledge graph to identify cross‑cutting themes and relationships "
-            "between entities across the evidence. "
-            "Use inline citation keys (@author2025). Output plain ASCII only."
+            "You are a biomedical literature synthesis drafter. Produce evidence-backed "
+            "claims with inline citation keys (@author2025). Be as concise as possible — "
+            "prefer dense factual claims over narrative prose. Preserve ALL key findings, "
+            "contradictions, and quantitative data from the evidence. Every claim must "
+            "be traceable to a provided evidence chunk. Use knowledge graph insights "
+            "to identify cross-cutting relationships. Output plain ASCII only.\n"
+            "Format: one claim per line. No preamble, no transitions, no repetition."
         )
 
         entities_json = json.dumps(entities, indent=2, ensure_ascii=False)
@@ -81,7 +76,8 @@ class SynthesisDrafter:
             f"Evidence Summaries: {chunk_texts}\n"
             f"Available Citations: {cite_keys}\n"
             f"Knowledge Graph Context: {kg_text}\n"
-            "Write a draft paragraph synthesizing this information."
+            "Produce evidence-backed claims from this information. "
+            "One claim per line. No preamble or transitions."
         )
 
         messages = [
@@ -91,14 +87,22 @@ class SynthesisDrafter:
         cache = get_cache()
         cached = cache.get(system_prompt, user_prompt, model=self._model)
         if cached is not None:
+            logger.info("Drafter cache hit (model=%s, %d chars)", self._model, len(cached))
             return scrub_unicode(cached)
 
         config = {}
         if self.callback:
             config["callbacks"] = [self.callback]
+
+        prompt_chars = len(system_prompt) + len(user_prompt)
+        logger.info("Drafter invoke start (model=%s, prompt=%d chars)", self._model, prompt_chars)
+        t0 = time.time()
         response = self.llm.invoke(messages, config=config)
+        elapsed = time.time() - t0
         raw = _strip_thinking((response.content or "").strip())
         result = scrub_unicode(raw)
+        logger.info("Drafter invoke done (model=%s, %d chars output, %.1fs)",
+                     self._model, len(result), elapsed)
         cache.set(system_prompt, user_prompt, result, model=self._model)
         return result
 

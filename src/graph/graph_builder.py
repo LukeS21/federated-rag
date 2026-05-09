@@ -121,6 +121,7 @@ def build_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
     from src.graph.nodes import (
         anchoring_check_node,
         arbiter_node,
+        boundary_scrub_node,
         category_discovery_node,
         critic_node,
         drafter_node,
@@ -153,6 +154,7 @@ def build_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
     workflow.add_node("anchoring_check_pass2", lambda state: anchoring_check_node(state, pass2_flag=True))
     workflow.add_node("scrub", scrub_node)
     workflow.add_node("human_gate", human_gate_node)
+    workflow.add_node("boundary_scrub", boundary_scrub_node)
 
     workflow.set_entry_point("input_router")
     workflow.add_edge("input_router", "retrieve")
@@ -214,7 +216,22 @@ def build_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
     )
 
     workflow.add_edge("human_gate", "scrub")
-    workflow.add_edge("scrub", END)
+
+    def scope_router(state: AgentState) -> str:
+        scope = state.get("query_scope", "public")
+        if scope == "both":
+            return "boundary_scrub"
+        return "END"
+
+    workflow.add_conditional_edges(
+        "scrub",
+        scope_router,
+        {
+            "boundary_scrub": "boundary_scrub",
+            "END": END,
+        },
+    )
+    workflow.add_edge("boundary_scrub", END)
 
     # MemorySaver checkpointer enables interrupt/resume for human-in-the-loop.
     # Two checkpoints:
@@ -248,6 +265,7 @@ def build_survey_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
         survey_scrub_node,
         survey_thematic_cluster_node,
     )
+    from src.graph.nodes import boundary_scrub_node
 
     workflow = StateGraph(AgentState)
 
@@ -259,6 +277,7 @@ def build_survey_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
                       lambda state: survey_per_theme_synthesize_node(state, graph_storage))
     workflow.add_node("survey_cross_theme_synthesize", survey_cross_theme_synthesize_node)
     workflow.add_node("survey_scrub", survey_scrub_node)
+    workflow.add_node("boundary_scrub", boundary_scrub_node)
 
     workflow.set_entry_point("survey_query_decompose")
     workflow.add_edge("survey_query_decompose", "survey_retrieve")
@@ -267,7 +286,22 @@ def build_survey_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
     workflow.add_edge("survey_per_document_extract", "survey_per_theme_synthesize")
     workflow.add_edge("survey_per_theme_synthesize", "survey_cross_theme_synthesize")
     workflow.add_edge("survey_cross_theme_synthesize", "survey_scrub")
-    workflow.add_edge("survey_scrub", END)
+
+    def survey_scope_router(state: AgentState) -> str:
+        scope = state.get("query_scope", "public")
+        if scope == "both":
+            return "boundary_scrub"
+        return "END"
+
+    workflow.add_conditional_edges(
+        "survey_scrub",
+        survey_scope_router,
+        {
+            "boundary_scrub": "boundary_scrub",
+            "END": END,
+        },
+    )
+    workflow.add_edge("boundary_scrub", END)
 
     return workflow.compile(
         checkpointer=MemorySaver(),

@@ -1,0 +1,110 @@
+# Federated RAG — Phase 5 Air-Gap Deployment
+#
+# Architecture:
+#   orchestrator ─── public-net ─── ollama-public (has internet)
+#        │
+#        └─────────── secure-net ── ollama-secure (air-gapped, no internet)
+#
+# The orchestrator is attached to BOTH networks:
+#   - Reaches ollama-public via public-net (has internet for model pulling)
+#   - Reaches ollama-secure via secure-net (internal:true = air-gapped)
+#   - Retains internet access through public-net
+#
+# Usage:
+#   docker compose up -d
+#   docker compose exec ollama-public ollama pull qwen3.6:35b-a3b
+#   docker compose exec ollama-secure ollama pull qwen3.6:35b-a3b  # pre-load via public-net first
+#   docker compose logs -f orchestrator
+#   docker compose down
+
+services:
+  orchestrator:
+    build: .
+    container_name: federated-rag-orchestrator
+    ports:
+      - "8501:8501"
+    environment:
+      - LLM_PROVIDER=ollama
+      - OLLAMA_PUBLIC_HOST=http://ollama-public:11434
+      - OLLAMA_SECURE_HOST=http://ollama-secure:11434
+      - OLLAMA_SMALL_MODEL=qwen3.6:35b-a3b
+      - OLLAMA_LARGE_MODEL=qwen3.6:35b-a3b
+      - PUBLIC_CORPUS_DIR=/app/papers/public
+      - SECURE_CORPUS_DIR=/app/papers/secure
+      - PROJECT_DIR=/app/projects/default
+      - SECURITY_AUDIT_LOG=/app/logs/security_audit.log
+      - BOUNDARY_SCRUB_PATTERNS=/app/config/scrub_patterns.txt
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - federated_rag_projects:/app/projects
+      - federated_rag_logs:/app/logs
+      # Public corpus — internet-accessible papers
+      - ./papers/public:/app/papers/public:ro
+      # Secure corpus — air-gapped papers (read-only, mapped to known path)
+      - ./papers/secure:/app/papers/secure:ro
+      - ./config:/app/config:ro
+      - ./src:/app/src:ro
+    networks:
+      - public-net
+      - secure-net
+    depends_on:
+      ollama-public:
+        condition: service_healthy
+      ollama-secure:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama-public:
+    image: ollama/ollama:latest
+    container_name: federated-rag-ollama-public
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_public_data:/root/.ollama
+    networks:
+      - public-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  ollama-secure:
+    image: ollama/ollama:latest
+    container_name: federated-rag-ollama-secure
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_secure_data:/root/.ollama
+    networks:
+      - secure-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  federated_rag_projects:
+    driver: local
+  federated_rag_logs:
+    driver: local
+  ollama_public_data:
+    driver: local
+  ollama_secure_data:
+    driver: local
+
+networks:
+  public-net:
+    driver: bridge
+  secure-net:
+    driver: bridge
+    internal: true

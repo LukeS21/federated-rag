@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
@@ -33,6 +34,8 @@ from src.cache.query_cache import (
 from src.ingestion.pre_extractor import PreExtractor
 from src.retrieval.hybrid_retriever import HybridRetriever
 from src.scrubber import final_scrub
+from src.security.audit_log import get_audit_logger
+from src.security.boundary_scrubber import default_boundary_scrubber
 from src.state import AgentState
 from src.unicode_map import scrub_unicode
 
@@ -40,13 +43,19 @@ logger = logging.getLogger(__name__)
 
 # Threshold below which the Critic is invoked in multi-paper themes.
 # Drafts with anchoring score >= this threshold skip Critic (EGSR pattern).
-# Adjust based on benchmark results.
-CONDITIONAL_CRITIC_THRESHOLD = 0.35
+# Raised from 0.35 to 0.50 for local models — fewer themes trigger the
+# expensive full debate chain.  Tune with OLLAMA_NUM_PARALLEL for speed.
+CONDITIONAL_CRITIC_THRESHOLD = 0.50
 
 # Default model tiering: per-theme tasks use the fast/cheap tier.
-# Cross-theme synthesis and gap analysis use the full reasoning tier.
-PER_THEME_DRAFTER_MODEL = "deepseek-chat"
-CROSS_THEME_DRAFTER_MODEL = "deepseek-v4-pro"
+# Dual-model parallelism (Phase 5.5): themes are split across two
+# different models, giving true GPU parallelism without memory
+# multiplication (different models = different weights = independent
+# GPU streams).  gemma4:e4b handles half the themes, medgemma:4b
+# handles the other half.  Falls back to single-model if alt is unset.
+PER_THEME_DRAFTER_MODEL = os.getenv("OLLAMA_SMALL_MODEL", "gemma4:e4b")
+PER_THEME_MODEL_B = os.getenv("OLLAMA_ALT_MODEL", "")
+CROSS_THEME_DRAFTER_MODEL = os.getenv("OLLAMA_LARGE_MODEL", "deepseek-v4-pro")
 
 # Tokenizer for accurate context-window estimation (lazy init)
 _tokenizer: tiktoken.Encoding | None = None
@@ -154,6 +163,19 @@ def survey_query_decompose_node(state: AgentState) -> Dict[str, Any]:
     returned instantly.
     """
     query = state["user_query"]
+    scope = state.get("query_scope", "public")
+
+    try:
+        audit = get_audit_logger()
+        audit.log_scope_routing(
+            query_scope=scope,
+            mode="survey",
+            routing_decision="survey_pipeline",
+            context_keys=["public_context"],
+        )
+        audit.log_access(operation="query_decompose", resource="survey", query=query)
+    except Exception:
+        pass
 
     # Count unique papers for cache invalidation
     from pathlib import Path as _Path
@@ -190,17 +212,25 @@ def survey_retrieve_node(
     """Broad retrieval — fetch chunks from all matching papers, no exclusions.
 
     Uses a looser threshold (L2 ≤ 1.5) and higher max (50 chunks) to ensure
-    full paper coverage for thematic clustering.
+    full paper coverage for thematic clustering.  Respects query_scope:
+    populates ``public_context`` and/or ``secure_context`` based on scope.
     """
     query = state["user_query"]
+    scope = state.get("query_scope", "public")
     chunks = hybrid_retriever.query(
         query,
         similarity_threshold=1.5,
         max_chunks=50,
         filter_references=True,
     )
-    logger.info("Survey retrieve: %d chunks across papers", len(chunks))
-    return {"public_context": chunks}
+    logger.info("Survey retrieve: %d chunks across papers (scope=%s)", len(chunks), scope)
+
+    updates: Dict[str, Any] = {}
+    if scope in ("public", "both"):
+        updates["public_context"] = chunks
+    if scope in ("secure", "both"):
+        updates["secure_context"] = chunks
+    return updates
 
 
 # ---------------------------------------------------------------------------
@@ -540,12 +570,6 @@ def _run_debate_for_theme(
         revised = draft
     else:
         revised = arbiter.revise(draft, critique, summary_chunks)
-        claims = decompose_claims(revised)
-        score, _ = compute_anchoring_score(claims, theme_chunks or summary_chunks)
-        if score < 0.85:
-            critique2 = critic.critique(revised, summary_chunks, theme_entities)
-            if not critique2.startswith("NO_CRITIQUE"):
-                revised = arbiter.revise(revised, critique2, summary_chunks)
 
     claims = decompose_claims(revised)
     score, ungrounded = compute_anchoring_score(claims, theme_chunks or summary_chunks)
@@ -636,10 +660,13 @@ def survey_per_theme_synthesize_node(
 
     theme_syntheses: Dict[str, Dict[str, Any]] = {}
 
-    def _prepare_and_run(theme_name: str, paper_ids: list) -> Dict[str, Any] | None:
+    def _prepare_and_run(theme_name: str, paper_ids: list,
+                         drafter_model: str | None = None) -> Dict[str, Any] | None:
         """Gather chunks/entities for one theme and invoke the debate chain."""
         if not paper_ids:
             return None
+        if drafter_model is None:
+            drafter_model = PER_THEME_DRAFTER_MODEL
 
         theme_chunks = [
             ch for ch in all_chunks
@@ -655,20 +682,25 @@ def survey_per_theme_synthesize_node(
                 logger.warning("  '%s': paper '%s' not found in per_paper (keys: %s)",
                                theme_name, pid, sorted(per_paper.keys()))
 
-        logger.info("Per-theme synthesis: '%s' (%d papers)", theme_name, len(paper_ids))
+        logger.info("Per-theme synthesis: '%s' (%d papers) [model=%s]",
+                     theme_name, len(paper_ids), drafter_model)
         logger.debug("  '%s': %d chunks, %d entity groups",
                       theme_name, len(theme_chunks), len(theme_entities))
 
+        import time as _time
+        _t0 = _time.time()
         try:
             result = _run_debate_for_theme(
                 theme_name, theme_chunks, theme_entities, query,
                 num_ctx, client_kwargs,
                 num_papers=len(paper_ids),
-                drafter_model=PER_THEME_DRAFTER_MODEL,
+                drafter_model=drafter_model,
                 graph_storage=graph_storage,
             )
-            logger.info("  '%s': score=%.2f, %d chars",
-                         theme_name, result["anchoring_score"], len(result["synthesis"]))
+            _elapsed = _time.time() - _t0
+            logger.info("  '%s': score=%.2f, %d chars, %.1fs",
+                         theme_name, result["anchoring_score"],
+                         len(result["synthesis"]), _elapsed)
             return result
         except Exception as e:
             logger.error("  '%s': synthesis failed — %s", theme_name, e)
@@ -680,30 +712,68 @@ def survey_per_theme_synthesize_node(
                 "num_papers": len(paper_ids),
             }
 
-    # Parallel fan-out to all themes
-    max_workers = min(len(clusters), 8)  # cap to avoid API rate limits
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {}
-        for theme_name, paper_ids in clusters.items():
-            futures[executor.submit(_prepare_and_run, theme_name, paper_ids)] = theme_name
+    # ── Dual-model parallelism (Phase 5.5) ──────────────────────────────
+    # Themes are split across two different models running in parallel.
+    # Different models = different weights = true GPU parallelism without
+    # memory multiplication.  Falls back to single-model sequential if
+    # PER_THEME_MODEL_B is unset.
+    theme_items = list(clusters.items())
+    model_b = PER_THEME_MODEL_B.strip() if PER_THEME_MODEL_B else ""
 
-        for future in as_completed(futures):
-            theme_name = futures[future]
-            try:
-                result = future.result()
+    if model_b and len(theme_items) >= 2:
+        mid = max(1, len(theme_items) // 2)
+        group_a = theme_items[:mid]
+        group_b = theme_items[mid:]
+
+        def _process_group(themes: list, model: str) -> None:
+            for theme_name, paper_ids in themes:
+                result = _prepare_and_run(theme_name, paper_ids, drafter_model=model)
                 if result is not None:
                     theme_syntheses[theme_name] = result
-            except Exception as e:
-                logger.error("  '%s': unhandled synthesis failure — %s", theme_name, e)
-                theme_syntheses[theme_name] = {
-                    "theme": theme_name,
-                    "synthesis": f"Synthesis failed for theme '{theme_name}': {e}",
-                    "anchoring_score": 0.0,
-                    "ungrounded_claims": [],
-                    "num_papers": 1,
-                }
+
+        logger.info("Dual-model per-theme: %d themes split %d/%d (model_a=%s, model_b=%s)",
+                     len(theme_items), len(group_a), len(group_b),
+                     PER_THEME_DRAFTER_MODEL, model_b)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_a = executor.submit(_process_group, group_a, PER_THEME_DRAFTER_MODEL)
+            f_b = executor.submit(_process_group, group_b, model_b)
+            for f in (f_a, f_b):
+                try:
+                    f.result()
+                except Exception as e:
+                    logger.error("Dual-model group failed: %s", e)
+    else:
+        # Single-model sequential fallback
+        logger.info("Single-model per-theme: %d themes (model=%s)",
+                     len(theme_items), PER_THEME_DRAFTER_MODEL)
+        for theme_name, paper_ids in theme_items:
+            result = _prepare_and_run(theme_name, paper_ids)
+            if result is not None:
+                theme_syntheses[theme_name] = result
 
     return {"per_theme_syntheses": theme_syntheses}
+
+
+# ---------------------------------------------------------------------------
+#  Helper: combine per-theme syntheses for cross-theme prompt
+# ---------------------------------------------------------------------------
+def _combine_syntheses(theme_syntheses: Dict[str, Dict[str, Any]]) -> str:
+    """Concatenate per-theme claim syntheses with theme headers.
+
+    The Drafter now produces dense evidence-backed claims (one per line)
+    instead of verbose prose paragraphs.  This format is directly usable
+    by the cross-theme synthesis model without additional compression.
+    No truncation is applied — all claims are preserved.
+    """
+    parts: List[str] = []
+    for theme_name, ts in theme_syntheses.items():
+        score = ts.get("anchoring_score", 0)
+        text = ts.get("synthesis", "")
+        if text.startswith("Synthesis failed"):
+            parts.append(f"## {theme_name} (score: {score:.2f})\n(no synthesis)")
+        else:
+            parts.append(f"## {theme_name} (score: {score:.2f})\n{text}")
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -727,12 +797,7 @@ def survey_cross_theme_synthesize_node(state: AgentState) -> Dict[str, Any]:
             "gap_analysis": "",
         }
 
-    combined = []
-    for theme_name, ts in theme_syntheses.items():
-        score = ts.get("anchoring_score", 0)
-        text = ts.get("synthesis", "")
-        combined.append(f"## {theme_name} (anchoring: {score:.2f})\n{text}")
-    combined_text = "\n\n".join(combined)
+    combined_text = _combine_syntheses(theme_syntheses)
     citations = sorted(theme_syntheses.keys())
 
     # ── Level 3 cache: cross-theme synthesis ────────────────────────────
@@ -754,8 +819,9 @@ def survey_cross_theme_synthesize_node(state: AgentState) -> Dict[str, Any]:
     def _run_cross_theme() -> str:
         drafter = _get_drafter(num_ctx, client_kwargs, model=CROSS_THEME_DRAFTER_MODEL)
         return drafter.draft(
-            query=f"{query}\n\nSynthesize across all themes below into a unified narrative. "
-                  "Identify agreements, contradictions, and gaps in the evidence.",
+            query=f"{query}\n\nSynthesize the per-theme claims below into a unified narrative. "
+                  "Identify agreements, contradictions, and gaps in the evidence. "
+                  "Include inline citations. Output plain text.",
             entities={},
             chunks=cross_chunks,
             citations=citations,
@@ -803,10 +869,15 @@ def survey_cross_theme_synthesize_node(state: AgentState) -> Dict[str, Any]:
 #  Node S7: Survey Scrub
 # ---------------------------------------------------------------------------
 def survey_scrub_node(state: AgentState) -> Dict[str, Any]:
-    """Final ASCII scrub and output formatting for Survey Mode."""
+    """Final ASCII scrub and output formatting for Survey Mode.
+
+    Applies boundary scrubbing when query_scope is 'both', redacting
+    sensitive content from secure corpus data before public output.
+    """
     cross_synth = state.get("cross_theme_synthesis", "")
     gap = state.get("gap_analysis", "")
     theme_syntheses = state.get("per_theme_syntheses", {})
+    scope = state.get("query_scope", "public")
 
     # Build final output
     parts = ["# SURVEY SYNTHESIS\n"]
@@ -819,4 +890,25 @@ def survey_scrub_node(state: AgentState) -> Dict[str, Any]:
         parts.append(final_scrub(ts.get("synthesis", "")))
 
     final = "\n".join(parts)
-    return {"final_output": final}
+
+    # Boundary scrubbing for both scope
+    if scope == "both":
+        scrubber = default_boundary_scrubber()
+        before_len = len(final)
+        final = scrubber.scrub(final)
+        after_len = len(final)
+        if scrubber.redaction_count > 0:
+            logger.info("Survey boundary scrub: %d redactions (%d → %d chars)",
+                         scrubber.redaction_count, before_len, after_len)
+            try:
+                audit = get_audit_logger()
+                audit.log_boundary_crossing(
+                    direction="secure_to_public",
+                    redaction_count=scrubber.redaction_count,
+                    output_chars_before=before_len,
+                    output_chars_after=after_len,
+                )
+            except Exception:
+                pass
+
+    return {"final_output": final, "human_approved": True}
