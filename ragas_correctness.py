@@ -234,8 +234,12 @@ def judge_claim_faithfulness(
     evidence_chunks: List[Dict[str, Any]],
     judge_llm: ChatOpenAI,
     inferential: bool = False,
+    chroma_client: Any = None,
 ) -> Dict[str, Any]:
     """LLM judges whether a claim is supported by evidence.
+
+    Uses hybrid retrieval (BM25 sparse + ChromaDB dense) when *chroma_client*
+    is available.  Falls back to BM25-only otherwise.
 
     For inferential claims (cross-paper synthesis), uses a modified prompt
     that doesn't expect verbatim evidence matches.
@@ -243,9 +247,25 @@ def judge_claim_faithfulness(
     from src.retrieval.bm25_index import BM25Index
     bm25 = BM25Index()
     bm25.add_documents([ch["text"] for ch in evidence_chunks])
-    best_results = bm25.query(claim, n_results=3)
-    if best_results:
-        best_evidence = " ||| ".join(str(r)[:1000] for r in best_results)
+
+    # ── BM25 sparse retrieval ──
+    results = bm25.query(claim, n_results=3)
+    results_list = list(results) if results else []
+
+    # ── ChromaDB dense retrieval (if available) ──
+    if chroma_client is not None:
+        try:
+            dense = chroma_client.query(claim, n_results=2)
+            dense_docs = (dense or {}).get("documents", [[]])
+            for dr_text in (dense_docs[0] if dense_docs else []):
+                dr_text = scrub_unicode(str(dr_text))
+                if dr_text and dr_text not in [str(r) for r in results_list]:
+                    results_list.append(dr_text)
+        except Exception:
+            pass
+
+    if results_list:
+        best_evidence = " ||| ".join(str(r)[:1000] for r in results_list[:5])
     else:
         best_evidence = "(no evidence)"
 
@@ -267,6 +287,13 @@ def judge_claim_faithfulness(
             "faithfulness_score": result.get("score", 0),
             "reasoning": str(result.get("reasoning", ""))[:200],
             "best_evidence": best_evidence[:300],
+        }
+    except Exception as e:
+        return {
+            "claim": claim[:150],
+            "faithfulness_score": 0,
+            "reasoning": f"LLM judge failed: {e}",
+            "best_evidence": "",
         }
     except Exception as e:
         return {
@@ -383,15 +410,22 @@ def run_calibration(
     evidence: List[Dict[str, Any]],
     judge_llm: ChatOpenAI,
 ) -> Dict[str, Any]:
-    """Run calibration claims through the judge to validate it discriminates.
+    """Run calibration claims through the judge to validate it discriminates."""
+    from src.retrieval.chroma_client import ChromaClient
 
-    Returns calibration results plus a validity assessment.
-    """
+    _chroma = None
+    try:
+        _chroma = ChromaClient(collection_name="public_corpus",
+                                persist_directory=str(PROJECT_DIR / "chroma_data"))
+    except Exception:
+        pass
+
     logger.info("Calibration: judging %d calibration claims", len(_CALIBRATION_CLAIMS))
     results = []
     for cal in _CALIBRATION_CLAIMS:
         logger.info("  [calibration] %s...", cal["claim"][:60])
-        result = judge_claim_faithfulness(cal["claim"], evidence, judge_llm)
+        result = judge_claim_faithfulness(cal["claim"], evidence, judge_llm,
+                                           chroma_client=_chroma)
         result["type"] = cal["type"]
         result["expected"] = cal["expected"]
         results.append(result)
@@ -440,6 +474,14 @@ def run_faithfulness_eval(
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
 
+    # Enable hybrid retrieval if ChromaDB is available
+    _chroma = None
+    try:
+        _chroma = ChromaClient(collection_name="public_corpus",
+                                persist_directory=str(PROJECT_DIR / "chroma_data"))
+    except Exception:
+        pass
+
     ev_texts = [ch["text"] for ch in evidence]
     vectorizer = TfidfVectorizer(stop_words="english", lowercase=True)
     ev_matrix = vectorizer.fit_transform(ev_texts)
@@ -481,22 +523,37 @@ def run_faithfulness_eval(
         for i, (claim, _) in enumerate(claims):
             logger.info("  [%d/%d] Judging: %s...", i + 1, len(claims), claim[:60])
             result = judge_claim_faithfulness(claim, evidence, judge_llm,
-                                               inferential=inferential)
+                                               inferential=inferential,
+                                               chroma_client=_chroma)
             results.append(result)
             if result["faithfulness_score"] > 0:
                 scores.append(result["faithfulness_score"])
         avg = sum(scores) / max(len(scores), 1) if scores else 0.0
+        # Use different labels for inferential vs grounded
+        if inferential:
+            labels = {
+                5: "5 (directionally supported)",
+                4: "4 (mostly supported)",
+                3: "3 (partial — extrapolates)",
+                2: "2 (weakly supported)",
+                1: "1 (contradicted/fabricated)",
+            }
+        else:
+            labels = {
+                5: "5 (verbatim match)",
+                4: "4 (strongly supported)",
+                3: "3 (extrapolated)",
+                2: "2 (weakly related)",
+                1: "1 (contradicts/fabricated)",
+            }
         return {
             "claims_evaluated": len(results),
             "avg_faithfulness": round(avg, 2),
             "min_score": min(scores) if scores else 0,
             "max_score": max(scores) if scores else 0,
             "score_distribution": {
-                "5 (verbatim match)": sum(1 for r in results if r["faithfulness_score"] == 5),
-                "4 (strongly supported)": sum(1 for r in results if r["faithfulness_score"] == 4),
-                "3 (extrapolated)": sum(1 for r in results if r["faithfulness_score"] == 3),
-                "2 (weakly related)": sum(1 for r in results if r["faithfulness_score"] == 2),
-                "1 (contradicts/fabricated)": sum(1 for r in results if r["faithfulness_score"] == 1),
+                labels[k]: sum(1 for r in results if r["faithfulness_score"] == k)
+                for k in [5, 4, 3, 2, 1]
             },
             "details": results,
         }
