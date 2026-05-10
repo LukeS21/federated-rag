@@ -41,12 +41,19 @@ load_dotenv(override=True)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.anchoring.evidence_check import decompose_claims, compute_anchoring_score
+from src.anchoring.evidence_check import decompose_claims, compute_anchoring_score, set_anchoring_chroma
 from src.cache.query_cache import load_query_decomposition, load_cross_theme
 from src.retrieval.chroma_client import ChromaClient
 from src.unicode_map import scrub_unicode
 
 logger = logging.getLogger("phase5_benchmark")
+
+# Try to enable hybrid retrieval for anchoring if ChromaDB is available
+try:
+    _chroma = ChromaClient(collection_name="public_corpus", persist_directory=str(Path("projects/default") / "chroma_data"))
+    set_anchoring_chroma(_chroma)
+except Exception:
+    pass
 
 # ── Thresholds for pass/warn/fail ──────────────────────────────────────────
 PASS_THRESHOLD = 0.80

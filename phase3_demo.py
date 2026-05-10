@@ -117,6 +117,8 @@ print("=" * 70)
 pdf_parser = PDFParser()
 chroma = ChromaClient(collection_name="public_corpus", persist_directory=CHROMA_PATH)
 bm25 = BM25Index()
+from src.anchoring.evidence_check import set_anchoring_chroma
+set_anchoring_chroma(chroma)
 retriever = HybridRetriever(chroma_client=chroma, bm25_index=bm25)
 
 # Discover which PDFs are already indexed (by metadata.source)

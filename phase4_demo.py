@@ -102,6 +102,9 @@ pdf_parser = PDFParser()
 chroma = ChromaClient(collection_name="public_corpus", persist_directory=CHROMA_PATH)
 bm25 = BM25Index()
 retriever = HybridRetriever(chroma_client=chroma, bm25_index=bm25)
+# Enable hybrid retrieval in anchoring checks (BM25 + ChromaDB dense)
+from src.anchoring.evidence_check import set_anchoring_chroma
+set_anchoring_chroma(chroma)
 
 existing_pdfs = set()
 if _chroma_doc_count(chroma) > 0:

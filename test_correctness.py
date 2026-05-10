@@ -33,13 +33,20 @@ load_dotenv(override=True)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.anchoring.evidence_check import compute_anchoring_score, decompose_claims
+from src.anchoring.evidence_check import compute_anchoring_score, decompose_claims, set_anchoring_chroma
 from src.retrieval.bm25_index import BM25Index
 from src.retrieval.chroma_client import ChromaClient
 from src.unicode_map import scrub_unicode
 
 PROJECT_DIR = Path("projects/default")
 SURVEY_PATH = PROJECT_DIR / "survey_result.json"
+
+# Try to enable hybrid retrieval for anchoring if ChromaDB is available
+try:
+    _chroma = ChromaClient(collection_name="public_corpus", persist_directory=str(PROJECT_DIR / "chroma_data"))
+    set_anchoring_chroma(_chroma)
+except Exception:
+    pass
 
 # ── Fabricated claims (planted into syntheses) ─────────────────────────────
 
