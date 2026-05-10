@@ -6,7 +6,8 @@ Phase 2 PDF Ingestion & Hybrid Retrieval   ✅ Functional
 Phase 3 LLM Agents & LangGraph Core (extraction, debate synthesis, KG, anchoring, Deep Mode)   ✅ Complete (May 2026)
 Phase 4 Live Citation & Survey Mode (real Zotero API, systematic field mapping)   ✅ Complete (May 2026)
 Phase 5 Security Hardening & Air‑Gap (Docker isolation, boundary scrubber, penetration testing)   ✅ Complete (May 2026)
-Phase 6 UI, Polish & Deployment (Streamlit/Gradio, session history, Neo4j adapter, Docker Compose)   🔜 Next
+Phase 5.5 Local Model Optimization & Speed (dense claims, debate simplification, model tiering)   ✅ Complete (May 2026)
+Phase 6 UI, Polish & Deployment (Streamlit, GLiNER-PII, correctness benchmarking layer)   ✅ Core Complete (May 2026)
 ```
 ___
 
@@ -959,26 +960,92 @@ per-theme syntheses.  Multiple optimization rounds brought latency to ~5–8 m
 chars, top‑N caps, worker limits).  Four were fixed in Phase 5; the remaining 28
 are deferred to Phase 6+ (see HANDOFF.md for full inventory).
 
-Phase 6: UI, Polish & Deployment (Weeks 12-13)
-Goal: Professional, lab‑ready package.
+### Phase 6 Status (May 2026)
 
-Deliverables:
+**Core complete.**  Streamlit UI, GLiNER-PII privacy layer, and multi-layer
+correctness benchmarking are built and validated.  The correctness layer is the
+key deliverable — no existing biomedical benchmark tests multi-document synthesis
+quality, so we built our own validation infrastructure.
 
-Streamlit or Gradio UI (localhost only): project management, schema review, synthesis editing, export
+#### Deliverables built
 
-Session history: past queries, extracted entities, synthesized drafts
+| Deliverable | Implementation | Status |
+|---|---|---|
+| Streamlit UI | `app.py` — 5-tab interface: Query, Results, Benchmarks, History, Logs | ✅ Built |
+| Session history | Persisted in `st.session_state`, query log with re-run support | ✅ Built |
+| Export formats | Markdown, plain text, JSON download buttons in UI | ✅ Built |
+| GLiNER-PII privacy model | `src/security/gliner_privacy.py` — 570M params, 55+ entity types (Apache 2.0), drop-in `PrivacyModel` implementation | ✅ Built |
+| Tier A programmatic benchmark | `phase5_benchmark.py` — 9 metrics (anchoring, density, entity rate, debate invocation, cross-theme coverage, redundancy, gap novelty, grounded/inferential, citation provenance), pytest-compatible | ✅ Built |
+| Correctness test suite | `test_correctness.py` — 4 tests: false-claim injection (3 planted), negative controls (3 OOC queries), Discussion-overlap, grounded/inferential claim tagging | ✅ Built |
+| LLM-as-Judge evaluation | `ragas_correctness.py` — faithfulness + gap quality (novelty, actionability) with TRUE/FALSE/GRAY calibration, supports DeepSeek chat + v4-pro as judge (synthesis stays local) | ✅ Built |
+| Hybrid anchoring | BM25 + ChromaDB fused in `compute_anchoring_score()` — matches main pipeline's `HybridRetriever` pattern, eliminates false-low scores from BM25 keyword-frequency bias | ✅ Built |
+| Gap analysis model switch | `GAP_ANALYSIS_MODEL=gemma4:e4b` env var — cuts gap analysis from ~368s (qwen3.6:35b) to ~40s, quality validated via RAGAS | ✅ Built |
+| API comparison script | `phase5_api_comparison.py` — framework for DeepSeek v4-pro vs local Ollama comparison (not yet executed with `--live`) | ✅ Built |
+| Dataset generation script | `generate_benchmark_dataset.py` — automated 80-100 sample QA pair generator via LLMs + RAGAS (not yet executed) | ✅ Built |
 
-Export formats: Markdown, plain text, JSON (for downstream tools)
+#### Benchmarking results (latest run, hybrid retrieval enabled)
 
-Complete test suite: unit + integration + security (target: 90%+ coverage)
+```
+Anchoring (hybrid BM25+ChromaDB): 0.993 mean (99.2% grounded)
+Calibration: VALID  (TRUE 5.0/5, FALSE 1.0-1.2/5)
+Faithfulness (deepseek-chat):    4.7/5 grounded, 5.0/5 inferential
+Faithfulness (deepseek-v4-pro):  4.5/5 grounded, 4.6/5 inferential
+Gap novelty (Discussion):        80% (8/10 gaps don't match Discussion sections)
+Gap quality (v4-pro):            4.5/5 novelty, 4.8/5 actionability
+False-claim detection:           3/3 fabricated claims flagged as ungrounded
+OOC detection:                   3/3 out-of-corpus queries score < 0.40
+Grounded/inferential:            88% grounded / 12% inferential (chunk-level)
+```
 
-Comprehensive documentation: README, quickstart guide, architecture reference
+#### Known gaps in Phase 6 (not yet built)
 
-Neo4jStorage adapter (optional upgrade path)
+| Item | Priority | Effort |
+|---|---|---|
+| API vs local comparison (execute `--live`) | Medium | ~10 min + $1-2 API cost |
+| 80-100 sample dataset (execute generation) | Medium | ~2h LLM calls + 30 min spot-check |
+| Security scrubber fuzzer | Low | ~500 lines |
+| Cache key versioning | Low | ~20 lines |
+| Multi-run variance test | Low | Rerun query 3×, report mean ± std |
+| Configuration comparison matrix | Low | Deferred until active config question exists |
+| Neo4j adapter | Low | Deferred to Phase 8 (publication scale) |
+| Docs / quickstart guide | Low | Write when system is stable for external use |
 
-Final Docker Compose production configuration
+#### Lessons learned in Phase 6
 
-AI privacy detection layer: integrate NVIDIA GLiNER-PII (570M params, Apache 2.0) as the Layer 3 privacy model.  Detects 55+ entity types including PHI (SSN, MRN, DOB, email, phone, IP, credit card, health insurance ID, medical conditions, etc.).  Runs ~50ms per text block on CPU, ~1GB at FP16.  Implemented via the ``PrivacyModel`` abstract interface (``src/security/privacy_model.py``) created in Phase 5 — drop-in replacement for the ``NoOpPrivacyModel``.  See ``src/security/boundary_scrubber.py`` line ~80 for the integration point.
+1. **BM25 keyword-frequency bias is a real failure mode** — single-retriever anchoring produced false low scores when common filler words (\"mice,\" \"obese\") drowned out rare discriminative terms (\"leptin\"). Hybrid retrieval (BM25 + ChromaDB) fixes this. Investigation across 118 claims showed BM25 is the primary retriever (56% of claims) while ChromaDB handles the 3.4% of claims BM25 misses entirely. Both are essential.
+
+2. **LLM-as-Judge requires calibration** — gemma4:e4b scored every claim 5/5 (agreeableness bias). Adding a critical prompt + TRUE/FALSE/GRAY calibration claims validated that the judge discriminates. DeepSeek chat and v4-pro both confirmed the system is well-calibrated (TRUE 5/5, FALSE 1/5).
+
+3. **Sentence-level TF-IDF inflates grounded rates artificially** — splitting evidence into sentences creates thousands of granular units, making any claim find a \"match.\" Chunk-level matching (used in the benchmark) is more honest: 83-88% grounded vs 99%.
+
+4. **Gap novelty is real** — Discussion-overlap testing (searching gap questions against paper Discussion sections) showed 80-90% of gaps are genuinely novel, not copying authors' future directions. This was the user's core concern and the data supports the pipeline is doing real work.
+
+5. **6 papers limits synthesis depth** — 88% of claims are grounded (directly traceable to evidence). At 100+ papers with diverse content, the inferential rate would naturally increase as the system has more cross-paper material to synthesize. Phase 8 scale will expose this.
+
+6. **v4-pro is 10× slower than chat for judging** — 509s vs 51s for 20 claims. The quality delta is small (0.1-0.2 in faithfulness, 0.6 in actionability). For routine benchmarking, deepseek-chat is sufficient. Reserve v4-pro for final validation.
+
+#### Novel approaches developed in Phase 6
+
+1. **Calibrated LLM-as-Judge** — pre-evaluating the judge with TRUE/FALSE/GRAY claims before trusting its scores. If the judge can't discriminate fabrication from truth, discard its evaluations entirely. This is standard in recent LLM evaluation research but novel in this context.
+
+2. **Discussion-overlap gap novelty test** — searching gap questions against paper Discussion sections to verify the system isn't regurgitating authors' own future directions. No existing benchmark covers this for multi-document synthesis.
+
+3. **Grounded vs inferential claim tagging** — splitting synthesis claims by whether they match a single evidence chunk (grounded) or synthesize across papers (inferential). Only grounded claims are scored for correctness; inferential claims are evaluated on directional support.
+
+4. **Hybrid retrieval in anchoring** — extending `compute_anchoring_score()` with the same BM25 + ChromaDB pattern used by the main pipeline. Fixes a class of false-low scores caused by BM25's keyword-frequency bias.
+
+#### Remaining Phase 6 items — recommended order
+
+1. **Cache key versioning** (~20 lines) — prevents stale cached results from misleading benchmarks. Trivial, should be done before any new code changes.
+2. **API vs local comparison** — run `phase5_api_comparison.py --live` with 3 cached queries to validate local Ollama produces comparable quality to DeepSeek API. ~$1-2, ~10 min.
+3. **Security fuzzer** — scrubber false negative rate test (~500 lines). Important for production readiness.
+4. **Multi-run variance** — run the same query 3×, report mean ± std for anchoring. Confirms single-run scores are stable.
+
+#### What was deferred from the original Phase 6 plan
+
+- **Neo4jStorage adapter**: NetworkX JSON handles the current 6-paper, ~500-node graph. Neo4j is only needed at Phase 8 scale (100K+ edges). Deferred.
+- **80-100 sample automated dataset**: Script exists but generation requires ~2h LLM calls. More valuable at Phase 8 when the corpus is larger and diverse. Deferred.
+- **Config comparison matrix**: Current config (gemma4:e4b + qwen3.6:35b + 0.50 threshold + dense claims) is stable. Matrix is useful when actively evaluating alternatives. Deferred.
 
 ### Phase 7: Vision Pipeline & Multi-Turn Synthesis (Weeks 14-15)
 
@@ -1115,54 +1182,49 @@ Air‑gap enforcement: Secure‑scope queries never reach public network
 
 ASCII enforcement: Final output contains zero non-ASCII characters
 
-### 12.3 Benchmarking Strategy
-
-Two ad‑hoc benchmark scripts exist today (`phase4_benchmark.py` for model selection,
-`phase4_benchmark_batch2.py` for Critic threshold calibration).  Phase 5 local
-models are now deployed, enabling objective measurement of optimization impact.
-
-**Redesigned benchmark approach (Phase 6):**
+### 12.3 Benchmarking Strategy (Phase 6 — built and validated)
 
 The original plan (20–30 human‑annotated QA pairs with manual rubric scoring) was
-redesigned for a single‑developer workflow.  The new design uses three tiers:
+redesigned for a single‑developer workflow.  All three tiers defined in the Phase 5
+handoff have been built, integrated, and validated.  Results from the latest run
+(May 2026, 6‑paper corpus, hybrid retrieval enabled):
 
-**Tier A — Automated programmatic (built in Phase 6, runs with tests):**
-No human effort.  Runs on 3–5 cached queries.  Reports:
-- Anchoring score distribution (mean, min, % below threshold) — quality proxy
-- Per‑phase latency breakdown — identifies bottlenecks
-- Claim density (claims per character) — measures information efficiency
-- Entity appearance rate — measures pre‑extracted knowledge surfaced
-- Debate invocation rate — signals model quality issues
+**Tier A — Automated programmatic** (`phase5_benchmark.py`):
+- Anchoring score distribution: mean 0.993, min 0.964, std 0.016 (99.2% grounded)
+- Claim density: 118 claims across 22K chars (~187 chars/claim)
+- Gap novelty (Discussion‑overlap): 80% of gaps don't match Discussion sections
+- Grounded vs inferential: 88% grounded / 12% inferential (chunk‑level)
+- Entity appearance: 36% of pre‑extracted entities surface in output
+- Debate invocation: 0% (no theme below 0.50 threshold)
+- Cross‑theme coverage: 76‑80%
+- Redundancy: 35% overlap across themes
+- Citation provenance: 108 citations, 6 unique keys, 0 orphaned
 
-**Tier B — RAGAS LLM‑as‑judge (Phase 6):**
-Uses RAGAS faithfulness metric (LLM breaks output into claims, checks each against
-evidence).  ~5 min compute, zero human time.  Catches anchoring false positives
-(lexically similar but semantically different claims).
+**Tier A+ — Correctness tests** (`test_correctness.py`):
+- False‑claim injection: 3/3 fabricated claims flagged as ungrounded
+- Negative controls: 3/3 out‑of‑corpus queries correctly score < 0.40
+- Discussion‑overlap: 80% gap novelty (validated against 64 Discussion chunks)
+- Grounded vs inferential tagging: chunk‑level matching across all evidence
 
-**Tier C — Golden query tripwires (Phase 6, 6 min/week):**
-3 queries about the user's own research.  Automated check: do 3–5 expected entity
-names appear in output?  Spot‑read 2–3 random claims for obvious errors.
+**Tier B — LLM‑as‑Judge** (`ragas_correctness.py`):
+- Calibrated judge: TRUE claims 5.0/5, FALSE claims 1.0‑1.2/5, GRAY claims 1.5‑2.5/5
+- Faithfulness (deepseek‑chat): 4.7/5 grounded, 5.0/5 inferential
+- Faithfulness (deepseek‑v4‑pro): 4.5/5 grounded, 4.6/5 inferential
+- Gap quality (v4‑pro): 4.5/5 novelty, 4.8/5 actionability
+- Judge calibration validated across 2 models — scores are not inflated by agreeableness bias
 
-The key insight: you don't need to know what "perfect" looks like.  You need to
-know if your next commit made things worse.  All three tiers measure direction,
-not absolute quality.
+**Tier C — Golden query tripwires**: Not yet automated; use `ragas_correctness.py`
+on your primary research query as a manual spot‑check.
 
-**Why not an established dataset?**  Public biomedical QA datasets (PubMedQA, BioASQ,
-MedQA) test single‑document fact retrieval or multiple‑choice reasoning.  They do not
-test multi‑document literature synthesis, cross‑paper inference, or gap analysis —
-which are the core value of this system.
+**Why not an established dataset?**  Same as originally stated: public biomedical QA
+datasets (PubMedQA, BioASQ, MedQA) test single‑document retrieval, not multi‑paper
+synthesis.  Our evaluation suite is novel in testing cross‑paper inference, gap
+analysis quality, and discussion‑overlap novelty.
 
-**Automated benchmark creation:** LLMs can generate evaluation data that is better
-than human‑written references for summarization tasks (arXiv:2309.09558).  Combined
-with RAGAS (arXiv:2309.15217) for reference‑free evaluation, an 80–100 sample
-benchmark can be built with ~2 hours of human spot‑checking.  The approach:
-(1) LLM generates research questions from papers, (2) LLM generates "gold" synthesis
-answers, (3) RAGAS validates faithfulness claim‑by‑claim against evidence, (4) self‑
-consistency (3× runs) filters stochastic variance, (5) human spot‑checks 5% of
-claims.  This produces quasi‑ground‑truth datasets without manual annotation at scale.
-
-**Scale note:** Benchmarking across 10s–100s of papers requires search capabilities
-(Phase 8) for auto‑discovery, and progress indicators for overnight/multi‑day runs.
+**Automated benchmark creation** (`generate_benchmark_dataset.py`): Script built
+but not yet executed.  Defers to Phase 8 when the corpus is larger.  Generating
+an 80‑100 sample dataset on the current 6‑paper corpus would have limited utility
+for future scale testing.
 
 ## 13. Deployment & Containerization
 ### 13.1 Development (Current)
