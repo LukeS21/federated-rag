@@ -83,7 +83,7 @@ class QueryDecomposer:
         cache_key_model = self.model
         cache = get_cache()
         cached = cache.get(system_prompt, user_prompt, model=cache_key_model)
-        if cached is not None:
+        if cached is not None and cached.strip():
             return json.loads(scrub_unicode(cached))
 
         messages = [

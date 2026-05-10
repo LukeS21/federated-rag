@@ -41,7 +41,12 @@ class LLMCache:
             if time.time() - data.get("ts", 0) > self._ttl:
                 p.unlink(missing_ok=True)
                 return None
-            return data.get("response")
+            response = data.get("response")
+            if response is not None and isinstance(response, str) and response.strip():
+                return response
+            # Empty response = cache miss (stale/corrupt)
+            p.unlink(missing_ok=True)
+            return None
         except (json.JSONDecodeError, OSError):
             return None
 

@@ -29,6 +29,10 @@ from typing import List, Tuple
 
 from src.security.privacy_model import NoOpPrivacyModel, PrivacyModel
 
+
+def _privacy_enabled() -> bool:
+    return os.getenv("GLINER_PRIVACY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+
 logger = logging.getLogger(__name__)
 
 # ── Built-in redaction patterns ───────────────────────────────────────────
@@ -171,8 +175,23 @@ _boundary_scrubber: BoundaryScrubber | None = None
 
 
 def default_boundary_scrubber() -> BoundaryScrubber:
-    """Return the global BoundaryScrubber singleton."""
+    """Return the global BoundaryScrubber singleton.
+
+    Uses GLiNER-PII for AI privacy detection when ``GLINER_PRIVACY_ENABLED=1``
+    (the default).  Set to ``0`` to disable (e.g. in CI without GPU).
+    """
     global _boundary_scrubber
     if _boundary_scrubber is None:
-        _boundary_scrubber = BoundaryScrubber()
+        privacy_model: PrivacyModel = NoOpPrivacyModel()
+        if _privacy_enabled():
+            try:
+                from src.security.gliner_privacy import create_gliner_privacy_model
+                privacy_model = create_gliner_privacy_model()
+                logger.info("BoundaryScrubber: GLiNER-PII privacy model enabled")
+            except Exception as e:
+                logger.warning(
+                    "BoundaryScrubber: GLiNER-PII unavailable — falling back to regex only. "
+                    "Error: %s", e,
+                )
+        _boundary_scrubber = BoundaryScrubber(privacy_model=privacy_model)
     return _boundary_scrubber

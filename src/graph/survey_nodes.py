@@ -56,6 +56,7 @@ CONDITIONAL_CRITIC_THRESHOLD = 0.50
 PER_THEME_DRAFTER_MODEL = os.getenv("OLLAMA_SMALL_MODEL", "gemma4:e4b")
 PER_THEME_MODEL_B = os.getenv("OLLAMA_ALT_MODEL", "")
 CROSS_THEME_DRAFTER_MODEL = os.getenv("OLLAMA_LARGE_MODEL", "deepseek-v4-pro")
+GAP_ANALYSIS_MODEL = os.getenv("GAP_ANALYSIS_MODEL", PER_THEME_DRAFTER_MODEL)
 
 # Tokenizer for accurate context-window estimation (lazy init)
 _tokenizer: tiktoken.Encoding | None = None
@@ -829,7 +830,9 @@ def survey_cross_theme_synthesize_node(state: AgentState) -> Dict[str, Any]:
         )
 
     def _run_gap_analysis() -> str:
-        gap_drafter = _get_drafter(num_ctx, client_kwargs, model=CROSS_THEME_DRAFTER_MODEL)
+        gap_drafter = _get_drafter(num_ctx, client_kwargs, model=GAP_ANALYSIS_MODEL)
+        logger.info("Gap analysis using model=%s (CROSS_THEME_DRAFTER_MODEL=%s)",
+                     GAP_ANALYSIS_MODEL, CROSS_THEME_DRAFTER_MODEL)
         return gap_drafter.draft(
             query=(
                 "Based on the per-theme syntheses below, identify specific research gaps, "
