@@ -316,13 +316,15 @@ def run_discussion_overlap_test() -> Tuple[bool, Dict[str, Any]]:
     discussion_texts = [ch["text"] for ch in discussion_chunks]
     bm25.add_documents(discussion_texts)
 
-    from src.anchoring.evidence_check import _split_chunks_into_sentences
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
 
-    disc_sentences = _split_chunks_into_sentences(discussion_chunks)
+    # Use chunk-level TF-IDF (same granularity as the benchmark).
+    # Sentence-level splitting creates hundreds of tiny units that inflate
+    # similarity scores — a gap can match a Discussion at the sentence level
+    # without actually overlapping the Discussion's substantive content.
     vectorizer = TfidfVectorizer(stop_words="english", lowercase=True)
-    disc_matrix = vectorizer.fit_transform(disc_sentences)
+    disc_matrix = vectorizer.fit_transform(discussion_texts)
 
     gap_results = []
     high_overlap = 0
@@ -333,7 +335,7 @@ def run_discussion_overlap_test() -> Tuple[bool, Dict[str, Any]]:
         sims = cosine_similarity(gap_vec, disc_matrix)
         best_idx = sims[0].argmax()
         best_sim = float(sims[0, best_idx])
-        best_sentence = disc_sentences[best_idx][:200]
+        best_text = discussion_texts[best_idx][:200]
 
         is_novel = best_sim < 0.40  # below 0.40 = genuinely novel
 
@@ -341,7 +343,7 @@ def run_discussion_overlap_test() -> Tuple[bool, Dict[str, Any]]:
             "gap_question": gap_q[:150],
             "best_discussion_similarity": round(best_sim, 4),
             "is_novel": is_novel,
-            "best_discussion_match": best_sentence[:150],
+            "best_discussion_match": best_text[:150],
         })
 
         if not is_novel:
