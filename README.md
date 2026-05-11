@@ -22,6 +22,23 @@ for Biomedical Engineering Research**
 
 ---
 
+### 📖 Knowledge Graph Documentation (Obsidian)
+
+The project has an [Obsidian](https://obsidian.md) knowledge graph at `docs/kg/` —
+99 interconnected Markdown notes covering every architectural component, decision,
+gap, benchmark, model, and phase.  Open with Obsidian (free) for **graph view**,
+**backlinks**, color‑coded tag groups, and auto‑generated Dataview dashboards.
+
+**Quick start:** `Obsidian → Open folder as vault → docs/kg/`  
+
+See the [full setup guide](#obsidian-setup) at the end of this README for plugin
+recommendations (Dataview + Templater) and navigation tips.  opencode can read
+and write notes in this vault directly — no API integration needed.
+
+---
+
+---
+
 ## Table of Contents
 
 1. [Vision & Design Philosophy](#1-vision--design-philosophy)
@@ -1591,4 +1608,46 @@ federated_rag/
 ├── .gitignore
 ├── pyproject.toml
 └── README.md
+```
+
+## Obsidian Setup
+
+The project includes a knowledge graph at `docs/kg/` — 99 interconnected Markdown
+notes designed for [Obsidian](https://obsidian.md).  No API keys, no external
+services, just `.md` files opencode can read and write directly.
+
+### Opening the vault
+
+1. Download [Obsidian](https://obsidian.md) (free, macOS/Windows/Linux)
+2. Open Obsidian → "Open folder as vault" → select `docs/kg/`
+3. Click "Trust author and enable plugins"
+
+### Recommended plugins
+
+| Plugin | Why | Install |
+|--------|-----|---------|
+| **Dataview** | Auto-generates status tables from YAML frontmatter. Open `gaps-overview.md` or `decisions-dashboard.md` to see live queries of all open gaps, decisions by phase, etc. | Settings → Community plugins → Browse → "Dataview" → Install → Enable |
+| **Templater** | Pre-filled YAML structure for new notes. Hit a hotkey, pick "New Decision" → consistent frontmatter every time. | Settings → Community plugins → Browse → "Templater" → Install → Enable |
+
+Templater configuration: Settings → Templater → Template folder location: `docs/kg/.obsidian/templates`
+
+### Navigation
+
+- **Graph view** (left sidebar) → color-coded by tag: red = gaps, blue = decisions, green = architecture, orange = vision, purple = synthesis
+- **`Cmd+Click`** any `[[wikilink]]` → jump to that note
+- **Backlinks panel** (right sidebar) → every note referencing the current one
+- **Dashboard** → open `dashboard.md` for the home note with pipeline diagram and quick links
+- **Dataview dashboards** → `gaps-overview.md`, `decisions-dashboard.md`, `phase-dashboard.md` for auto-generated tables
+
+### Keeping it in sync
+
+opencode reads/writes `docs/kg/` files directly.  After each session:
+
+```
+Update the knowledge graph with what we changed
+```
+
+This creates, updates, or links notes as needed.  The graph stays current without
+manual maintenance.
+
 ```
