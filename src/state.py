@@ -37,6 +37,15 @@ class AgentState(TypedDict):
     cross_theme_synthesis: str
     gap_analysis: str
 
+    # Phase 7b: Sectioned Survey Mode fields
+    section_plan: NotRequired[List[Dict[str, str]]]
+    current_section_index: NotRequired[int]
+    section_drafts: NotRequired[Dict[str, str]]
+    section_feedback: NotRequired[str]
+    section_context: NotRequired[Dict[str, List[Dict]]]
+    claim_ledger_json: NotRequired[str]
+    figure_context: NotRequired[List[Dict]]
+
     # Runtime configuration (optional)
     num_ctx: NotRequired[int]
     client_kwargs: NotRequired[Dict[str, Any]]

@@ -1,0 +1,511 @@
+{
+  "queries": [
+    "titanium implant macrophage polarization T cell immune response",
+    "CD4 CD8 T cells bone healing osseointegration",
+    "cytokine profile titanium surface modification in vivo",
+    "mesenchymal stem cell recruitment biomaterial implant",
+    "peri-implant inflammation immunomodulation surface roughness"
+  ],
+  "provider": "semantic_scholar",
+  "timestamp": 1778456811.050057,
+  "local_papers_count": 6,
+  "total_found": 15,
+  "novel_count": 13,
+  "known_count": 2,
+  "novelty_rate": 0.867,
+  "novel_papers": [
+    {
+      "paper_id": "c77bee326352a3978b84b76767b1f75a8f06dcee",
+      "title": "The Effects of Titanium Surfaces Modified with an Antimicrobial Peptide GL13K by Silanization on Polarization, Anti-Inflammatory, and Proinflammatory Properties of Macrophages",
+      "abstract": "The polarization of macrophages and its anti-inflammatory and proinflammatory properties play a significant role in host response after implant placement to determine the outcome of osseointegration and long-term survival. In the previous study, we immobilized an antimicrobial peptide, GL13K, onto titanium surfaces to provide immune regulation property. In the herein presented study, we aimed at investigating whether GL13K immobilized titanium surface could improve osteogenesis and reduce the inflammatory reaction around the biomaterials by altering macrophage response. We evaluated the cell proliferation of the different phenotypes of macrophages seeded in GL13K-coated titanium surface, which indicated an inhibition of M1 macrophages and a good cytocompatibility to M2 macrophages. Then, we measured the inflammatory and anti-inflammatory activity of the M1 and M2 macrophages seeded on the GL13K-coated titanium surfaces. The results of the enzyme-linked immunosorbent assay and quantitative reverse transcription-polymerase chain reaction showed that the group with the GL13K modified surface had a downregulation in the expression level of the tumor necrosis factor-α and interleukin-1β in M1 macrophages and an upregulation of IL-10 and transforming growth factor-β3 (TGF-β3) levels in M2 macrophages. This study demonstrated that the GL13K modified titanium surfaces can regulate macrophages' polarization and the expression of inflammatory and anti-inflammatory effects, reducing the effects of the inflammatory process, which may promote the process of bone regeneration and osseointegration.",
+      "tldr": "It is demonstrated that the GL13K modified titanium surfaces can regulate macrophages' polarization and the expression of inflammatory and anti-inflammatory effects, reducing the effects of the inflammatory process, which may promote the process of bone regeneration and osseointegration.",
+      "year": 2020,
+      "url": "https://www.semanticscholar.org/paper/c77bee326352a3978b84b76767b1f75a8f06dcee",
+      "doi": "10.1155/2020/2327034",
+      "pmid": "32775410",
+      "authors": [
+        "Xuxi Chen",
+        "Lin Zhou",
+        "Dong Wu",
+        "Wenxiu Huang",
+        "Yanjun Lin",
+        "Bowei Zhou",
+        "Jiang Chen"
+      ],
+      "journal": "BioMed Research International",
+      "citation_count": 23,
+      "open_access_pdf": "https://downloads.hindawi.com/journals/bmri/2020/2327034.pdf",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "titanium implant macrophage polarization T cell immune response",
+      "novel": true
+    },
+    {
+      "paper_id": "5395d07cdaad4bbf389dcbad13030317d4ae37b6",
+      "title": "Hydrophilic titanium surfaces reduce neutrophil inflammatory response and NETosis.",
+      "abstract": "Biomaterial implantation triggers an immune response initially predominated by neutrophils, which activate an inflammatory cascade by producing cytokines, enzymes, immune cell recruitment chemokines, and DNA fiber networks called neutrophil extracellular traps (NETs). While the role of neutrophils has been studied extensively in infection, little is known of their role in the response to biomaterials, in this case titanium (Ti) implants. Furthermore, while implant surface modifications have been shown to attenuate pro-inflammatory polarization in other immune cells, their effects on neutrophil behavior is unknown. The aim of this study was to characterize the neutrophil response to Ti surface topography and hydrophilicity and understand how the products of biomaterial-induced neutrophil activation alters macrophage polarization. Murine neutrophils were isolated by density gradient centrifugation and plated on smooth, rough, and rough hydrophilic (rough-hydro) Ti surfaces. Neutrophils on rough-hydro Ti decreased pro-inflammatory cytokine and enzyme production as well as decreased NET formation compared to neutrophils on smooth and rough Ti. Conditioned media (CM) from neutrophils on smooth Ti enhanced pro-inflammatory macrophage polarization compared to CM from neutrophils on rough or rough-hydro Ti; pretreatment of neutrophils with a pharmacological NETosis inhibitor impaired this macrophage stimulation. Finally, co-culture of neutrophils and macrophages on Ti surfaces induced pro-inflammatory macrophage polarization compared to macrophages alone on surfaces, but this effect was ablated when neutrophils were pretreated with the NETosis inhibitor. These findings demonstrate that neutrophils are sensitive to changes in biomaterial surface properties and exhibit differential activation in response to Ti surface cues. Additionally, inhibition of NETosis enhanced anti-inflammatory macrophage polarization, suggesting NETosis as a possible therapeutic target for enhancing implant integration.",
+      "tldr": "It is demonstrated that neutrophils are sensitive to changes in biomaterial surface properties and exhibit differential activation in response to Ti surface cues, suggesting NETosis as a possible therapeutic target for enhancing implant integration.",
+      "year": 2020,
+      "url": "https://www.semanticscholar.org/paper/5395d07cdaad4bbf389dcbad13030317d4ae37b6",
+      "doi": "10.1039/c9bm01474h",
+      "pmid": "32163073",
+      "authors": [
+        "Jefferson O. Abaricia",
+        "Arth H. Shah",
+        "Ryan M Musselman",
+        "R. Olivares-Navarrete"
+      ],
+      "journal": "Biomaterials science",
+      "citation_count": 81,
+      "open_access_pdf": "https://pubs.rsc.org/en/content/articlepdf/2020/bm/c9bm01474h",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "titanium implant macrophage polarization T cell immune response",
+      "novel": true
+    },
+    {
+      "paper_id": "855a0ef615ffccb7a7b10a5d5f9d37c902ff7d97",
+      "title": "Inflammatory or Reparative? Tuning Macrophage Polarization Using Anodized Anisotropic Nanoporous Titanium Implant Surfaces",
+      "abstract": "Modulating macrophage phenotype based on implant surface characteristics, including topography and chemistry, has been employed to enhance osseointegration and long‐term functional outcomes for titanium (Ti)‐based implants. An excessive and/or prolonged M1 macrophage response can lead to damaging immune‐inflammatory reactions, negatively influencing the fate of the implant, and hence, modulating these responses via nanoscale implant surface modification is an emerging paradigm. Herein, an anodized titanium implant surface based on single‐step electrochemical anodization, with preserved underlying microfeatures and superimposed nanopores (50 and 70 nm), compared with irregular rough and microrough (machined‐like) surfaces, is investigated for its effect on the functions of primary macrophages in vitro. Significantly reduced macrophage proliferation and increased tissue‐reparative M2 phenotype polarization are confirmed for the nanopores, which are more pronounced for 70 nm diameter. Moreover, osteoclastogenesis is reduced while osteogenic differentiation of osteoblasts is enhanced for the nanopores (higher for 70 nm pores). Advanced nanoengineered Ti implants can enhance titanium implant tissue integration by modulating the inflammatory response at the implant–cell interface.",
+      "tldr": "Significantly reduced macrophage proliferation and increased tissue‐reparative M2 phenotype polarization are confirmed for the nanopores, which are more pronounced for 70 nm diameter.",
+      "year": 2024,
+      "url": "https://www.semanticscholar.org/paper/855a0ef615ffccb7a7b10a5d5f9d37c902ff7d97",
+      "doi": "10.1002/smsc.202400211",
+      "pmid": "40212258",
+      "authors": [
+        "Ho-Jin Moon",
+        "K. Gulati",
+        "Tao Li",
+        "C. Moran",
+        "S. Ivanovski"
+      ],
+      "journal": "Small Science",
+      "citation_count": 8,
+      "open_access_pdf": "https://doi.org/10.1002/smsc.202400211",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "titanium implant macrophage polarization T cell immune response",
+      "novel": true
+    },
+    {
+      "paper_id": "447267d1529d8660b6ea86fe0fd5a0773bb3d232",
+      "title": "Titanium Particles Modulate Lymphocyte and Macrophage Polarization in Peri-Implant Gingival Tissues",
+      "abstract": "Titanium dental implants are one of the modalities to replace missing teeth. The release of titanium particles from the implant’s surface may modulate the immune cells, resulting in implant failure. However, little is known about the immune microenvironment that plays a role in peri-implant inflammation as a consequence of titanium particles. In this study, the peri-implant gingival tissues were collected from patients with failed implants, successful implants and no implants, and then a whole transcriptome analysis was performed. The gene set enrichment analysis confirmed that macrophage M1/M2 polarization and lymphocyte proliferation were differentially expressed between the study groups. The functional clustering and pathway analysis of the differentially expressed genes between the failed implants and successful implants versus no implants revealed that the immune response pathways were the most common in both comparisons, implying the critical role of infiltrating immune cells in the peri-implant tissues. The H&E and IHC staining confirmed the presence of titanium particles and immune cells in the tissue samples, with an increase in the infiltration of lymphocytes and macrophages in the failed implant samples. The in vitro validation showed a significant increase in the level of IL-1β, IL-8 and IL-18 expression by macrophages. Our findings showed evidence that titanium particles modulate lymphocyte and macrophage polarization in peri-implant gingival tissues, which can help in the understanding of the imbalance in osteoblast–osteoclast activity and failure of dental implant osseointegration.",
+      "tldr": "Evidence that titanium particles modulate lymphocyte and macrophage polarization in peri-implant gingival tissues can help in the understanding of the imbalance in osteoblast–osteoclast activity and failure of dental implant osseointegration is shown.",
+      "year": 2023,
+      "url": "https://www.semanticscholar.org/paper/447267d1529d8660b6ea86fe0fd5a0773bb3d232",
+      "doi": "10.3390/ijms241411644",
+      "pmid": "37511404",
+      "authors": [
+        "Waad Kheder",
+        "Amal Bouzid",
+        "Thenmozhi Venkatachalam",
+        "I. Talaat",
+        "N. Elemam",
+        "T. K. Raju",
+        "S. Sheela",
+        "M. Jayakumar",
+        "A. Maghazachi",
+        "A. R. Samsudin"
+      ],
+      "journal": "International Journal of Molecular Sciences",
+      "citation_count": 35,
+      "open_access_pdf": "https://www.mdpi.com/1422-0067/24/14/11644/pdf?version=1689760338",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "titanium implant macrophage polarization T cell immune response",
+      "novel": true
+    },
+    {
+      "paper_id": "4e085125917f9980700b728af7ec75a5433c2087",
+      "title": "Cell Supported Single Membrane Technique for the Treatment of Large Bone Defects: Depletion of CD8+ Cells Enhances Bone Healing Mechanisms During the Early Bone Healing Phase",
+      "abstract": "Introduction: The one-step membrane technique, derived from the Masquelet induced membrane technique, uses human acellular dermal matrix (hADM) that is wrapped around the bone defect to bypass membrane induction, reducing treatment time. Pre-colonization of hADM with bone marrow cells (BMC), particularly after CD8+ T cell depletion, enhances bone regeneration. This study examined how CD8+ T cell depletion alters the proteins accumulated in the hADM during early healing. Materials and Methods: Eighteen male Sprague-Dawley rats received 5 mm femoral defects filled with autologous bone chips and wrapped with hADM, hADM + BMC, or hADM + BMC-CD8. hADMs were recovered on days 3 and 7 (n = 3/group/timepoint), incubated ex vivo, and conditioned medium analyzed with a proteome profiler detecting 79 proteins. Results: The protein content of the hADM evolved dynamically. At day three, 41 proteins were detected, rising to 47 by day seven, with RGM-A, osteoprotegerin, LIF, IL-6, CCL20, and CCL17 emerging late, consistent with increased regenerative activity. CD8+ T cell depletion suppressed early inflammatory and pro-osteogenic mediators (e.g., CCL2, IGF-I, IL-1RA) while upregulating LIX. By day seven, regenerative mediators (CCL20, GDF-15, RGM-A) were enriched, whereas inflammatory factors (CCL21, IL-1a, WISP-1) declined. MMP-9, Galectin-1, and GDF-15 increased exclusively in the CD8-depleted group. Conclusions: The hADM protein content transitions from pro-inflammatory to pro-regenerative within one week after surgery. CD8+ T cell depletion accelerates this shift, highlighting hADM as a dynamic scaffold that contributes to the immune–regenerative crosstalk in bone healing.",
+      "tldr": "The hADM protein content transitions from pro-inflammatory to pro-regenerative within one week after surgery and CD8+ T cell depletion accelerates this shift, highlighting hADM as a dynamic scaffold that contributes to the immune–regenerative crosstalk in bone healing.",
+      "year": 2026,
+      "url": "https://www.semanticscholar.org/paper/4e085125917f9980700b728af7ec75a5433c2087",
+      "doi": "10.3390/cells15030215",
+      "pmid": "41677582",
+      "authors": [
+        "Marissa Penna-Martinez",
+        "L. Klausner",
+        "A. Kammerer",
+        "Minhong Wang",
+        "A. Schaible",
+        "R. Verboket",
+        "Christoph Nau",
+        "Ingo Marzi",
+        "Dirk Henrich"
+      ],
+      "journal": "Cells",
+      "citation_count": 0,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "CD4 CD8 T cells bone healing osseointegration",
+      "novel": true
+    },
+    {
+      "paper_id": "9448f1b4a50bbf61168e715850a42153148103e8",
+      "title": "Prognostic implications of a CD8+ TEMRA to CD4+Treg imbalance in mandibular fracture healing: a prospective analysis of immune profiles",
+      "abstract": "Introduction Open reduction and fixation are the standard of care for treating mandibular fractures and usually lead to successful healing. However, complications such as delayed healing, non-union, and infection can compromise patient outcomes and increase healthcare costs. The initial inflammatory response, particularly the response involving specific CD8+ T cell subpopulations, is thought to play a critical role in healing long bone fractures. In this study, we investigated the role of these immune cell profiles in patients with impaired healing of mandibular fractures. Materials and methods In this prospective study, we included patients with mandibular fractures surgically treated at Charité – Universitätsmedizin Berlin, Germany, between September 2020 and December 2022. We used follow-up imaging and clinical assessment to evaluate bone healing. In addition, we analyzed immune cell profiles using flow cytometry and quantified cytokine levels using electrochemiluminescence-based multiplex immunoassays in preoperative blood samples. Results Out of the 55 patients enrolled, 38 met the inclusion criteria (30 men and 8 women; mean age 32.18 years). Radiographic evaluation revealed 31 cases of normal healing and 7 cases of incomplete consolidation, including 1 case of non-union. Patients with impaired healing exhibited increased levels of terminally differentiated effector memory CD8+ T cells (TEMRA) and a higher TEMRA to regulatory T cell (Treg) ratio, compared with those with normal healing. Conclusions Our analysis of mandibular fracture cases confirms our initial hypothesis derived from long bone fracture healing: monitoring the TEMRA to Treg ratio in preoperative blood can be an early indicator of patients at risk of impaired bone healing. Radiologic follow-up enabled us to detect healing complications that might not be detected by clinical assessment only. This study highlights the potential of individual immune profiles to predict successful healing and may form the basis for future strategies to manage healing complications.",
+      "tldr": "Analysis of mandibular fracture cases confirms the initial hypothesis derived from long bone fracture healing: monitoring the TEMRA to Treg ratio in preoperative blood can be an early indicator of patients at risk of impaired bone healing.",
+      "year": 2024,
+      "url": "https://www.semanticscholar.org/paper/9448f1b4a50bbf61168e715850a42153148103e8",
+      "doi": "10.3389/fimmu.2024.1476009",
+      "pmid": "39507538",
+      "authors": [
+        "J. Voss",
+        "Fabio Pivetta",
+        "Aboelyazid Elkilany",
+        "K. Schmidt-Bleek",
+        "Georg N. Duda",
+        "Kento Odaka",
+        "I. M. Dimitriou",
+        "M. Ort",
+        "Mathias Streitz",
+        "M. Heiland"
+      ],
+      "journal": "Frontiers in Immunology",
+      "citation_count": 6,
+      "open_access_pdf": "https://doi.org/10.3389/fimmu.2024.1476009",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "CD4 CD8 T cells bone healing osseointegration",
+      "novel": true
+    },
+    {
+      "paper_id": "238a4f5a47bbd147a152dd9d006e65ed5876caf0",
+      "title": "Preferential expansion of Ly-1 B and CD4- CD8- T cells in the polyclonal lymphocyte responses to murine T. cruzi infection.",
+      "abstract": null,
+      "tldr": "The finding of significant increases in the splenic representation of minor populations, Ly-1 + B cells and CD4-CD8- T cells might play an important role in the host response, as shown by T. cruzi infection of hosts that had been lethally irradiated and reconstituted with autologous bone marrow.",
+      "year": 1989,
+      "url": "https://www.semanticscholar.org/paper/238a4f5a47bbd147a152dd9d006e65ed5876caf0",
+      "doi": "10.1093/INTIMM/1.2.176",
+      "pmid": "2518657",
+      "authors": [
+        "P. Minoprio",
+        "A. Bandeira",
+        "P. Pereira",
+        "T. Santos",
+        "A. Coutinho"
+      ],
+      "journal": "International immunology",
+      "citation_count": 76,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "CD4 CD8 T cells bone healing osseointegration",
+      "novel": true
+    },
+    {
+      "paper_id": "7f4bc746b47e378242d6cddd708b524d2f9e3f14",
+      "title": "TCR αβ+ CD4− CD8− T cells differentiate extrathymically in an lck‐independent manner and participate in early response against Listeria monocytogenes infection through interferon‐γ production",
+      "abstract": null,
+      "tldr": "The results demonstrated that the TCRαβ+ DN T’cells can develop extrathymically in a p56lck‐independent manner and participate in early protection against bacterial infection through activation and accumulation of macrophages.",
+      "year": 1997,
+      "url": "https://www.semanticscholar.org/paper/7f4bc746b47e378242d6cddd708b524d2f9e3f14",
+      "doi": "10.1046/j.1365-2567.1997.00303.x",
+      "pmid": "",
+      "authors": [
+        "T. Kadena",
+        "Goro Matsuzaki",
+        "S. Fujise",
+        "K. Kishihara",
+        "Hiroaki Takimoto",
+        "M. Sasaki",
+        "M. Beppu",
+        "Seiji Nakamura",
+        "K. Nomoto"
+      ],
+      "journal": "Immunology",
+      "citation_count": 53,
+      "open_access_pdf": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1363869",
+      "pub_types": null,
+      "query": "CD4 CD8 T cells bone healing osseointegration",
+      "novel": true
+    },
+    {
+      "paper_id": "788b373744050f7422a73fb59319fdd0e02375d0",
+      "title": "The influence of ZnO content in YSZ-ZnO composite ceramics on bacterial growth and cell behaviour for the prevention of peri-implant inflammation.",
+      "abstract": "OBJECTIVES\nPeri-implantitis is a significant complication in dental implant therapy and arises primarily from bacterial colonization. Current preventive strategies show limited long-term efficacy. This study evaluated antibacterial properties and biocompatibility of yttria-stabilized zirconia-zinc oxide (YSZ-ZnO) composite ceramics as implant abutment material for peri-implantitis prevention.\n\n\nMETHODS\nNine ZnO/YSZ ratios (10-90-90-10 at%), and controls (100 % ZnO, 100 % YSZ, and titanium) were synthesized. Analyses included microstructure and composition by scanning electron microscopy and energy dispersive X-ray spectroscopy, and surface roughness with an Alicona Infinite Focus Variation microscope. Antibacterial properties were assessed against Porphyromonas gingivalis and cell viability of immortalized human gingival fibroblasts (iHGF) was evaluated using the CCK8 assay. Statistical analysis was performed using one-way ANOVA with post-hoc tests (P = 0.05).\n\n\nRESULTS\nSamples with ZnO > 40 % showed larger inhibition zones than Ti and YSZ (P < 0.05). No CFUs were observed with ≥ 60 % ZnO, while controls showed bacterial growth. Cell viability assays revealed no significant differences between YSZ and 60 % ZnO (P > 0.05), but higher ZnO concentrations reduced viability. Mean roughness (Ra) values ranged from 0.13 μm (66.6 % ZnO) to 0.58 μm (100 % ZnO).\n\n\nSIGNIFICANCE\nYSZ-ZnO composites could reduce peri-implantitis by inhibiting bacterial colonization. The 60 % ZnO composition exhibited strong antibacterial properties and biocompatibility, suggesting potential solution for improving implant success rates, especially in high-risk patients. Further research is needed to explore long-term stability and interactions with other bacteria.",
+      "tldr": "YSZ-ZnO composites could reduce peri-implantitis by inhibiting bacterial colonization by exhibiting strong antibacterial properties and biocompatibility, suggesting potential solution for improving implant success rates, especially in high-risk patients.",
+      "year": 2025,
+      "url": "https://www.semanticscholar.org/paper/788b373744050f7422a73fb59319fdd0e02375d0",
+      "doi": "10.1016/j.dental.2025.03.008",
+      "pmid": "40140339",
+      "authors": [
+        "M. Jennes",
+        "Sven Kriegseis",
+        "L. Aretz",
+        "Antonia Stadie",
+        "Nora Gaertner",
+        "L. Mewes",
+        "F. Beuer",
+        "Mehdi Behbahani",
+        "Karolina Schickle",
+        "Franziska Schmidt"
+      ],
+      "journal": "Dental materials : official publication of the Academy of Dental Materials",
+      "citation_count": 1,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "peri-implant inflammation immunomodulation surface roughness",
+      "novel": true
+    },
+    {
+      "paper_id": "72bae39281bc4ee56c1dcc942fea09a8dbe1cbe3",
+      "title": "The effect of surface roughness on the Er:YAG laser-induced photoacoustic removal of bacteria in zero-gap periodontal/peri-implant pocket model",
+      "abstract": "Effective biofilm removal from periodontal and peri-implant pockets remains a challenge due to constrained geometry and limited access. This study investigates a novel phenomenon of distant-field cleaning utilizing Er:YAG laser treatment, where removal of bacteria occurs in areas without previously observed cavitation under high-speed imaging. To understand this effect, we developed a transparent zero-gap model simulating a tooth or implant and surrounding soft tissue. We systematically examined the impact of laser fiber insertion depth, cavitation bubble dynamics, the stiffness and roughness of the material, and laser parameters on the cleaning efficiency. Our findings reveal that the removal of bacteria indeed correlates strongly with cavitation occurrence. Deeper optical fiber insertion into the pocket model only enhanced cleaning efficiency by moving the fluid dynamics and enabling deeper water penetration. Surprisingly, high-speed imaging showed no cavitation in distant regions, raising questions about the mechanisms enabling such cleaning. Further investigation uncovered that surface roughness played a critical role in facilitating this distant-field effect. The smooth, transparent surfaces used in imaging experiments suppressed fluid dynamics, while textured surfaces created by 3D-printed molds and bacterial monolayer allowed deeper water penetration and pressure wave propagation. These surface irregularities enabled localized cavitation events and enhanced bacterial disruption, even in regions beyond the laser fiber’s immediate influence. This study emphasizes the significance of surface roughness in test models, highlighting the need for models to closely mimic the conditions of real clinical scenarios for accurate optimization of Er:YAG laser-induced photoacoustic removal of bacteria.",
+      "tldr": "Investigating a novel phenomenon of distant-field cleaning utilizing Er:YAG laser treatment, where removal of bacteria occurs in areas without previously observed cavitation under high-speed imaging, reveals that surface roughness played a critical role in facilitating this distant-field effect.",
+      "year": 2025,
+      "url": "https://www.semanticscholar.org/paper/72bae39281bc4ee56c1dcc942fea09a8dbe1cbe3",
+      "doi": "10.1016/j.ultsonch.2025.107458",
+      "pmid": "40645117",
+      "authors": [
+        "Dominik Šavli",
+        "Marko Volk",
+        "Katja Molan",
+        "Saša Terlep",
+        "Špela Levičnik-Höfferle",
+        "A. Babnik",
+        "Mojca Trost",
+        "Boris Gašpirc",
+        "M. Lukač",
+        "David Stopar"
+      ],
+      "journal": "Ultrasonics Sonochemistry",
+      "citation_count": 1,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "peri-implant inflammation immunomodulation surface roughness",
+      "novel": true
+    },
+    {
+      "paper_id": "9cc23c619e130b804551b972159dc405d7b94f30",
+      "title": "Numerical Analysis of Laser Thermal Ablation for Gingival and Peri‐Implant Inflammation Using Various Laser Irradiation Angles",
+      "abstract": "Because of tooth decay and loss, many people use dental implants as tooth replacements. However, careless management can trigger an inflammatory reaction to an implant. Recently, various studies have been conducted on the sterilization and purification of implant surfaces using diodes, Er:YAG lasers, and CO2 lasers. In this study, the therapeutic effect of photothermal therapy, a laser treatment method for peri‐implantitis, was analyzed through numerical analysis based on heat‐transfer theory. The numerical simulation conditions included laser power values in the range of 0.0–4.0 W, laser irradiation angles ranging from 15° to 40°, and laser irradiation durations of 100–500 s. In addition, the Arrhenius damage integral was used to quantitatively verify the therapeutic effects of the photothermal therapy. An analysis of the results confirmed that the Arrhenius thermal damage ratio and normal tissue Arrhenius thermal damage ratio decreased as the laser irradiation angle increased. However, for the same normal tissue Arrhenius thermal damage ratio, the effective laser intensity increased with the laser angle. Finally, the effectiveness of photothermal therapy for peri‐implantitis under various conditions was confirmed. These results are expected to optimize the clinical treatment of peri‐implantitis in the future.",
+      "tldr": "The therapeutic effect of photothermal therapy, a laser treatment method for peri‐implantitis, was analyzed through numerical analysis based on heat‐transfer theory and confirmed that the Arrhenius thermal damage ratio and normal tissue Arrhenius thermal damage ratio decreased as the laser irradiation angle increased.",
+      "year": 2025,
+      "url": "https://www.semanticscholar.org/paper/9cc23c619e130b804551b972159dc405d7b94f30",
+      "doi": "10.1002/cnm.70080",
+      "pmid": "40938571",
+      "authors": [
+        "Donghyuk Kim",
+        "Hyunju Kim",
+        "Hee-Sun Kim"
+      ],
+      "journal": "International Journal for Numerical Methods in Biomedical Engineering",
+      "citation_count": 0,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "peri-implant inflammation immunomodulation surface roughness",
+      "novel": true
+    },
+    {
+      "paper_id": "6b995d69a0a60945e70c841cacf6b853c8a5e7a8",
+      "title": "Effects of Mechanical Methods Used in Peri-implantitis Treatment on Implant Surface Decontamination and Roughness.",
+      "abstract": "Various mechanical methods have been proposed for decontaminating dental implant surfaces with varying success. This in vitro study evaluated the decontamination efficiency of an air abrasion (AA) system with erythritol powder, a polyether-ether-ketone (PEEK) ultrasonic tip, and titanium curettes (TIT) and their effects on implant surface topography using scanning electron microscopy (SEM). A total of 60 implants were stained with permanent red ink and placed in 3D-printed Class 1A and Class 1B peri-implantitis defects, forming six groups (n=10 per group) based on defect type and treatment protocol. Additionally, one positive and one negative control implant was used. Erythritol powder, PEEK ultrasonic tips, and titanium curettes were applied for 2 min in Class 1A defects and 3 minutes in Class 1B defects. Residual red ink areas were quantified with digital software, and implant surface changes were analyzed using SEM and EDS. None of the methods achieved complete decontamination. However, erythritol powder was significantly the most effective, leaving a residual ink rate of 24% ± 6% (p < 0.001). PEEK ultrasonic tips resulted in 41% ± 4% residual ink, while titanium curettes left 55% ± 3%. Significant differences were observed among all methods. No significant difference in decontamination efficacy was found between Class 1A and Class 1B defects. SEM analysis showed minimal surface damage with erythritol powder and PEEK tips, whereas titanium curettes caused moderate to severe damage. Based on both decontamination efficiency and surface preservation, erythritol powder and PEEK tips are safe and effective options for peri-implantitis treatment, while titanium curettes are less effective and cause considerable surface damage. These findings may assist clinicians in peri-implantitis treatment planning.",
+      "tldr": "Based on both decontamination efficiency and surface preservation, erythritol powder and PEEK tips are safe and effective options for peri-implantitis treatment, while titanium curettes are less effective and cause considerable surface damage.",
+      "year": 2025,
+      "url": "https://www.semanticscholar.org/paper/6b995d69a0a60945e70c841cacf6b853c8a5e7a8",
+      "doi": "10.3791/67778",
+      "pmid": "40163409",
+      "authors": [
+        "Ipek Ozgu",
+        "Kemal Ustun"
+      ],
+      "journal": "Journal of visualized experiments : JoVE",
+      "citation_count": 1,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "peri-implant inflammation immunomodulation surface roughness",
+      "novel": true
+    },
+    {
+      "paper_id": "9c33004806eec70b7bfdaa20f5b824748ce706f1",
+      "title": "Multiscale Hierarchical Micro- and Nano-Surface Induced by High-Repetition-Rate Femtosecond Laser Promote Peri-Implant Osseointegration.",
+      "abstract": "Micro- and nanomorphological modification and roughening of titanium implant surfaces can enhance osseointegration; however, the optimal morphology remains unclear. Laser processing of implant surfaces has demonstrated significant potential due to its precision, controllability, and environmental friendliness. Femtosecond lasers, through precise optimization of processing parameters, can modify the surface of any solid material to generate micro- and nanomorphologies of varying scales and roughness. Inspired by the multiscale micro- and nanostructures of natural bone tissue, this study employed a high-repetition-rate femtosecond laser to fabricate three distinct micro- and nanomorphologies on titanium implant surfaces, characterized by low (LTi), medium (MTi), and high (HTi) roughness, exhibiting multiscale coexistence. Comprehensive characterization of the modified surfaces included analysis of morphology, roughness, wettability, and elemental composition. Furthermore, in vitro and in vivo experiments were conducted to evaluate osteogenic differentiation and osseointegration capabilities. Results revealed that the HTi surface, exhibiting high roughness, presents a multiscale hierarchical micro- and nanostructure composed of micrometer-sized spheres, submicrometer-sized corrugations, and nanometer-sized particles. In vitro studies demonstrated that the HTi surface promoted earlier adhesion, spreading, and enhanced osteogenic differentiation of osteoblasts, while in vivo studies indicated improved bone formation and osseointegration. In conclusion, multiscale hierarchical micro- and nanosurfaces with high roughness generated by high-repetition-rate femtosecond laser processing hold considerable promise for titanium implant applications.",
+      "tldr": "Three distinct micro- and nanomorphologies on titanium implant surfaces, characterized by low (LTi), medium (MTi), and high (HTi) roughness, exhibiting multiscale coexistence are fabricated, holding considerable promise for titanium implant applications.",
+      "year": 2025,
+      "url": "https://www.semanticscholar.org/paper/9c33004806eec70b7bfdaa20f5b824748ce706f1",
+      "doi": "10.1021/acsabm.4c01759",
+      "pmid": "39836453",
+      "authors": [
+        "Weiwei Guo",
+        "Xu He",
+        "Jianye Song",
+        "Z. Cao",
+        "Wenhui Hu",
+        "Ying-hui Tan",
+        "Shiwu Dong",
+        "Yuncan Ma",
+        "Kun Wang"
+      ],
+      "journal": "ACS applied bio materials",
+      "citation_count": 6,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "peri-implant inflammation immunomodulation surface roughness",
+      "novel": true
+    }
+  ],
+  "known_papers": [
+    {
+      "paper_id": "65b73e751f985e33366869502a7b3cc0380731d0",
+      "title": "CD4+ and CD8+ T Cells Reduce Inflammation and Promote Bone Healing in Response to Titanium Implants.",
+      "abstract": "T cells are adaptive immune cells essential in pathogenic response, cancer, and autoimmune disorders. During the integration of biomaterials with host tissue, T cells modify the local inflammatory environment by releasing cytokines that promote inflammatory resolution following implantation. T cells are vital for the modulation of innate immune cells, recruitment and proliferation of mesenchymal stem cells (MSCs), and formation of functional tissue around the biomaterial implant. We have demonstrated that deficiency of αβ T cells promotes macrophage polarization towards a pro-inflammatory phenotype and attenuates MSC recruitment and proliferation in vitro and in vivo. The goal of this study was to understand how CD4+ and CD8+ T cells, subsets of the αβ T cell family, impact the inflammatory response to titanium (Ti) biomaterials. Deficiency of either CD4+ or CD8+ T cells increased the proportion of pro-inflammatory macrophages, lowered anti-inflammatory macrophages, and diminished MSC recruitment in vitro and in vivo. In addition, new bone formation at the implantation site was significantly reduced in T cell-deficient mice compared to T cell-competent mice. Deficiency of CD4+ T cells exacerbated these effects compared to CD8+ T cell deficiency. Our results show the importance of CD4+ and CD8+ T cells in modulating the inflammatory response and promoting new bone formation in response to modified Ti implants. STATEMENT OF SIGNIFICANCE: CD4+ and CD8+ T cells are essential in modulating the peri-implant microenvironment during the inflammatory response to biomaterial implantation. This study shows that deficiency of either CD4+ or CD8+ T cell subsets altered macrophage polarization and reduced MSC recruitment and proliferation at the implantation site.",
+      "tldr": "CD4+ and CD8+ T cells are essential in modulating the peri-implant microenvironment during the inflammatory response to biomaterial implantation and deficiency of either CD4+ or CD8+ T cell subsets altered macrophage polarization and reduced MSC recruitment and proliferation at the implantation site.",
+      "year": 2024,
+      "url": "https://www.semanticscholar.org/paper/65b73e751f985e33366869502a7b3cc0380731d0",
+      "doi": "10.1016/j.actbio.2024.03.022",
+      "pmid": "38554889",
+      "authors": [
+        "D. Avery",
+        "Lais Morandini",
+        "Luke Sheakley",
+        "Melissa Grabiec",
+        "René Olivares-Navarrete"
+      ],
+      "journal": "Acta biomaterialia",
+      "citation_count": 18,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "titanium implant macrophage polarization T cell immune response",
+      "novel": false
+    },
+    {
+      "paper_id": "65b73e751f985e33366869502a7b3cc0380731d0",
+      "title": "CD4+ and CD8+ T Cells Reduce Inflammation and Promote Bone Healing in Response to Titanium Implants.",
+      "abstract": "T cells are adaptive immune cells essential in pathogenic response, cancer, and autoimmune disorders. During the integration of biomaterials with host tissue, T cells modify the local inflammatory environment by releasing cytokines that promote inflammatory resolution following implantation. T cells are vital for the modulation of innate immune cells, recruitment and proliferation of mesenchymal stem cells (MSCs), and formation of functional tissue around the biomaterial implant. We have demonstrated that deficiency of αβ T cells promotes macrophage polarization towards a pro-inflammatory phenotype and attenuates MSC recruitment and proliferation in vitro and in vivo. The goal of this study was to understand how CD4+ and CD8+ T cells, subsets of the αβ T cell family, impact the inflammatory response to titanium (Ti) biomaterials. Deficiency of either CD4+ or CD8+ T cells increased the proportion of pro-inflammatory macrophages, lowered anti-inflammatory macrophages, and diminished MSC recruitment in vitro and in vivo. In addition, new bone formation at the implantation site was significantly reduced in T cell-deficient mice compared to T cell-competent mice. Deficiency of CD4+ T cells exacerbated these effects compared to CD8+ T cell deficiency. Our results show the importance of CD4+ and CD8+ T cells in modulating the inflammatory response and promoting new bone formation in response to modified Ti implants. STATEMENT OF SIGNIFICANCE: CD4+ and CD8+ T cells are essential in modulating the peri-implant microenvironment during the inflammatory response to biomaterial implantation. This study shows that deficiency of either CD4+ or CD8+ T cell subsets altered macrophage polarization and reduced MSC recruitment and proliferation at the implantation site.",
+      "tldr": "CD4+ and CD8+ T cells are essential in modulating the peri-implant microenvironment during the inflammatory response to biomaterial implantation and deficiency of either CD4+ or CD8+ T cell subsets altered macrophage polarization and reduced MSC recruitment and proliferation at the implantation site.",
+      "year": 2024,
+      "url": "https://www.semanticscholar.org/paper/65b73e751f985e33366869502a7b3cc0380731d0",
+      "doi": "10.1016/j.actbio.2024.03.022",
+      "pmid": "38554889",
+      "authors": [
+        "D. Avery",
+        "Lais Morandini",
+        "Luke Sheakley",
+        "Melissa Grabiec",
+        "René Olivares-Navarrete"
+      ],
+      "journal": "Acta biomaterialia",
+      "citation_count": 18,
+      "open_access_pdf": "",
+      "pub_types": [
+        "JournalArticle"
+      ],
+      "query": "CD4 CD8 T cells bone healing osseointegration",
+      "novel": false
+    }
+  ],
+  "local_titles": [
+    "Avery et al. - 2022 - Canonical Wnt signaling enhances pro-inflammatory response to titanium by macrophages",
+    "Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan",
+    "Avery et al. - 2024 - CD4+ and CD8+ T cells reduce inflammation and promote bone healing in response to titanium implants",
+    "Sheakley - 2025 - NSF GRFP Grant",
+    "test",
+    "test2"
+  ],
+  "novel_keywords_top": [
+    [
+      "rat",
+      12
+    ],
+    [
+      "implant",
+      9
+    ],
+    [
+      "surface",
+      9
+    ],
+    [
+      "titanium",
+      7
+    ],
+    [
+      "macrophage",
+      5
+    ],
+    [
+      "bone",
+      5
+    ],
+    [
+      "osseointegration",
+      4
+    ],
+    [
+      "polarization",
+      4
+    ],
+    [
+      "roughness",
+      4
+    ],
+    [
+      "modification",
+      3
+    ],
+    [
+      "osteoblast",
+      3
+    ],
+    [
+      "in vitro",
+      3
+    ],
+    [
+      "biomaterial",
+      2
+    ],
+    [
+      "anti-inflammatory",
+      2
+    ],
+    [
+      "cytokine",
+      2
+    ],
+    [
+      "pro-inflammatory",
+      2
+    ],
+    [
+      "osteoclast",
+      2
+    ],
+    [
+      "lymphocyte",
+      2
+    ],
+    [
+      "interleukin",
+      1
+    ],
+    [
+      "neutrophil",
+      1
+    ]
+  ]
+}

@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.cache import CACHE_VERSION
+
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = "projects/default/query_cache"
@@ -32,7 +34,8 @@ def _ensure_dir() -> Path:
 
 
 def _hash(*parts: str) -> str:
-    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    raw = f"{CACHE_VERSION}|{'|'.join(parts)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _write(key: str, data: dict, ttl: int = DEFAULT_TTL) -> None:

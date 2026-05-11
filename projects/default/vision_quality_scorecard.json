@@ -1,0 +1,211 @@
+{
+  "phase": "7a_vision_quality",
+  "programmatic": {
+    "total_figures": 10,
+    "described": 10,
+    "pass_ascii": 10,
+    "pass_min_length": 10,
+    "ascii_rate": 1.0,
+    "length_pass_rate": 1.0,
+    "avg_length": 1121.5,
+    "avg_keywords": 6.4,
+    "keyword_rate": 1.0,
+    "quality_score": 1.0
+  },
+  "per_figure": [
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2022 - Canonical Wnt signaling enhances pro-inflammatory response to titanium by macrophages/Avery et al. - 2022 - Canonical Wnt signaling enhances pro-inflammatory response to titanium by macrophages_fig_106.png",
+      "page_no": 6,
+      "caption": "Figure, 2. Macrophages upregulate canonical Wnt signaling molecules in response to smooth Ti in vitr",
+      "description_length": 1225,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 3,
+      "keywords_found": [
+        "graph",
+        "bar",
+        "axis"
+      ],
+      "description_preview": " The image displays a series of bar graphs with different sets of bars representing various data points across four panels. Each panel contains multiple bars of varying heights, indicating the values "
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2022 - Canonical Wnt signaling enhances pro-inflammatory response to titanium by macrophages/Avery et al. - 2022 - Canonical Wnt signaling enhances pro-inflammatory response to titanium by macrophages_fig_1026.png",
+      "page_no": 12,
+      "caption": "Figure, 12. Activation of Wnt canonical signaling increases sensitivity of macrophages to DAMPs. Sec",
+      "description_length": 972,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 4,
+      "keywords_found": [
+        "graph",
+        "line",
+        "axis",
+        "figure"
+      ],
+      "description_preview": " The image appears to be a screenshot of a scientific figure, likely from a research paper or presentation. It shows a line graph with multiple lines representing different variables over time. Each l"
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_122.png",
+      "page_no": 7,
+      "caption": "Fig. 2. Modified Ti implants alter populations of macrophages, neutrophils, dendritic cells, and MSC",
+      "description_length": 1112,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 11,
+      "keywords_found": [
+        "graph",
+        "bar",
+        "axis",
+        "figure",
+        "cell",
+        "gene",
+        "cytokine",
+        "macrophage",
+        "neutrophil",
+        "level"
+      ],
+      "description_preview": " The image appears to be a screenshot of a scientific figure, specifically a bar graph with multiple panels, each representing different data sets over time. The title \"Cd600 Cd200 Macrophages\" is vis"
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_219.png",
+      "page_no": 7,
+      "caption": "Fig. 3. alphabeta T cells decrease over time in response to rough-hydrophilic Ti implants. Flow cyto",
+      "description_length": 1074,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 10,
+      "keywords_found": [
+        "graph",
+        "chart",
+        "bar",
+        "line",
+        "axis",
+        "cell",
+        "level",
+        "increase",
+        "decrease",
+        "significant"
+      ],
+      "description_preview": " The image appears to be a screenshot of a scientific graph or chart, possibly from a presentation or publication. It shows a line graph with multiple lines representing different variables over time."
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_284.png",
+      "page_no": 8,
+      "caption": "Fig. 4. Th1, Th9, and Th17 subsets polarize the least in response to rough-hydrophilic Ti implants. ",
+      "description_length": 1248,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 4,
+      "keywords_found": [
+        "graph",
+        "bar",
+        "axis",
+        "increase"
+      ],
+      "description_preview": " The image displays a bar graph with multiple panels, each representing different data sets over time. Each panel shows bars of varying heights, indicating the values of the variable being measured.\n\n"
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_399.png",
+      "page_no": 9,
+      "caption": "Fig. 5. CD8 + T cell subset polarization is the lowest in response to rough-hydrophilic Ti. Flow cyt",
+      "description_length": 715,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 4,
+      "keywords_found": [
+        "graph",
+        "bar",
+        "cell",
+        "t cell"
+      ],
+      "description_preview": " The image displays a bar graph with multiple sets of bars representing different groups or conditions over a series of days from Day 1 to Day 7. Each set of bars corresponds to a specific variable: T"
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_507.png",
+      "page_no": 10,
+      "caption": "Fig. 6. Surface modifications on Ti implants affect CD4 + T cell subset polarization in the lymph no",
+      "description_length": 1135,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 6,
+      "keywords_found": [
+        "graph",
+        "bar",
+        "axis",
+        "increase",
+        "decrease",
+        "significant"
+      ],
+      "description_preview": " The image displays a bar graph with multiple bars representing different days (Day 1 to Day 9) across various categories such as \"Th\", \"Tg\", \"Cd\", \"Tr\", \"Sm\", \"Rh\", \"Rough\", and \"Smooth\". Each catego"
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_634.png",
+      "page_no": 10,
+      "caption": "Fig. 7. Tc2 and CD8 + Tregs polarize more in response to rough and rough-hydrophilic Ti implants in ",
+      "description_length": 1225,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 8,
+      "keywords_found": [
+        "graph",
+        "chart",
+        "bar",
+        "line",
+        "plot",
+        "axis",
+        "figure",
+        "increase"
+      ],
+      "description_preview": " The image appears to be a screenshot of a scientific figure, specifically a graph with multiple plots showing various data sets over time. The graph has a title at the top that reads \"T2,\" and there "
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_748.png",
+      "page_no": 11,
+      "caption": "Fig. 8. Th2, Th22, and CD4 + Tregs polarize the highest in response to rough-hydrophilic Ti in macro",
+      "description_length": 1306,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 5,
+      "keywords_found": [
+        "graph",
+        "line",
+        "axis",
+        "increase",
+        "decrease"
+      ],
+      "description_preview": " The image appears to be a grayscale line graph with multiple lines representing different variables. Each line represents a different category or group, as indicated by the labels on the left side of"
+    },
+    {
+      "file_path": "projects/default/figures/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan/Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan_fig_821.png",
+      "page_no": 11,
+      "caption": "Fig. 9. Tc2 and CD8 + Tregs polarize more in response to rough-hydrophilic Ti. Flow cytometry analys",
+      "description_length": 1203,
+      "ascii": true,
+      "non_ascii_chars": 0,
+      "min_length_ok": true,
+      "keywords_count": 9,
+      "keywords_found": [
+        "graph",
+        "bar",
+        "line",
+        "axis",
+        "figure",
+        "cell",
+        "gene",
+        "t cell",
+        "increase"
+      ],
+      "description_preview": " The image appears to be a scientific figure, specifically a line graph with multiple lines representing different variables. Each line represents a different variable, as indicated by the labels on t"
+    }
+  ],
+  "judge": null
+}

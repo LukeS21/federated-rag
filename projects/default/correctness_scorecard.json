@@ -1,0 +1,370 @@
+{
+  "faithfulness": {
+    "grounded": {
+      "claims_evaluated": 20,
+      "avg_faithfulness": 4.5,
+      "min_score": 3,
+      "max_score": 5,
+      "score_distribution": {
+        "5 (verbatim match)": 13,
+        "4 (strongly supported)": 4,
+        "3 (extrapolated)": 3,
+        "2 (weakly related)": 0,
+        "1 (contradicts/fabricated)": 0
+      },
+      "details": [
+        {
+          "claim": "Obese mice exhibit a peri-implant tissue profile with significantly higher neutrophils, pro-inflammatory macrophages, and T cells, and fewer anti-infl",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence contains the exact statement: 'Obese mice had significantly more neutrophils, pro-inflammatory macrophages, and T cells and fewer anti-inflammatory macrophages and mesenchymal stem cells ",
+          "best_evidence": "Obesity is a metabolic disease resulting from excess body fat accumulation associated with chronic systemic inflammation. Obesity has been shown to impact the function and activity of neutrophils, macrophages, and T cells, contributing to higher circulating levels of proinflammatory cytokines. Bioma"
+        },
+        {
+          "claim": "- 2023 - Contribution of alphabeta T cells to macrophage polarization and MSC recruitment and proliferation on titan.pdf::Macrophage Polarization and ",
+          "faithfulness_score": 4,
+          "reasoning": "The evidence states the study shows altered macrophage polarization and discusses cell-cell communication between T cells and MSCs, which is a form of crosstalk; the claim is strongly supported but no",
+          "best_evidence": "Contribution of alphabeta T cells to macrophage polarization and MSC recruitment and proliferation on titanium implants ||| MSC recruitment and proliferation are essential for bone healing and osseointegration after implantation. Our in vivo studies demonstrated that mice deficient in alphabeta T ce"
+        },
+        {
+          "claim": "T cell subsets (Th2, Th22, CD4+ Treg) are significantly higher in response to rough hydrophilic Ti implants, while Th1, Th2, and Th17 subsets are lowe",
+          "faithfulness_score": 5,
+          "reasoning": "The claim is a verbatim repetition of the evidence chunk, which states: 'At postoperative day 3, Th2, Th22, and CD4 + Treg populations were significantly higher in response to rough hydrophilic Ti imp",
+          "best_evidence": "To investigate the role of helper T cell subsets in the healing response post-biomaterial implantation, we immunophenotyped CD4 + T cell subsets from bone marrow in the peri-implant mi- croenvironment. At postoperative day 3, Th2, Th22, and CD4 + Treg populations were significantly higher in respons"
+        },
+        {
+          "claim": "Macrophage-T cell crosstalk demonstrates that macrophages release factors that promote T cell migration and enhance the inflammatory response (@test.p",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence chunk verbatim states that macrophage-T cell crosstalk 'has been analyzed previously in asthma pathogenesis, demonstrating that macrophages release factors that promote T cell migration a",
+          "best_evidence": "The significance of immune cell-cell communication between macrophages and T cells has been demonstrated by our in vitro studies. The macrophage response to modified Ti surfaces affects the inflammatory phenotype of these various alphabeta T cell subsets since T cells do not directly interact with t"
+        },
+        {
+          "claim": "Obese mice show higher Th1 and Th17 subsets and lower Th2 and Treg populations compared to lean mice (@test.pdf::Immune Cell Response to Biomaterials)",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence explicitly states that obese mice had higher Th1 and Th17 polarization and lower Th2 and Treg polarization compared to lean mice, directly matching the claim.",
+          "best_evidence": "At 3 days post-implantation, mice receiving rough-hydrophilic Ti implants showed lower Th1 and Th17 cells and higher populations of Th2 and CD4 +  Tregs (Figure 4). Obese mice demonstrated significantly higher polarization of Th1 and Th17 subsets when compared to lean mice. Additionally, obese mice "
+        },
+        {
+          "claim": "Obesity, linked to chronic systemic inflammation, increases pro-inflammatory cytokine production in animal models of high-fat diet (HFD)-induced obesi",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence directly states that obesity is linked to chronic inflammation and that pro-inflammatory cytokine production is increased in animal models of HFD-induced obesity, matching the claim almos",
+          "best_evidence": "Obesity is a metabolic disease that is the result of excessive body fat accumulation, negatively impacting health by increasing the risk of cardiovascular disease, type 2 diabetes, and osteoarthritis [1,2]. Obesity is a global epidemic with an estimated prevalence of 40% among the world population, "
+        },
+        {
+          "claim": "- 2023 - Contribution of $\\alpha\\beta$ T cells to macrophage polarization and MSC recruitment and proliferation on titan.pdf::Macrophage Polarization ",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence chunk directly cites the paper by Avery et al. (2023) with the same title, confirming that the claim is a direct reference to the study's findings on alphabeta T cells' role in macrophage",
+          "best_evidence": "Contribution of alphabeta T cells to macrophage polarization and MSC recruitment and proliferation on titanium implants ||| CD4 + and CD8 + T cells are essential in modulating the peri-implant microenvironment during the inflammatory response to biomaterial implantation. This study shows that defici"
+        },
+        {
+          "claim": "CD4+ T cells are significant sources of anti-inflammatory cytokines (IL-4, IL-10, IL-13) that promote anti-inflammatory macrophage polarization (@aver",
+          "faithfulness_score": 4,
+          "reasoning": "The evidence shows CD4+ T cell subsets Th2 and Treg produce IL-4 and IL-10, and Th2 cells promote anti-inflammatory macrophage polarization; IL-13 levels are significantly lower in CD4-/- mice, strong",
+          "best_evidence": "We identified production of pro-inflammatory (IL-2, IL-6, IL9, IL-17A, IL-17F, TNFalpha , IFNgamma ) and anti-inflammatory (IL-4, IL5, IL-10, IL-13, IL-22) cytokines in peri-implant tissue. At postoperative day 3, levels of pro-inflammatory IL-9 and IL-17A and anti-inflammatory IL-4, IL-5, and IL-13"
+        },
+        {
+          "claim": "- 2023 - Contribution of alphabeta T cells to macrophage polarization and MSC recruitment and proliferation on titan.pdf::Macrophage Polarization and ",
+          "faithfulness_score": 4,
+          "reasoning": "The evidence explicitly discusses macrophage polarization and cell-cell communication (crosstalk) between T cells, macrophages, and MSCs, strongly aligning with the claim's topic, though 'crosstalk' i",
+          "best_evidence": "Contribution of alphabeta T cells to macrophage polarization and MSC recruitment and proliferation on titanium implants ||| MSC recruitment and proliferation are essential for bone healing and osseointegration after implantation. Our in vivo studies demonstrated that mice deficient in alphabeta T ce"
+        },
+        {
+          "claim": "The inflammatory response to Ti implants is influenced by surface properties, as rough-hydrophilic implants promote M2-like phenotype and anti-inflamm",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence chunk explicitly states that macrophages on rough-hydrophilic titanium substrates activate into an M2-like phenotype while hydrophobic Ti substrates preferentially activate macrophages in",
+          "best_evidence": "Activation of immune cells can be directed by the surface properties of  implanted  biomaterials.  Our  group  has  demonstrated  that  macrophages differentiate towards an anti-inflammatory M2-like phenotype in response  to  both  rough  and  hydrophilic  titanium  surfaces  (Ti)  as compared  to  "
+        },
+        {
+          "claim": "The adoptive transfer of M1 macrophages decreased bone-to-implant contact and increased the inflammatory microenvironment in the peri-implant tissue (",
+          "faithfulness_score": 3,
+          "reasoning": "The evidence shows that M1 macrophages increase pro-inflammatory cells, supporting the 'increased inflammatory microenvironment' part, but it does not directly state that M1 decreases bone-to-implant ",
+          "best_evidence": "Macrophages play a central role in orchestrating the inflammatory response to implanted biomaterials and are sensitive to changes in the chemical and physical characteristics of the implant. Macrophages respond to biological, chemical, and physical cues by polarizing into pro-inflammatory (M1) or an"
+        },
+        {
+          "claim": "In obesity, Th1 and Th17 cells were higher in response to obese-derived macrophages compared to lean-derived macrophages, and Treg populations were lo",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence verbatim states that Th1 and Th17 cells were higher and Treg populations lower in response to obese-derived vs lean-derived macrophages, matching the claim precisely.",
+          "best_evidence": "Analyzing the effect of obesity on T cell polarization, Th1 and Th17 cells were higher in response to obese-derived macrophages compared to co-culture with lean-derived macrophages (Figure 9). Treg populations were lower in response to obese-derived macrophages when compared to Tregs cultured with l"
+        },
+        {
+          "claim": "T cell activation is crucial for macrophage polarization and MSC recruitment and proliferation, and the absence of $\\alpha\\beta$ T cells compromises n",
+          "faithfulness_score": 4,
+          "reasoning": "The evidence directly states that deficiency of alphabeta T cells results in more pro-inflammatory macrophages, fewer anti-inflammatory macrophages, reduced MSC recruitment and proliferation, and sign",
+          "best_evidence": "Physiochemical cues like topography and wettability can impact the inflammatory response and tissue integration after biomaterial implantation. T cells are essential for immunomodulation of innate immune cells and play an important role in the host response to biomaterial implantation. This study ai"
+        },
+        {
+          "claim": "The anti-inflammatory cytokines IL-4, IL-10, and IL-13 are produced by Th2 and Tregs, which are essential for suppressing inflammatory innate immune c",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence explicitly states Th2 secretes IL-4 and IL-13 and activates anti-inflammatory macrophages, while Treg secretes IL-10 to suppress innate immune cells, directly confirming the claim.",
+          "best_evidence": "However, their role in tissue healing and regeneration is less clear. Recently, T cells have been shown to play an essential role in soft tissue healing and repair, including fibrosis [ 15 , 18 , 34 , 35 , 51 , 62 , 63 ]. While secondary lymphoid organs, such as lymph nodes, are the primary sites of"
+        },
+        {
+          "claim": "- 2024 - CD4+ and CD8+ T cells reduce inflammation and promote bone healing in response to titanium implants.pdf::Cytokine Microenvironment).",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence chunk directly states 'CD4 + and CD8 + T cells reduce inflammation and promote bone healing in response to titanium implants' and cites the corresponding 2024 paper, making the claim verb",
+          "best_evidence": "CD4 + and CD8 + T cells reduce inflammation and promote bone healing in response to titanium implants ||| Fc receptors were blocked in peri-implant tissue single-cell suspensions by incubation with TruStain FcX Plus (BioLegend, San Diego, CA) to prevent non-specific antibody binding. A fixable viabi"
+        },
+        {
+          "claim": "Anti-inflammatory macrophages are associated with the anti-inflammatory phenotype, while pro-inflammatory macrophages are associated with the pro-infl",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence directly states that macrophages can be polarized into a pro-inflammatory phenotype (CD80+/CD206-) or an anti-inflammatory phenotype (CD206+/CD80-), which is exactly what the claim assert",
+          "best_evidence": "We have previously demonstrated that CD4 + T cell subsets at the peri-implant site can be influenced by macrophage response to surface roughness and wettability of Ti implants [5] . T cell polarization depends upon the innate immune cells on the implant surface. Macrophages are innate immune cells t"
+        },
+        {
+          "claim": "- 2023 - Contribution of $\\alpha\\beta$ T cells to macrophage polarization and MSC recruitment and proliferation on titan.pdf::Macrophage Polarization ",
+          "faithfulness_score": 3,
+          "reasoning": "The evidence broadly supports the claim that the paper deals with macrophage polarization and crosstalk involving T cells and MSCs, but the claim includes specific details like 'titan.pdf' not present",
+          "best_evidence": "Contribution of alphabeta T cells to macrophage polarization and MSC recruitment and proliferation on titanium implants ||| CD4 + and CD8 + T cells are essential in modulating the peri-implant microenvironment during the inflammatory response to biomaterial implantation. This study shows that defici"
+        },
+        {
+          "claim": "In obesity, the peri-implant microenvironment showed a higher presence of pro-inflammatory factors and immune cells, suggesting an altered immune cell",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence explicitly states a higher presence of pro-inflammatory factors and immune cells in the peri-implant microenvironment in HFD-induced obesity and directly suggests an alteration in immune ",
+          "best_evidence": "Our results show that the inflammatory response to Ti implants is significantly skewed in HFD-induced obesity, with a higher presence of pro-inflammatory factors and immune cells contributing to a chronic inflammatory peri-implant microenvironment. Additionally, macrophage and T cell polarization is"
+        },
+        {
+          "claim": "Obesity promotes a pro-inflammatory peri-implant microenvironment and attenuates bone formation post-implantation, which can be demonstrated by adopti",
+          "faithfulness_score": 3,
+          "reasoning": "The evidence shows obesity promotes a pro-inflammatory microenvironment and reduces bone formation, and adoptive transfer of bone marrow from obese mice alters immune cell populations locally, but it ",
+          "best_evidence": "Obesity is a metabolic disease resulting from excess body fat accumulation associated with chronic systemic inflammation. Obesity has been shown to impact the function and activity of neutrophils, macrophages, and T cells, contributing to higher circulating levels of proinflammatory cytokines. Bioma"
+        },
+        {
+          "claim": "In obese mice, the peri-implant tissue showed significantly more neutrophils, pro-inflammatory macrophages, and T cells, and fewer anti-inflammatory m",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence explicitly states that obese mice had significantly more neutrophils, pro-inflammatory macrophages, and T cells and fewer anti-inflammatory macrophages and mesenchymal stem cells (MSCs) i",
+          "best_evidence": "Obesity is a metabolic disease resulting from excess body fat accumulation associated with chronic systemic inflammation. Obesity has been shown to impact the function and activity of neutrophils, macrophages, and T cells, contributing to higher circulating levels of proinflammatory cytokines. Bioma"
+        }
+      ]
+    },
+    "inferential": {
+      "claims_evaluated": 5,
+      "avg_faithfulness": 4.6,
+      "min_score": 3,
+      "max_score": 5,
+      "score_distribution": {
+        "5 (directionally supported)": 4,
+        "4 (mostly supported)": 0,
+        "3 (partial — extrapolates)": 1,
+        "2 (weakly supported)": 0,
+        "1 (contradicted/fabricated)": 0
+      },
+      "details": [
+        {
+          "claim": "The inflammatory response to Ti implants is complex, requiring a heterogeneous population of macrophages to initiate, propagate, and resolve the infla",
+          "faithfulness_score": 5,
+          "reasoning": "Multiple evidence chunks explicitly state that a heterogenous macrophage population is needed to initiate, propagate, and resolve inflammation around Ti implants, and that macrophage polarization is r",
+          "best_evidence": "We have shown previously that independent of surface modification in Ti implants, neutrophils and pro-inflammatory macrophages are more prevalent at the early stages of biomaterial implantation, followed by an increase in anti-inflammatory macrophages, Th2, Treg, and reduction of neutrophils and pro"
+        },
+        {
+          "claim": "T cells modify the local inflammatory environment by releasing cytokines that promote inflammatory resolution following implantation (@avery2024).",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence directly states the claim verbatim and provides experimental data showing T cell deficiency increases pro-inflammatory macrophages, supporting the role of T cells in promoting inflammator",
+          "best_evidence": "T cells are adaptive immune cells essential in pathogenic response, cancer, and autoimmune disorders. During the integration of biomaterials with host tissue, T cells modify the local inflammatory environment by releasing cytokines that promote inflammatory resolution following implantation. T cells"
+        },
+        {
+          "claim": "T cells (CD4+ and CD8+) are essential for resolving inflammation and promoting bone regeneration following implantation (@avery2024, @avery2023).",
+          "faithfulness_score": 5,
+          "reasoning": "Multiple evidence chunks directly and explicitly state that CD4+ and CD8+ T cell subsets are essential for resolving inflammation and promoting bone regeneration following implantation, with deficienc",
+          "best_evidence": "Like neutrophils and macrophages, T cells have also been investigated in animal models of HFD-induced obesity but have not been explored in the context of bone healing in obese subjects. Both CD4 +  and CD8 +  T cell subsets are essential for resolving inflammation and bone regeneration in the conte"
+        },
+        {
+          "claim": "T cell subsets (CD4+ and CD8+) are critical for orchestrating the recruitment of T cells and MSCs and promoting bone-implant contact (@test.pdf::Immun",
+          "faithfulness_score": 3,
+          "reasoning": "The evidence supports that CD4+ and CD8+ T cells are important for MSC recruitment and bone-implant contact, but does not mention recruitment of T cells themselves, making the claim partially supporte",
+          "best_evidence": "Our results show the importance of both CD4 + and CD8 + T cells in the inflammatory response to Ti implantation. Deficiency of either of these alphabeta T cell subsets results in a skewed innate immune cell profile in the inflammatory microenvironment and reduced new bone formation. These results de"
+        },
+        {
+          "claim": "The inflammatory response to Ti implants is influenced by macrophage polarization, which is required to facilitate the resolution of inflammation and ",
+          "faithfulness_score": 5,
+          "reasoning": "The evidence directly states that macrophage polarization is required for the amplification and resolution of inflammation and orchestrates T cell and MSC recruitment on Ti implants, exactly matching ",
+          "best_evidence": "Neutrophils and macrophages are myeloid-derived cells that clear wound debris via phagocytosis and initiate the immune response [24,25]. Neutrophils release inflammatory mediators like myeloperoxidase (MPO), neutrophil elastase, and neutrophil extracellular traps (NETs). Macrophages differentiate in"
+        }
+      ]
+    }
+  },
+  "gap_quality": {
+    "questions_evaluated": 10,
+    "avg_novelty": 4.5,
+    "avg_actionability": 4.8,
+    "details": [
+      {
+        "gap": "What temporal dynamics govern CD4+/CD8+ T cell and macrophage crosstalk during acute versus chronic implantation phases in HFD-induced obesity, and ho",
+        "novelty": 5,
+        "actionability": 5,
+        "reasoning": "The specific temporal crosstalk dynamics between T cells and macrophages in HFD-induced obesity across implant phases and their direct link to MSC recruitment timelines is not answered or asked by any"
+      },
+      {
+        "gap": "How do systemic adipokines (leptin, resistin, adiponectin) mechanistically regulate local Th1/Th17 versus Th2/Treg polarization on titanium implant su",
+        "novelty": 4,
+        "actionability": 5,
+        "reasoning": "The literature establishes correlations between obesity, adipokines, and T cell polarization but does not test direct mechanistic regulation of local T cell polarization by specific adipokines; a feas"
+      },
+      {
+        "gap": "What quantitative cytokine thresholds (IL-6, TNFalpha, IFNgamma) trigger the irreversible shift from M2 to M1 macrophage polarization in obese peri-im",
+        "novelty": 5,
+        "actionability": 5,
+        "reasoning": "No paper in the corpus addresses quantitative cytokine thresholds or the irreversibility of M2-to-M1 shift, and the question suggests a straightforward dose-response and blockade experiment."
+      },
+      {
+        "gap": "Does the theta = 0deg wettability threshold for rough-hydrophilic Ti implants represent an optimal balance for M2 polarization and MSC recruitment, or",
+        "novelty": 4,
+        "actionability": 5,
+        "reasoning": "The question addresses an unexplored optimization of surface wettability for obese conditions, directly suggesting a feasible experiment comparing multiple contact angles and measuring immune and stem"
+      },
+      {
+        "gap": "What is the long-term impact of smooth-hydrophobic Ti-induced Th1/Th17 skewing on peri-implant fibrosis, chronic inflammation, and implant failure rat",
+        "novelty": 4,
+        "actionability": 5,
+        "reasoning": "The question is not directly addressed as current papers focus on acute immune responses without linking Th1/Th17 skewing to long-term fibrosis or failure rates in obesity, and it is actionable via es"
+      },
+      {
+        "gap": "Can adoptive transfer of ex vivo-expanded Tregs or M2 macrophages specifically reverse obesity-impaired MSC recruitment and restore bone-to-implant co",
+        "novelty": 5,
+        "actionability": 5,
+        "reasoning": "No paper in the corpus proposes or tests adoptive transfer of Tregs or M2 macrophages to reverse obesity-impaired implant healing, and the experiment is directly feasible with established mouse models"
+      },
+      {
+        "gap": "How do gender and age variables modulate the obesity-driven shift toward pro-inflammatory macrophage polarization and T cell dysregulation post-implan",
+        "novelty": 5,
+        "actionability": 5,
+        "reasoning": "The literature entirely overlooks age and gender as modulators of obesity-related inflammatory shifts, yet the gap suggests a straightforward factorial in vivo experiment using established readouts."
+      },
+      {
+        "gap": "What is the precise molecular crosstalk mechanism by which macrophage-derived chemokines drive T cell migration and subset differentiation on modified",
+        "novelty": 4,
+        "actionability": 4,
+        "reasoning": "The papers discuss general crosstalk but do not identify precise molecular mediators, making this a well-defined, testable gap."
+      },
+      {
+        "gap": "Are uncharacterized immune cell populations (e.g., B cells, NK cells, neutrophil extracellular traps) contributing to the chronic inflammatory peri-im",
+        "novelty": 5,
+        "actionability": 5,
+        "reasoning": "The papers focus exclusively on macrophages, T cells, and neutrophils, never mentioning B cells, NK cells, or NETs, while standard flow cytometry, histology, and depletion/blocking experiments can dir"
+      },
+      {
+        "gap": "How do clinical serum biomarkers (CRP, leptin, resistin) correlate with local peri-implant T cell subset ratios and macrophage polarization states in ",
+        "novelty": 4,
+        "actionability": 4,
+        "reasoning": "While the papers establish systemic and local inflammation in obesity separately, none directly correlate clinical serum biomarkers with local T cell/macrophage polarization in human peri-implant tiss"
+      }
+    ]
+  },
+  "calibration": {
+    "judge_valid": true,
+    "judge_issues": [
+      "GRAY claims outside expected 2-4 range"
+    ],
+    "true_claims": {
+      "scores": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "avg": 5.0
+    },
+    "false_claims": {
+      "scores": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "avg": 1.0
+    },
+    "gray_claims": {
+      "scores": [
+        1,
+        2
+      ],
+      "avg": 1.5
+    },
+    "details": [
+      {
+        "claim": "CD4+ and CD8+ T cells reduce inflammation and promote bone healing around titanium implants.",
+        "faithfulness_score": 5,
+        "reasoning": "The evidence chunk directly quotes a paper title that states 'CD4+ and CD8+ T cells reduce inflammation and promote bone healing in response to titanium implants,' which is nearly identical to the cla",
+        "best_evidence": "CD4 + and CD8 + T cells reduce inflammation and promote bone healing in response to titanium implants ||| At post-surgical day 7, we observed an increase in macrophages, CD4+ and CD8+ T cells, and a decrease in anti-inflammatory macrophages in C57BL/6J mice treated with nave macrophages compared to ",
+        "type": "true",
+        "expected": "high"
+      },
+      {
+        "claim": "Rough-hydrophilic titanium surfaces skew macrophages toward an anti-inflammatory M2 phenotype.",
+        "faithfulness_score": 5,
+        "reasoning": "The evidence explicitly states that rough-hydrophilic titanium implants skew macrophage polarization toward an anti-inflammatory or M2-like phenotype, directly matching the claim.",
+        "best_evidence": "We, and others, have shown that macrophages are sensitive to changes in physicochemical properties on the biomaterial surface in vivo and that these physicochemical properties can skew macrophage phenotypes [24]. These physicochemical properties not only control macrophage phenotype but also dictate",
+        "type": "true",
+        "expected": "high"
+      },
+      {
+        "claim": "Obese mice exhibit elevated serum leptin and C-reactive protein compared to lean controls.",
+        "faithfulness_score": 5,
+        "reasoning": "The evidence explicitly states that serum leptin and C-reactive protein were significantly higher in obese mice than in lean mice at baseline.",
+        "best_evidence": "To understand if obesity affects bone formation, we analyzed bone formation at 21 days post-implantation (Figure 8). In lean mice, bone formation was higher on rough-hydrophilic Ti implants than on rough Ti. Obese mice produced significantly less bone around Ti implants than lean mice, and the effec",
+        "type": "true",
+        "expected": "high"
+      },
+      {
+        "claim": "T cell deficiency promotes a pro-inflammatory macrophage phenotype around titanium implants.",
+        "faithfulness_score": 5,
+        "reasoning": "The evidence explicitly states that deficiency of alphabeta T cells (and their CD4+/CD8+ subsets) promotes macrophage polarization towards a pro-inflammatory phenotype on titanium implants, matching t",
+        "best_evidence": "T cells are adaptive immune cells essential in pathogenic response, cancer, and autoimmune disorders. During the integration of biomaterials with host tissue, T cells modify the local inflammatory environment by releasing cytokines that promote inflammatory resolution following implantation. T cells",
+        "type": "true",
+        "expected": "high"
+      },
+      {
+        "claim": "Titanium alloys dissolve completely within 48 hours in physiological saline at body temperature.",
+        "faithfulness_score": 1,
+        "reasoning": "The evidence describes titanium alloy implants that remain intact and are surgically removed after 3-7 days in mice, directly contradicting complete dissolution within 48 hours.",
+        "best_evidence": "To understand the impact of obesity on T cell polarization in response to macrophages cultured to modified Ti in vitro, bone marrow-derived macrophages isolated from either obese or lean mice were seeded in 24-well plates on either rough or rough-hydrophilic Ti disks (n=6) at a density of 200,000 ce",
+        "type": "false",
+        "expected": "low"
+      },
+      {
+        "claim": "Obesity eliminates all macrophage activity at the implant site, preventing any immune response.",
+        "faithfulness_score": 1,
+        "reasoning": "The evidence explicitly states that obesity increases pro-inflammatory innate immune response and alters macrophage behavior, directly contradicting the claim that it eliminates all macrophage activit",
+        "best_evidence": "Metallic implants used for craniofacial and orthopedic applications are modified at the surface level to promote bone formation, also known as osseointegration [17-19]. The success of biomaterial implantation depends upon the recruitment of immune cells and the resolution of the inflammatory respons",
+        "type": "false",
+        "expected": "low"
+      },
+      {
+        "claim": "IFN-gamma is exclusively produced by B lymphocytes and has no role in T cell biology.",
+        "faithfulness_score": 1,
+        "reasoning": "The evidence chunk mentions CD4+ T cells eliminating cancer cells via indirect effects of IFN-gamma, directly contradicting the claim that IFN-gamma has no role in T cell biology, and does not support",
+        "best_evidence": "Macrophages play a significant role in immune cell crosstalk with T cells, as our group has previously shown that the presence of T cells can significantly increase the inflammatory polarization of macrophages in vitro [ 15 , 36 ]. T cells do not directly interact with the implant surface; therefore",
+        "type": "false",
+        "expected": "low"
+      },
+      {
+        "claim": "Smooth titanium surfaces promote faster osseointegration than rough surfaces in all animal models.",
+        "faithfulness_score": 1,
+        "reasoning": "The evidence indicates that rough (and hydrophilic) titanium surfaces, not smooth, accelerate osseointegration by promoting anti-inflammatory macrophage polarization and osteoblastic differentiation, ",
+        "best_evidence": "Activation of immune cells can be directed by the surface properties of  implanted  biomaterials.  Our  group  has  demonstrated  that  macrophages differentiate towards an anti-inflammatory M2-like phenotype in response  to  both  rough  and  hydrophilic  titanium  surfaces  (Ti)  as compared  to  ",
+        "type": "false",
+        "expected": "low"
+      },
+      {
+        "claim": "M1 macrophage polarization always inhibits bone formation regardless of timing or context.",
+        "faithfulness_score": 1,
+        "reasoning": "The evidence shows that in MaFIA mice, adoptive transfer of M1 macrophages did not result in lower bone formation compared to other macrophage groups, directly contradicting the claim of universal inh",
+        "best_evidence": "Adoptive transfer of nave macrophages into C57BL/6J mice resulted in similar levels of bone-implant contact compared to the PBS control group (Figure 11). Treatment with M1 macrophages in C57BL/6J mice resulted in the lowest bone formation around the Ti implant compared to nave and M2 macrophage tre",
+        "type": "gray",
+        "expected": "mid"
+      },
+      {
+        "claim": "IL-10 alone is sufficient to reverse obesity-induced peri-implant inflammation.",
+        "faithfulness_score": 2,
+        "reasoning": "The evidence describes IL-10's effects on macrophage cytokine secretion in vitro but provides no data on IL-10 treatment reversing peri-implant inflammation in an obesity model.",
+        "best_evidence": "Obesity has been shown to significantly alter physiological processes, including the behavior of immune cells, inducing a state of systemic chronic inflammation. Our study demonstrates that obesity-induced via a high-fat diet alters immune cell response to implanted biomaterials, with increased pro-",
+        "type": "gray",
+        "expected": "mid"
+      }
+    ]
+  },
+  "metadata": {
+    "judge_model": "deepseek-v4-pro",
+    "judge_provider": "deepseek",
+    "elapsed_s": 1415.3,
+    "timestamp": "2026-05-10T04:24:49Z"
+  }
+}

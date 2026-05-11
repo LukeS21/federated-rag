@@ -1,0 +1,44 @@
+{
+  "query": "How do T cells and macrophages coordinate bone healing around titanium implants? How does obesity impact this?",
+  "cloud": {
+    "provider": "deepseek",
+    "model_tiers": "per-theme: deepseek-chat | cross-theme: deepseek-v4-pro | gap: deepseek-v4-pro",
+    "n_themes": 6,
+    "n_decomposed_themes": 6,
+    "avg_anchor_score": 0.969,
+    "anchoring_scores": {
+      "T cell and macrophage crosstalk in bone healing": 1.0,
+      "Immune response to titanium implants in bone": 0.958,
+      "Obesity-induced alterations in T cell and macrophage function": 0.923,
+      "Obesity and bone healing around implants": 0.933,
+      "Shared signaling pathways in T cell-macrophage-bone axis under obesity": 1.0,
+      "Model systems for studying immune-bone interactions with implants": 1.0
+    },
+    "total_claims": 119,
+    "cross_claims": 26,
+    "elapsed_s": 211.9
+  },
+  "local": {
+    "provider": "ollama",
+    "model_tiers": "per-theme: gemma4:e4b | cross-theme: qwen3.6:35b | gap: qwen3.6:35b",
+    "n_themes": 6,
+    "n_decomposed_themes": 6,
+    "avg_anchor_score": 0.947,
+    "anchoring_scores": {
+      "Immune response to titanium implants in bone": 1.0,
+      "T cell and macrophage crosstalk in bone healing": 1.0,
+      "Obesity-induced alterations in T cell and macrophage function": 1.0,
+      "Obesity and bone healing around implants": 0.846,
+      "Shared signaling pathways in T cell-macrophage-bone axis under obesity": 0.947,
+      "Model systems for studying immune-bone interactions with implants": 0.889
+    },
+    "total_claims": 96,
+    "cross_claims": 17,
+    "elapsed_s": 524.3
+  },
+  "deltas": {
+    "themes_diff": 0,
+    "anchor_score_diff": 0.022,
+    "claims_diff": 23
+  }
+}

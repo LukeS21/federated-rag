@@ -54,7 +54,9 @@ class SynthesisDrafter:
         """Produce a draft synthesis paragraph (README §5.2)."""
         system_prompt = (
             "You are a biomedical literature synthesis drafter. Produce evidence-backed "
-            "claims with inline citation keys (@author2025). Be as concise as possible — "
+            "claims with inline citation keys from the provided Available Citations list. "
+            "Use ONLY the exact citation keys provided — never invent new ones. "
+            "Be as concise as possible — "
             "prefer dense factual claims over narrative prose. Preserve ALL key findings, "
             "contradictions, and quantitative data from the evidence. Every claim must "
             "be traceable to a provided evidence chunk. Use knowledge graph insights "

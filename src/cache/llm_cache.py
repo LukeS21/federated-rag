@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.cache import CACHE_VERSION
+
 
 class LLMCache:
     """Simple file‑based cache with 24‑hour TTL."""
@@ -25,7 +27,7 @@ class LLMCache:
         self._ttl = ttl_seconds
 
     def _key(self, system_prompt: str, user_prompt: str, model: str = "") -> str:
-        raw = f"{system_prompt}|||{user_prompt}|||{model}"
+        raw = f"{CACHE_VERSION}|{system_prompt}|||{user_prompt}|||{model}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _path(self, key: str) -> Path:

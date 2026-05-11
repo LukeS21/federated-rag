@@ -1,0 +1,82 @@
+{
+  "timestamp": "2026-05-10T15:26:04.038488+00:00",
+  "total_positive_samples": 100,
+  "total_negative_samples": 50,
+  "regex": {
+    "detection_rate": 1.0,
+    "false_positive_rate": 0.0,
+    "true_positives": 100,
+    "false_negatives": 0,
+    "false_positives": 0,
+    "true_negatives": 50
+  },
+  "gliner": {
+    "available": true,
+    "detection_rate": 0.25,
+    "false_positive_rate": 0.12,
+    "true_positives": 7,
+    "false_negatives": 21,
+    "false_positives": 6,
+    "true_negatives": 44,
+    "mean_latency_ms": 135.7,
+    "max_latency_ms": 6741.84
+  },
+  "overlap": {
+    "regex_only": 52,
+    "gliner_only": 0,
+    "both_detected": 48,
+    "neither_detected": 0
+  },
+  "category_details": {
+    "regex_ssn": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_email": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_phone": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_mrn": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_api_key": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_grant": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_ip": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_dob": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_hospital": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    },
+    "regex_project_code": {
+      "samples": 10,
+      "detected": 10,
+      "rate": 1.0
+    }
+  }
+}

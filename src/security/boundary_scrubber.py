@@ -47,6 +47,8 @@ _DEFAULT_PATTERNS: List[Tuple[str, str, str]] = [
 
     # Date of birth (MM/DD/YYYY or YYYY-MM-DD)
     ("DOB", r"\bDOB:?\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", "[REDACTED-DOB]"),
+    # Date of birth (YYYY-MM-DD format)
+    ("DOB2", r"\bDOB:?\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", "[REDACTED-DOB]"),
 
     # Email addresses
     ("EMAIL", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",

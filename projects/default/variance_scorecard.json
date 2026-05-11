@@ -1,0 +1,46 @@
+{
+  "timestamp": "2026-05-10T05:33:03.530548+00:00",
+  "query": "How do T cells and macrophages coordinate bone healing around titanium implants? How does obesity impact this? what cytokines would be upregulated/downregulated for macrophages and what are targets for therapeutic intervention?",
+  "n_runs": 1,
+  "total_elapsed_s": 0.0,
+  "runs": [
+    {
+      "run_index": 1,
+      "elapsed_s": 0.0,
+      "anchoring_scores": {
+        "T cell-Macrophage Crosstalk in Osseointegration": 1.0,
+        "Macrophage Polarization and Osteogenesis": 1.0,
+        "T cell Subsets and Immune Response": 1.0,
+        "Impact of Obesity on Bone Healing Immunity": 0.964,
+        "Molecular Markers of Immune Dysregulation": 1.0
+      },
+      "anchoring_mean": 0.9928,
+      "anchoring_min": 0.964,
+      "anchoring_max": 1.0,
+      "anchoring_std": 0.0161,
+      "n_themes": 5,
+      "n_claims": 16,
+      "debate_invocations": 0
+    }
+  ],
+  "aggregate": {
+    "anchoring_mean_of_means": 0.9928,
+    "anchoring_std_of_means": 0.0,
+    "anchoring_cv": 0.0,
+    "anchor_range": [
+      0.9928,
+      0.9928
+    ],
+    "anchor_spread": 0.0,
+    "n_themes_range": [
+      5,
+      5
+    ],
+    "n_claims_range": [
+      16,
+      16
+    ],
+    "debate_rate": 0.0
+  },
+  "interpretation": "Anchoring scores are stable (CoV=0.000). Single‑run benchmarks are representative."
+}

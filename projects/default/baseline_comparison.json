@@ -1,0 +1,85 @@
+{
+  "comparison": [
+    {
+      "metric": "Claims",
+      "naive_rag": 5,
+      "full_pipeline": 134,
+      "delta": "-129"
+    },
+    {
+      "metric": "Grounded",
+      "naive_rag": 5,
+      "full_pipeline": 133,
+      "delta": "-128"
+    },
+    {
+      "metric": "Ungrounded",
+      "naive_rag": 0,
+      "full_pipeline": 1,
+      "delta": "-1"
+    },
+    {
+      "metric": "Anchoring",
+      "naive_rag": 1.0,
+      "full_pipeline": 0.9928,
+      "delta": "+0.0072"
+    },
+    {
+      "metric": "Unique citations",
+      "naive_rag": 3,
+      "full_pipeline": 6,
+      "delta": "-3"
+    },
+    {
+      "metric": "Output length",
+      "naive_rag": 959,
+      "full_pipeline": 28467,
+      "delta": "-27,508 chars"
+    }
+  ],
+  "interpretation": {
+    "anchor_delta": -0.0072,
+    "claims_delta": 129
+  },
+  "query": "How do CD4+ and CD8+ T cells regulate macrophage polarization and bone healing around titanium implants?",
+  "naive_rag": {
+    "mode": "naive_rag",
+    "query": "How do CD4+ and CD8+ T cells regulate macrophage polarization and bone healing around titanium implants?",
+    "synthesis": "CD4+ and CD8+ T cells are essential for modulating the peri-implant microenvironment, reducing inflammation, and promoting bone healing around titanium implants (@avery23, @avery24, @avery25).\nDeficiency of either CD4+ or CD8+ T cell subsets alters macrophage polarization and reduces MSC recruitment and proliferation at the implantation site (@avery23, @avery24, @avery25).\nCD4+ T cells play a significant immunomodulatory role in neutrophil clearance, macrophage polarization, MSC recruitment/proliferation, and promoting bone-implant contact (@avery23, @avery24, @avery25).\nCD4+ T cells (Th2 cells and Tregs) activate anti-inflammatory macrophages and suppress pro-inflammatory ones via IL-4 and IL-10 secretion (@avery23, @avery24, @avery25).\nCD4+ T cells are a significant source of anti-inflammatory cytokines; CD4+-deficient mice demonstrated decreased IL-4 production and lower anti-inflammatory macrophage populations (@avery23, @avery24, @avery25).",
+    "claims_count": 5,
+    "grounded_claims": 5,
+    "inferential_claims": 5,
+    "ungrounded_claims": 0,
+    "anchoring_score": 1.0,
+    "anchoring_min": 1.0,
+    "citations_used": 3,
+    "citation_keys": [
+      "@avery23",
+      "@avery24",
+      "@avery25"
+    ],
+    "chunks_retrieved": 10,
+    "output_chars": 959,
+    "latency_s": 30.66
+  },
+  "full_pipeline": {
+    "mode": "full_pipeline",
+    "query": "",
+    "themes_count": 5,
+    "claims_count": 134,
+    "grounded_claims": 133,
+    "ungrounded_claims": 1,
+    "anchoring_score": 0.9928,
+    "citations_used": 6,
+    "citation_keys": [
+      "@Avery",
+      "@avery2023",
+      "@avery2024",
+      "@avery2025",
+      "@test",
+      "@test2"
+    ],
+    "output_chars": 28467,
+    "latency_s": "unknown (cached)"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "phase": "7a_vision_pipeline",
+  "threshold": 0.35,
+  "vision_model": "not_run",
+  "timing": {
+    "extraction_s": 57.76,
+    "filter_s": 0.0,
+    "description_s": 0.0
+  },
+  "figures": {
+    "total_extracted": 47,
+    "total_kept": 38,
+    "total_discarded": 9,
+    "keep_rate": 0.809,
+    "avg_relevance_score": 0.9508,
+    "score_range": [
+      0.4918,
+      1.0
+    ],
+    "figures_described": 0,
+    "avg_description_chars": 0.0
+  },
+  "classification": {
+    "all": {
+      "logo": 3,
+      "page_thumbnail": 3,
+      "icon": 3,
+      "table": 4,
+      "bar_chart": 31,
+      "engineering_drawing": 1,
+      "box_plot": 1,
+      "scatter_plot": 1
+    },
+    "kept": {
+      "bar_chart": 31,
+      "box_plot": 1,
+      "scatter_plot": 1,
+      "table": 4,
+      "engineering_drawing": 1
+    },
+    "discarded": {
+      "logo": 3,
+      "page_thumbnail": 3,
+      "icon": 3
+    }
+  },
+  "per_pdf": {
+    "Avery et al. - 2022 - Canonical Wnt signaling enhances pro-inflammatory response to titanium by macrophages.pdf": {
+      "total": 15,
+      "kept": 12,
+      "data_figs": 11,
+      "extraneous": 0
+    },
+    "Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan.pdf": {
+      "total": 20,
+      "kept": 17,
+      "data_figs": 17,
+      "extraneous": 0
+    },
+    "Avery et al. - 2024 - CD4+ and CD8+ T cells reduce inflammation and promote bone healing in response to titanium implants.pdf": {
+      "total": 12,
+      "kept": 9,
+      "data_figs": 9,
+      "extraneous": 0
+    }
+  },
+  "pdfs_processed": [
+    "Avery et al. - 2022 - Canonical Wnt signaling enhances pro-inflammatory response to titanium by macrophages.pdf",
+    "Avery et al. - 2023 - Contribution of αβ T cells to macrophage polarization and MSC recruitment and proliferation on titan.pdf",
+    "Avery et al. - 2024 - CD4+ and CD8+ T cells reduce inflammation and promote bone healing in response to titanium implants.pdf",
+    "Sheakley - 2025 - NSF GRFP Grant.pdf"
+  ]
+}

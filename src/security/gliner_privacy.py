@@ -98,9 +98,10 @@ class GlinerPrivacyModel(PrivacyModel):
                     to only these entity types.
         """
         self._labels = labels or [
-            "person", "organization", "location", "date",
-            "phone number", "email", "id", "medical condition",
-            "url", "ip address", "address",
+            "person",
+            "phone number", "email", "id",
+            "ssn", "credit card", "patient id",
+            "url", "ip address",
         ]
         self._model = None  # Lazy loaded
 

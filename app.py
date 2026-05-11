@@ -78,9 +78,9 @@ with st.sidebar:
 
     mode = st.radio(
         "Mode",
-        ["Survey", "Deep", "Quick"],
+        ["Survey", "Deep", "Quick", "Sectioned"],
         index=0,
-        help="Survey: multi-theme synthesis | Deep: full debate | Quick: fast lookup",
+        help="Survey: multi-theme synthesis | Deep: full debate | Quick: fast lookup | Sectioned: IMRaD section writing",
     )
 
     scope = st.radio(
@@ -208,12 +208,30 @@ with tab_query:
                     if new_count:
                         st.success(f"Ingested {new_count} new PDF(s)")
 
+                    # Phase 7a: Vision pipeline — extract, describe, embed figures
+                    _add_log("Running vision pipeline on ingested PDFs...")
+                    vision_enabled = os.getenv("VISION_MODEL", "gemma4:e4b").lower() not in ("0", "none", "false")
+                    for pdf_path in sorted(data_dir.glob("*.pdf")):
+                        try:
+                            from src.vision.vision_ingest import vision_ingest_pdf
+                            vresult = vision_ingest_pdf(pdf_path, hybrid, describe=vision_enabled)
+                            if vresult.get("embedded", 0) > 0:
+                                _add_log(
+                                    f"Vision: {pdf_path.name} → {vresult['kept']}/{vresult['extracted']} figures kept, "
+                                    f"{vresult['embedded']} embedded"
+                                )
+                        except Exception as e:
+                            _add_log(f"Vision skip {pdf_path.name}: {e}")
+
                 # Build and run graph
                 from src.graph.graph_builder import build_survey_graph, build_graph
                 from langgraph.errors import GraphRecursionError
 
                 if mode == "Survey":
                     graph = build_survey_graph(hybrid, graph_storage)
+                elif mode == "Sectioned":
+                    from src.graph.sectioned_survey_graph import build_sectioned_survey_graph
+                    graph = build_sectioned_survey_graph(hybrid)
                 else:
                     graph = build_graph(hybrid, graph_storage)
 
@@ -241,6 +259,9 @@ with tab_query:
 
                 # Store result
                 final_output = str(result.get("final_output", "") or result.get("cross_theme_synthesis", ""))
+                section_drafts = result.get("section_drafts", {})
+                section_plan = result.get("section_plan", [])
+
                 st.session_state.current_result = {
                     "type": "query",
                     "mode": mode,
@@ -254,6 +275,8 @@ with tab_query:
                     "decomposed_themes": result.get("decomposed_themes", []),
                     "thematic_clusters": result.get("thematic_clusters", {}),
                     "anchoring_score": result.get("anchoring_score", 0),
+                    "section_drafts": section_drafts,
+                    "section_plan": section_plan,
                 }
 
                 # Add to history
@@ -339,7 +362,31 @@ with tab_results:
             st.caption(f"Query: {result['query']}")
 
             # Tabs for different result sections
-            rt1, rt2, rt3, rt4 = st.tabs(["Synthesis", "Per-Theme", "Gap Analysis", "Export"])
+            if result.get("section_drafts"):
+                # Sectioned survey display
+                rt1, rt2 = st.tabs(["Manuscript", "Sections"])
+                with rt1:
+                    final = result.get("final_output", "")
+                    if final:
+                        st.markdown(final)
+                    else:
+                        # Build from section drafts
+                        for sec in result.get("section_plan", []):
+                            name = sec.get("name", "?")
+                            draft = result["section_drafts"].get(name, "")
+                            if draft:
+                                st.markdown(f"### {name.upper()}")
+                                st.text(draft[:3000])
+                with rt2:
+                    for sec in result.get("section_plan", []):
+                        name = sec.get("name", "?")
+                        draft = result["section_drafts"].get(name, "")
+                        if draft:
+                            claims = [l for l in draft.split("\n") if l.strip()]
+                            st.markdown(f"**{name}**: {len(claims)} claims, {len(draft)} chars")
+                rt3, rt4 = st.tabs(["Gap Analysis", "Export"])
+            else:
+                rt1, rt2, rt3, rt4 = st.tabs(["Synthesis", "Per-Theme", "Gap Analysis", "Export"])
 
             with rt1:
                 final = result.get("final_output", "")

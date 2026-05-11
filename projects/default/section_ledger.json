@@ -1,0 +1,370 @@
+{
+  "claims": [
+    {
+      "claim_id": "c8a88de8d70be61a",
+      "claim_text": "CD4+ and CD8+ T cells are significant in the healing response and bone regeneration post-implantation, promoting bone healing and bone-implant contact @avery2023.",
+      "section": "Introduction",
+      "citations": [
+        "avery2023"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.2828832
+    },
+    {
+      "claim_id": "b9ce497737716bde",
+      "claim_text": "CD4+ T cells exhibit a more significant immunomodulatory role in neutrophil clearance, macrophage polarization, MSC recruitment, and promoting bone-implant contact at the peri-implant site @avery2024.",
+      "section": "Introduction",
+      "citations": [
+        "avery2024"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.282927
+    },
+    {
+      "claim_id": "3ce1f8e58d36110f",
+      "claim_text": "The absence or deficiency of alphabeta T cells compromises new bone formation and attenuates MSC recruitment and proliferation in vivo and in vitro @avery25.",
+      "section": "Introduction",
+      "citations": [
+        "avery25"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.282963
+    },
+    {
+      "claim_id": "03179b3efac52c0c",
+      "claim_text": "T cell activation contributes significantly to the inflammatory response to implanted biomaterials, influencing macrophage polarization and MSC recruitment/proliferation @avery23.",
+      "section": "Introduction",
+      "citations": [
+        "avery23"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.282997
+    },
+    {
+      "claim_id": "144f69bd502fe7a1",
+      "claim_text": "Deficiency of CD4+ or CD8+ T cells skews the MSC recruitment and innate immune cell response to modified Ti implants in vivo, and alters the peri-implant cytokine profile @avery24.",
+      "section": "Introduction",
+      "citations": [
+        "avery24"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.2830322
+    },
+    {
+      "claim_id": "ee3ab1d87806fba9",
+      "claim_text": "Deficiency of alphabeta T cells promotes macrophage polarization towards a pro-inflammatory phenotype and attenuates MSC recruitment and proliferation @avery25.",
+      "section": "Introduction",
+      "citations": [
+        "avery25"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.283066
+    },
+    {
+      "claim_id": "cc70e0be5a7b24e5",
+      "claim_text": "The Th2 and Treg subsets are upregulated in response to macrophages on rough-hydrophilic Ti implants, correlating with higher anti-inflammatory macrophages and an anti-inflammatory effect @avery23.",
+      "section": "Introduction",
+      "citations": [
+        "avery23"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.2831008
+    },
+    {
+      "claim_id": "f663fafa788dc314",
+      "claim_text": "Adoptive transfer of immunomodulatory macrophages can reduce the pro-inflammatory microenvironment and increase bone formation on titanium implants @avery23.",
+      "section": "Introduction",
+      "citations": [
+        "avery23"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455673.283134
+    },
+    {
+      "claim_id": "e1d9550030380708",
+      "claim_text": "CD4+ and CD8+ T cells reduce inflammation and promote bone healing in response to titanium implants @avery2023.",
+      "section": "Methods",
+      "citations": [
+        "avery2023"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440632
+    },
+    {
+      "claim_id": "a43fd85bba7cd553",
+      "claim_text": "CD4+ or CD8+ T cells enhance bone formation and bone implant contact in response to modified Ti implants @avery2023.",
+      "section": "Methods",
+      "citations": [
+        "avery2023"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440649
+    },
+    {
+      "claim_id": "b72f726cd385e646",
+      "claim_text": "CD4+ T cells play a significant immunomodulatory role in neutrophil clearance, macrophage polarization, MSC recruitment, and promoting bone-implant contact at the peri-implant site @avery2024.",
+      "section": "Methods",
+      "citations": [
+        "avery2024"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.4406662
+    },
+    {
+      "claim_id": "0a6c163d12d46e71",
+      "claim_text": "T cell activation is significant during the inflammatory response to implanted biomaterials, contributing to macrophage polarization and MSC recruitment and proliferation, and the absence of alphabeta T cells compromises new bone formation at the implantation site @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440684
+    },
+    {
+      "claim_id": "d880a393599db35f",
+      "claim_text": "Deficiency of CD4+ or CD8+ T cells attenuates inflammatory cytokine production in response to modified Ti implants @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440701
+    },
+    {
+      "claim_id": "ab768756db2b23c4",
+      "claim_text": "Mice deficient in CD4+ or CD8+ T cells exhibit altered populations of neutrophils, pro-inflammatory macrophages, anti-inflammatory macrophages, and MSCs in response to modified Ti implants @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440717
+    },
+    {
+      "claim_id": "b9b0b7f035bc0836",
+      "claim_text": "CD4+ T cell subsets can be influenced by macrophage response to surface roughness and wettability of Ti implants @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440734
+    },
+    {
+      "claim_id": "d22dda67d4c8046e",
+      "claim_text": "Th2 and Treg subsets are upregulated in response to macrophages on rough-hydrophilic Ti implants, correlating with higher anti-inflammatory macrophages and exhibiting an anti-inflammatory effect @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.4407501
+    },
+    {
+      "claim_id": "eb3528d4da8c0a8a",
+      "claim_text": "The absence of alphabeta T cells compromises new bone formation and attenuates MSC recruitment and proliferation in vitro and in vivo, and promotes macrophage polarization towards a pro-inflammatory phenotype @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440778
+    },
+    {
+      "claim_id": "014eba0bf800e9b9",
+      "claim_text": "Deficiency of CD4+ or CD8+ T cells skews MSC recruitment and innate immune cell response to modified Ti implants in vivo @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.4407969
+    },
+    {
+      "claim_id": "40fba4ba89af3631",
+      "claim_text": "CD4+ and CD8+ T cell subsets impact the inflammatory response to titanium (Ti) biomaterials @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440813
+    },
+    {
+      "claim_id": "9048f04470ba6856",
+      "claim_text": "T cell subsets are involved in modulating immune cell crosstalk and mesenchymal stem cell (MSC) recruitment following biomaterial implantation @avery2025.",
+      "section": "Methods",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455682.440829
+    },
+    {
+      "claim_id": "06a223f5e2d9efe0",
+      "claim_text": "CD4+ T cells play a more significant immunomodulatory role in neutrophil clearance, macrophage polarization, MSC recruitment, and promoting bone-implant contact at the peri-implant site @avery2024.",
+      "section": "Results",
+      "citations": [
+        "avery2024"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.956701
+    },
+    {
+      "claim_id": "36a986fd7855136e",
+      "claim_text": "Deficiency of alphabeta T cells promotes macrophage polarization towards a pro-inflammatory phenotype and attenuates MSC recruitment and proliferation in vitro and in vivo @avery2025.",
+      "section": "Results",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.956723
+    },
+    {
+      "claim_id": "2520dfe58e643753",
+      "claim_text": "Deficiency of alphabeta T cells results in higher pro-inflammatory macrophage phenotype, lower anti-inflammatory macrophages, and significantly reduced recruitment and proliferation of MSCs in response to modified Ti @avery2025.",
+      "section": "Results",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.9567401
+    },
+    {
+      "claim_id": "187b8fef19327831",
+      "claim_text": "CD4+ T cells are a significant source of anti-inflammatory cytokines like IL-4, which is vital for suppressing pro-inflammatory macrophages and activating anti-inflammatory macrophages @avery2025.",
+      "section": "Results",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.956757
+    },
+    {
+      "claim_id": "32b6c6d267afdcf8",
+      "claim_text": "Macrophage polarization and T cell subsets are critical for the healing response and bone regeneration post-implantation, influencing tissue integration @avery2024.",
+      "section": "Results",
+      "citations": [
+        "avery2024"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.956774
+    },
+    {
+      "claim_id": "b0266e62b25d5af2",
+      "claim_text": "Macrophages, independently of their phenotype, are critical for the healing process and osseointegration of the Ti implant @avery2025.",
+      "section": "Results",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.95679
+    },
+    {
+      "claim_id": "4b5946bc4d567412",
+      "claim_text": "Short-term ablation of macrophages can reduce T cell recruitment, increase neutrophils, and increase pro-inflammatory cytokines in the peri-implant tissue, leading to decreased immunomodulatory IL-10 compared to macrophage-competent mice @avery2025.",
+      "section": "Results",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.956807
+    },
+    {
+      "claim_id": "a46f3b98ed1d0c42",
+      "claim_text": "Alphabeta T cell subsets play an important role in the inflammatory response to Ti implantation by modulating innate immune cells and facilitating MSC recruitment and proliferation for tissue integration and bone formation @avery2025.",
+      "section": "Results",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455690.956824
+    },
+    {
+      "claim_id": "a2fbb2fe8731a384",
+      "claim_text": "CD4+ and CD8+ T cells enhance bone formation and bone implant contact in response to modified Ti implants @avery2023.",
+      "section": "Discussion",
+      "citations": [
+        "avery2023"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455698.647657
+    },
+    {
+      "claim_id": "e5cdae18b9cc952b",
+      "claim_text": "Deficiency of CD4+ or CD8+ T cells promotes macrophage polarization towards a pro-inflammatory phenotype and attenuates MSC recruitment and proliferation in vitro and in vivo @avery2025.",
+      "section": "Discussion",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455698.647677
+    },
+    {
+      "claim_id": "519426a886ca272c",
+      "claim_text": "Deficiency of CD4+ or CD8+ T cells alters the peri-implant cytokine profile in response to modified Ti in vivo @avery2025.",
+      "section": "Discussion",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455698.647694
+    },
+    {
+      "claim_id": "e596a52c1b1704b5",
+      "claim_text": "Inflammatory cytokine production specific to T cells is attenuated in mice deficient in CD4+ or CD8+ T cells in response to modified Ti implants @avery2025.",
+      "section": "Discussion",
+      "citations": [
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455698.647711
+    },
+    {
+      "claim_id": "78052c3a3995c4a3",
+      "claim_text": "The role of CD4+ and CD8+ T cells in the foreign body response is significant, impacting macrophage polarization, MSC recruitment, and new bone formation @avery2023, @avery2024, @avery2025.",
+      "section": "Discussion",
+      "citations": [
+        "avery2023",
+        "avery2024",
+        "avery2025"
+      ],
+      "grounded": true,
+      "metadata": {},
+      "timestamp": 1778455698.647729
+    }
+  ],
+  "updated_at": 1778455698.707985
+}

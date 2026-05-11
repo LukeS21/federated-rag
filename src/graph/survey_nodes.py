@@ -57,6 +57,7 @@ PER_THEME_DRAFTER_MODEL = os.getenv("OLLAMA_SMALL_MODEL", "gemma4:e4b")
 PER_THEME_MODEL_B = os.getenv("OLLAMA_ALT_MODEL", "")
 CROSS_THEME_DRAFTER_MODEL = os.getenv("OLLAMA_LARGE_MODEL", "deepseek-v4-pro")
 GAP_ANALYSIS_MODEL = os.getenv("GAP_ANALYSIS_MODEL", PER_THEME_DRAFTER_MODEL)
+PER_THEME_MAX_WORKERS = int(os.getenv("PER_THEME_MAX_WORKERS", "2"))
 
 # Tokenizer for accurate context-window estimation (lazy init)
 _tokenizer: tiktoken.Encoding | None = None
@@ -223,8 +224,14 @@ def survey_retrieve_node(
         similarity_threshold=1.5,
         max_chunks=50,
         filter_references=True,
+        include_figures=True,
     )
     logger.info("Survey retrieve: %d chunks across papers (scope=%s)", len(chunks), scope)
+
+    # Separate figure chunks for downstream use
+    figure_chunks = [c for c in chunks if (c.get("metadata", {}) or {}).get("chunk_type") == "figure"]
+    text_chunks = [c for c in chunks if (c.get("metadata", {}) or {}).get("chunk_type") != "figure"]
+    logger.info("Survey retrieve: %d text + %d figure chunks", len(text_chunks), len(figure_chunks))
 
     updates: Dict[str, Any] = {}
     if scope in ("public", "both"):
@@ -462,6 +469,12 @@ def _run_debate_for_theme(
         if summaries:
             logger.info("  '%s': using %d entity evidence phrases", theme_name, len(summaries))
 
+    # ── Figure descriptions ─────────────────────────────────────────────
+    figure_descs = _extract_figure_descriptions(theme_chunks)
+    if figure_descs:
+        summaries.extend(figure_descs)
+        logger.info("  '%s': added %d figure descriptions to evidence", theme_name, len(figure_descs))
+
     # Dynamic evidence cap
     fitted_summaries = _fit_summaries_to_context(summaries, num_ctx)
     logger.debug("  '%s': %d/%d summaries fit in context window (num_ctx=%d)",
@@ -514,17 +527,24 @@ def _run_debate_for_theme(
         try:
             kg_snapshot = graph_storage.get_subgraph([])
             if kg_snapshot and kg_snapshot.get("nodes"):
-                kg_context = compute_graph_insights(kg_snapshot, query=query)
+                kg_context = compute_graph_insights(
+                    kg_snapshot, query=query,
+                    top_n_central=5, top_n_bridge=3,
+                )
                 if kg_context:
                     logger.debug("  '%s': KG insights (%d chars) injected into Drafter",
                                  theme_name, len(_kg_str(kg_context)))
         except Exception:
             pass
 
+    # Compress entities — the Drafter already receives full evidence summaries,
+    # so the entity list only needs to cue key entities and their attributes
+    compressed_entities = _compress_entities_for_drafter(theme_entities)
+
     drafter = _get_drafter(num_ctx, client_kwargs, model=drafter_model)
     draft = drafter.draft(
         query=f"{query} [Theme: {theme_name}]",
-        entities=theme_entities,
+        entities=compressed_entities,
         chunks=summary_chunks,
         citations=citations,
         kg_context=kg_context,
@@ -603,6 +623,65 @@ def _kg_str(kg: Any) -> str:
     if isinstance(kg, dict):
         return json.dumps(kg, default=str)
     return str(kg)
+
+
+def _compress_entities_for_drafter(theme_entities: Dict[str, Any]) -> Dict[str, Any]:
+    """Lightly compress entity JSON for the Drafter prompt — keep evidence but drop metadata.
+
+    The Drafter already receives full evidence summaries separately, so redundant
+    entity metadata (source_paper, chunk_index, cite_key) is stripped.  Evidence
+    phrases are preserved because the Drafter uses them to ground specific claims.
+
+    Returns a dict (same structure) with trimmed entities, not a plain string.
+    The ``SynthesisDrafter.draft()`` method expects a dict for the entities arg.
+    """
+    if not theme_entities:
+        return {}
+
+    compressed: Dict[str, Any] = {}
+    for key, ent_list in theme_entities.items():
+        items = ent_list if isinstance(ent_list, list) else [ent_list]
+        trimmed: List[Dict[str, str]] = []
+        for ent in items:
+            if not isinstance(ent, dict):
+                continue
+            keep = {}
+            for field in ("entity", "name", "direction", "conditions", "context",
+                          "model_system", "evidence"):
+                v = ent.get(field, "")
+                if v and str(v).strip():
+                    keep[field] = str(v).strip()
+            if keep:
+                trimmed.append(keep)
+        if trimmed:
+            compressed[key] = trimmed[:12]  # cap per category
+
+    return compressed
+
+
+def _extract_figure_descriptions(theme_chunks: List[Dict[str, Any]]) -> List[str]:
+    """Extract figure descriptions from theme_chunks for injection into evidence.
+
+    Returns a list of formatted figure description strings.
+    """
+    figure_texts = []
+    for ch in theme_chunks:
+        meta = ch.get("metadata", {}) or {}
+        if meta.get("chunk_type") != "figure":
+            continue
+        desc = ch.get("text", "").strip()
+        if not desc:
+            continue
+        caption = meta.get("caption", "")
+        page = meta.get("page_no", "?")
+        source = meta.get("source", "?")
+        if caption:
+            figure_texts.append(
+                f"[Figure from {source} (page {page}): {caption}] {desc}"
+            )
+        else:
+            figure_texts.append(f"[Figure from {source} (page {page})] {desc}")
+    return figure_texts
 
 
 def _format_single_paper_synthesis(
@@ -744,13 +823,42 @@ def survey_per_theme_synthesize_node(
                 except Exception as e:
                     logger.error("Dual-model group failed: %s", e)
     else:
-        # Single-model sequential fallback
-        logger.info("Single-model per-theme: %d themes (model=%s)",
-                     len(theme_items), PER_THEME_DRAFTER_MODEL)
-        for theme_name, paper_ids in theme_items:
-            result = _prepare_and_run(theme_name, paper_ids)
-            if result is not None:
-                theme_syntheses[theme_name] = result
+        # Same-model parallel (Phase 6.5): when only one per‑theme model is configured,
+        # use ThreadPoolExecutor to pipeline concurrent HTTP requests to Ollama.
+        # Same model = same KV cache → no memory multiplication.
+        # Ollama queues requests internally; pipeline overlap reduces per‑theme wall‑clock.
+        import time as _time
+        _parallel_t0 = _time.time()
+
+        max_w = max(1, PER_THEME_MAX_WORKERS)
+        if max_w > 1 and len(theme_items) > 1:
+            logger.info("Same-model parallel per-theme: %d themes, %d workers (model=%s)",
+                         len(theme_items), max_w, PER_THEME_DRAFTER_MODEL)
+            futures: Dict[Any, str] = {}
+            with ThreadPoolExecutor(max_workers=max_w) as executor:
+                for theme_name, paper_ids in theme_items:
+                    future = executor.submit(_prepare_and_run, theme_name, paper_ids)
+                    futures[future] = theme_name
+                for future in as_completed(futures):
+                    theme_name = futures[future]
+                    try:
+                        result = future.result()
+                        if result is not None:
+                            theme_syntheses[theme_name] = result
+                    except Exception as e:
+                        logger.error("  '%s': synthesis failed — %s", theme_name, e)
+        else:
+            logger.info("Single-model sequential per-theme: %d themes (model=%s)",
+                         len(theme_items), PER_THEME_DRAFTER_MODEL)
+            for theme_name, paper_ids in theme_items:
+                result = _prepare_and_run(theme_name, paper_ids)
+                if result is not None:
+                    theme_syntheses[theme_name] = result
+
+        _parallel_elapsed = _time.time() - _parallel_t0
+        logger.info("Per-theme wall-clock: %.1fs (%d themes, %s)",
+                     _parallel_elapsed, len(theme_items),
+                     "parallel" if (max_w > 1 and len(theme_items) > 1) else "sequential")
 
     return {"per_theme_syntheses": theme_syntheses}
 

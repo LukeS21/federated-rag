@@ -8,6 +8,10 @@ Phase 4 Live Citation & Survey Mode (real Zotero API, systematic field mapping) 
 Phase 5 Security Hardening & Air‑Gap (Docker isolation, boundary scrubber, penetration testing)   ✅ Complete (May 2026)
 Phase 5.5 Local Model Optimization & Speed (dense claims, debate simplification, model tiering)   ✅ Complete (May 2026)
 Phase 6 UI, Polish & Deployment (Streamlit, GLiNER-PII, correctness benchmarking layer)   ✅ Core Complete (May 2026)
+Phase 6.5 Gap Closure (parallelization, compression, cache versioning, security fuzzer)   ✅ Complete (May 2026)
+Phase 7 Vision Pipeline & Multi‑Turn Synthesis (figure extraction, vision model, section writing, claim ledger)   ✅ Complete (May 2026)
+Phase 8 Publication-Scale Retrieval   ⬜ Not Started
+Phase 9 Internet & Literature Discovery   ⬜ POC built, full infrastructure deferred to Phase 8
 ```
 ___
 
@@ -983,32 +987,81 @@ quality, so we built our own validation infrastructure.
 | API comparison script | `phase5_api_comparison.py` — framework for DeepSeek v4-pro vs local Ollama comparison (not yet executed with `--live`) | ✅ Built |
 | Dataset generation script | `generate_benchmark_dataset.py` — automated 80-100 sample QA pair generator via LLMs + RAGAS (not yet executed) | ✅ Built |
 
-#### Benchmarking results (latest run, hybrid retrieval enabled)
+#### Benchmarking results (May 2026, 6‑paper corpus, hybrid retrieval)
+
+> ⚠ **Scale caveat**: All benchmarks below are from a 6‑paper corpus with heavy
+> topical overlap from a single lab's research program.  At this scale, anchoring
+> scores measure traceability (does each claim match *some* evidence chunk?) rather
+> than factual accuracy (does it cite the *right* evidence and state findings
+> precisely?).  88% of claims are grounded because nearly every claim finds a chunk
+> with matching keywords — this is expected at small scale and will drop as the
+> corpus diversifies.  None of these metrics should be interpreted as production‑grade
+> quality certification.  They are proof‑of‑concept validation that the evaluation
+> framework works.  Definitive benchmarking requires Phase 8 scale (100+ papers).
 
 ```
-Anchoring (hybrid BM25+ChromaDB): 0.993 mean (99.2% grounded)
-Calibration: VALID  (TRUE 5.0/5, FALSE 1.0-1.2/5)
-Faithfulness (deepseek-chat):    4.7/5 grounded, 5.0/5 inferential
-Faithfulness (deepseek-v4-pro):  4.5/5 grounded, 4.6/5 inferential
-Gap novelty (Discussion):        80% (8/10 gaps don't match Discussion sections)
-Gap quality (v4-pro):            4.5/5 novelty, 4.8/5 actionability
-False-claim detection:           3/3 fabricated claims flagged as ungrounded
-OOC detection:                   3/3 out-of-corpus queries score < 0.40
-Grounded/inferential:            88% grounded / 12% inferential (chunk-level)
+Tier A — Automated (phase5_benchmark.py):
+  Anchoring (hybrid BM25+ChromaDB): 0.993 mean (99.2% grounded)
+  Claim density:                     118 claims across 22K chars (~187 chars/claim)
+  Gap novelty (Discussion):          80% (8/10 gaps don't match Discussion sections)
+  Grounded/inferential:              88% grounded / 12% inferential (chunk-level)
+  Entity appearance:                 36.2% of pre-extracted entities surface in output
+  Debate invocation:                 0% (no theme below 0.50 threshold)
+
+Tier A+ — Correctness (test_correctness.py):
+  False-claim detection:             3/3 fabricated claims flagged as ungrounded
+  OOC detection:                     3/3 out-of-corpus queries score < 0.40
+  Discussion-overlap:                80% gap novelty (validated against 64 Discussion chunks)
+
+Tier B — LLM-as-Judge (ragas_correctness.py):
+  Calibration:                       VALID  (TRUE 5.0/5, FALSE 1.0-1.2/5)
+  Faithfulness (deepseek-chat):      4.7/5 grounded, 5.0/5 inferential
+  Faithfulness (deepseek-v4-pro):    4.5/5 grounded, 4.6/5 inferential
+  Gap quality (v4-pro):              4.5/5 novelty, 4.8/5 actionability
+
+1:1 API vs Local — full survey‑graph comparison (phase5_api_comparison.py):
+  Metric                        DeepSeek (chat+v4-pro)    Local (gemma4+qwen3.6)
+  ────────────────────────────  ──────────────────────    ───────────────────────
+  Avg Anchor Score              0.9690                    0.9470 (+0.022 delta)
+  Per‑theme claims              119                       96
+  Elapsed time                  212 s (3.5 min)           524 s (8.7 min)
+  Speed ratio                   1× (baseline)             2.5× slower
+  Cost                          ~$0.50                    free / air‑gapped
 ```
 
-#### Known gaps in Phase 6 (not yet built)
+#### 1:1 API vs local comparison notes
 
-| Item | Priority | Effort |
+The comparison runs the **exact same** `build_survey_graph()` pipeline for both providers — same retrieval, same thematic clustering, same per‑document extraction, same synthesis graph. Only the LLM provider changes. Model tiering: cloud uses `deepseek‑chat` for light tasks (per‑theme, extraction, decomposition) and `deepseek‑v4‑pro` for heavy tasks (cross‑theme, gap analysis). Local uses `gemma4:e4b` for light and `qwen3.6:35b` for heavy as configured in `.env`. Prompt compression (21% reduction, entities stripped of redundant metadata) was active on the local side. Run with `python phase5_api_comparison.py --run local` to re‑run local against saved cloud results without re‑paying API credits.
+
+#### Known gaps in Phase 6 (May 2026 — all addressed)
+
+| Item | Priority | Status |
 |---|---|---|
-| API vs local comparison (execute `--live`) | Medium | ~10 min + $1-2 API cost |
-| 80-100 sample dataset (execute generation) | Medium | ~2h LLM calls + 30 min spot-check |
-| Security scrubber fuzzer | Low | ~500 lines |
-| Cache key versioning | Low | ~20 lines |
-| Multi-run variance test | Low | Rerun query 3×, report mean ± std |
-| Configuration comparison matrix | Low | Deferred until active config question exists |
-| Neo4j adapter | Low | Deferred to Phase 8 (publication scale) |
-| Docs / quickstart guide | Low | Write when system is stable for external use |
+| API vs local comparison (1:1 survey graph) | High | ✅ Built + executed — anchor delta -0.0033 first run, +0.022 compressed |
+| Security scrubber fuzzer | High | ✅ Built + executed — 100% regex, 12% GLiNER FPR (58% → 12% after label fix) |
+| Cache key versioning | High | ✅ Built — `src/cache/__init__.py` with `CACHE_VERSION="v1"` |
+| Multi-run variance test | Medium | ✅ Script built (`phase6_multi_run.py`), cached single-run run |
+| Prompt compression (entity + KG) | Medium | ✅ Built — 21% prompt reduction, anchor delta +0.022, claims delta 18% |
+| Per-theme parallelization | Medium | ✅ Built — `PER_THEME_MAX_WORKERS=2`, ~23% faster per-theme wall clock |
+| GLiNER-PII label restriction | Medium | ✅ Built — dropped high-FPR labels, FPR 58% → 12% |
+| 1:1 comparison refactor | Medium | ✅ Built — both sides run `build_survey_graph()`, cloud results persist to disk |
+| 80-100 sample dataset | Low | Deferred to Phase 8 (script exists, not executed) |
+| Configuration comparison matrix | Low | Deferred |
+| Neo4j adapter | Low | Deferred to Phase 8 (publication scale) |
+| Docs / quickstart guide | Low | Deferred |
+
+#### Phase 6.5 additions (May 2026 — built during gap closure)
+
+| Addition | File(s) | Rationale |
+|----------|---------|-----------|
+| Per-theme parallel (same-model) | `src/graph/survey_nodes.py` | `PER_THEME_MAX_WORKERS=2` (env‑var configurable). Single‑model `ThreadPoolExecutor` pipelines concurrent HTTP requests to Ollama — same KV cache, no memory multiplication. ~23% faster per‑theme wall clock (161 s vs 210 s for 6 themes). |
+| Prompt compression | `src/graph/survey_nodes.py` | New `_compress_entities_for_drafter()` strips redundant entity metadata (source_paper, chunk_index, cite_key) while preserving evidence phrases, direction, and context. Capped at 12 entities/category. KG insights reduced to top‑5 central / top‑3 bridge nodes. Net: ~21% prompt reduction (57 K → 45 K chars). Anchor delta +0.022 vs uncompressed; claims delta 18% (96 vs 117). Full‑scale validation deferred to Phase 8. |
+| GLiNER-PII label restriction | `src/security/gliner_privacy.py` | Default labels narrowed to person, phone, email, id, ssn, credit card, patient id, url, ip — removed medical condition, organization, location, date, address, hospital. FPR on biomedical text: 58% → 12%. Detection rate on context‑dependent PHI: 50% → 25% (trading breadth for precision). |
+| 1:1 API vs local comparison | `phase5_api_comparison.py` | Replaced the old `--live` mode (simplified manual pipeline) with `--run cloud|local|both` that runs the **exact same** `build_survey_graph()` for both providers. Cloud results saved to `projects/default/comparison/cloud.json` for persistent re‑comparison. Model tiering: cloud uses deepseek‑chat for per‑theme / v4‑pro for cross‑theme+gap; local preserves `.env` config. |
+| Security scrubber fuzzer | `phase6_security_fuzzer.py` | 500+ lines, 9 pytest tests, 1000+ random PHI‑like samples across 10 categories. Tests both regex BoundaryScrubber and GLiNER‑PII with overlap analysis. Standalone + pytest‑compatible. |
+| Multi‑run variance | `phase6_multi_run.py` | 2 pytest tests. `--skip-run` reads cached data instantly. Live mode clears L1 cache per run and reports CoV (coefficient of variation) and per‑run anchoring distribution. |
+| Cache key versioning | `src/cache/__init__.py` | `CACHE_VERSION = "v1"` prepended to all cache hash inputs in `llm_cache.py` and `query_cache.py`. Bump to invalidate stale entries after prompt or logic changes. |
+| DOB YYYY‑MM‑DD pattern | `src/security/boundary_scrubber.py` | Added second DOB pattern catching YYYY‑MM‑DD format (was 33% detection → 100%). |
 
 #### Lessons learned in Phase 6
 
@@ -1047,41 +1100,218 @@ Grounded/inferential:            88% grounded / 12% inferential (chunk-level)
 - **80-100 sample automated dataset**: Script exists but generation requires ~2h LLM calls. More valuable at Phase 8 when the corpus is larger and diverse. Deferred.
 - **Config comparison matrix**: Current config (gemma4:e4b + qwen3.6:35b + 0.50 threshold + dense claims) is stable. Matrix is useful when actively evaluating alternatives. Deferred.
 
-### Phase 7: Vision Pipeline & Multi-Turn Synthesis (Weeks 14-15)
+### Phase 7 Status (May 2026)
 
-Goal: Analyze figures and images from PDFs and support iterative section writing for publication-grade output.
+**Complete.**  All six deliverables built, tested, and wired into the pipeline:
 
-Deliverables:
+| Deliverable | Implementation | Tests |
+|------------|---------------|-------|
+| Figure extraction | `src/vision/figure_extractor.py` — Docling `generate_picture_images=True` + `do_picture_classification=True` | 7 |
+| Smart figure filtering | `src/vision/figure_filter.py` — Docling `DocumentFigureClassifier` (65% weight) + caption/size/page soft hints. 80.9% keep rate, zero data figures lost. | 23 |
+| Vision model integration | `src/vision/vision_descriptor.py` — gemma4:e4b via Ollama REST API. No model rotation needed (already loaded for text). Reads IL-6, CD4, CD8, cytokine names directly from figure labels. | 13 |
+| Figure-to-text embedding | `src/vision/figure_embedder.py` — ChromaDB with `chunk_type="figure"`. `include_figures=True` on `HybridRetriever.query()`. | 7 |
+| Multi-turn section writing | `src/graph/sectioned_survey_graph.py` — 8-node LangGraph: init → retrieve → draft → review → [route → retrieve | assemble] → scrub. IMRaD section iteration with interrupt-at-review. | 1 |
+| Claim/citation ledger | `src/synthesis/claim_ledger.py` — SHA-256 dedup, @citation parsing, coverage reporting, per-section validation, JSON persistence. Cross-section duplicate filtering prevents re-stating the same claim. | 14 |
+| Vision ingest integration | `src/vision/vision_ingest.py` — `vision_ingest_pdf()` called during app.py PDF ingestion. Figures extracted, described, and embedded. | — |
+| Sectioned Survey in UI | `app.py` — "Sectioned" mode in the mode selector, sectioned display tabs, ledger integration. | — |
 
-Vision ingestion pipeline: extract figures from PDFs (Docling already supports figure extraction via ``generate_page_images=True`` and ``TableItem.get_image()``). Convert figures and tables to structured text via a vision-capable model.
+**Model selection:** gemma4:e4b is the default vision model. It's already loaded as the fast-tier text model during ingestion, so figure descriptions add zero model rotation overhead. At ~17s per figure, it identifies IL-6, CD4, CD8, cytokines, WT/knockout groups, and significance markers directly from figure labels — significantly better than llava:7b (generic "scientific poster") and qwen3-vl:4b (generic "gene expression").
 
-Vision model integration: load a lightweight multimodal model (e.g., LLaVA 7B, Qwen-VL, or Granite 4.1 vision variants) alongside the text pipeline. Model rotation: unload text model, load vision model per figure, swap back. Target: ~3-5GB vision model, ~5-15s per figure.
+**Citation fix:** The Drafter system prompt previously hardcoded `@author2025` as an example format, causing the LLM to hallucinate that citation key. Fixed to use only provided citation keys. Cache version bumped to v3.
 
-Figure-to-text embedding: embed generated figure descriptions alongside chunk text for hybrid retrieval, enabling cross-modal search.
+##### Phase 7 Lessons Learned
 
-Multi-turn section writing: extend LangGraph with stateful section tracking. User iterates sections (Introduction → Methods → Results → Discussion), each turn carries forward prior citations, claims, and terminology. Knowledge graph anchors cross-section consistency.
+**1. Vision model selection matters dramatically for biomedical figures**
 
-Claim/citation ledger: programmatic tracking of every claim→citation mapping across sections. Prevents duplicate claims, ensures citation coverage, flags ungrounded assertions during multi-section writing.
+We compared three multimodal models on the same actual BME figures. llava:7b (2023) produced generic descriptions ("scientific poster with graphs"), qwen3-vl:4b produced mid-quality ("gene/protein expression"), and gemma4:e4b produced highly specific descriptions naming IL-6, CD4, CD8, cytokines, WT/knockout groups, and significance markers directly from figure labels. The better model was already loaded as our fast-tier text model, eliminating the need for model rotation entirely. **Decision**: Default vision model = gemma4:e4b. No rotation overhead. Better accuracy than dedicated vision-only models.
 
-Memory impact: vision model loaded separately (unload text model first). Peak ~26GB (text model 23GB or vision model 5GB, never both). Fits 36GB.
+**2. num_predict breaks multimodal Ollama models (known bug)**
 
-### Phase 8: Publication-Scale Retrieval (Weeks 16-17)
+Passing `num_predict` in the options dict to Ollama's `/api/generate` causes multimodal models to return empty responses with `done_reason=length`. `temperature` alone works fine. We worked around this by truncating the response after generation instead of limiting tokens at the API level. **Decision**: VisionDescriptor sends `temperature` only; max_tokens enforced via post-generation truncation.
 
-Goal: Scale from 5-10 papers to 100s-1000s with sub-minute query times.
+**3. Docling's built-in figure classifier is production-grade**
 
-Deliverables:
+The `DocumentFigureClassifier-v2.5` model (loaded via `do_picture_classification=True`) correctly identifies bar charts, logos, icons, thumbnails, tables, and scatter plots with >0.99 confidence. At 65% weight in our filtering score, it correctly filtered all 9 extraneous images (3 logos, 3 page thumbnails, 3 icons) from 47 while keeping all 38 data figures. Zero data loss. **Decision**: Classification-first filtering is reliable; size/page/caption are soft auxiliary hints only.
 
-Hierarchical thematic clustering: two-level clustering for large corpora. Level 1: broad topic assignment (cheap, embedding-based). Level 2: per-topic fine-grained themes (LLM-assisted if needed).
+**4. Figure captions MUST be resolved from document text items, not picture annotations**
 
-Per-theme top-K retrieval: instead of loading all evidence from all papers into each theme's context, retrieve only the top-K most relevant chunks per theme via hybrid search (dense + sparse). This eliminates the O(n_papers) context scaling problem.
+Docling's `PictureItem.annotations` contains classification metadata (not captions). Real figure captions are in `PictureItem.captions` which reference `DoclingDocument.texts[idx].text` via `#/texts/{idx}` refs. Getting this wrong caused every figure to show raw classification strings as captions. **Decision**: Always resolve `picture.captions → doc.texts[idx].text` for real captions. Skip `picture.annotations` entirely for caption extraction.
 
-Scalable graph storage: migrate from NetworkX JSON (≤10K edges) to Neo4j adapter for 100K+ edges. Enable graph traversal queries (centrality, bridging, path analysis) across entire paper corpora.
+**5. Monkey-patching imports must happen before the target class is imported**
 
-Corpus-level claim extraction: pre-extract claims from all papers at ingest time, indexed for fast retrieval. Query-time synthesis draws from pre-indexed claim store rather than re-extracting entities per query.
+The `include_figures=True` extension to `HybridRetriever.query()` is applied at module import time in `src/vision/figure_embedder.py`. Any file that uses `HybridRetriever.query(include_figures=True)` must import `figure_embedder` BEFORE importing `HybridRetriever`. Failing to do this causes `TypeError: unexpected keyword argument 'include_figures'`. **Decision**: Document this constraint; always import `src.vision.figure_embedder` first in scripts that use the extended API.
 
-Multi-tier caching: extend the existing 3-level cache (L1: decomposition, L2: per-theme, L3: cross-theme) with L0: corpus-level claim index and L4: publication-section output cache.
+**6. Claim ledger SHA-256 deduplication works across sections**
 
-Target performance: 30-90s per query on 1000 papers (vs. current 5-8 min on 5 papers) via retrieval-augmented synthesis + multi-tier caching.
+Normalizing claim text (lowercase, collapse whitespace, SHA-256 first 16 chars) correctly detects duplicate claims across Introduction and Results sections. At 6 papers, the pipeline prevented 5 duplicate claims across our sectioned survey run. **Decision**: Stable claim IDs via content hashing are reliable for cross-section dedup.
+
+**7. Keyword-based novelty detection is insufficient for literature discovery**
+
+The Phase 9 POC used a static list of ~50 biomedical keywords for substring matching. This correctly identified 87% of external papers as novel, but ranked "rat" as the top keyword because it appears frequently in biomaterials papers — even though our lab uses mouse models. An LLM-based Coverage Check node is planned to replace this: it would generate targeted PubMed queries per gap and score returned abstracts for domain-specific novelty. **Decision**: Static keyword extraction is POC-only. Phase 9's Coverage Check node (LLM-gated) replaces it.
+
+**8. Baseline comparison validates the pipeline architecture**
+
+Comparing the full pipeline against a naive single-pass RAG (retrieve → draft, no debate/KG/clustering) showed the pipeline produces 27× more claims (134 vs 5) with essentially identical anchoring quality (0.993 vs 1.000). The naive RAG's perfect anchoring is misleading — it's easy to ground 5 safe claims. The pipeline maintains grounding across 134 claims spanning 5 themes. **Decision**: The complex architecture earns its keep. Publish the baseline alongside every Phase 8 benchmark.
+
+##### Novel Approaches Invented in Phase 7
+
+1. **Vision model reuse eliminates rotation** — Using the already-loaded fast-tier text model (gemma4:e4b) for figure description avoids the entire model load/unload cycle the architecture originally planned. This saves ~15–30s per query and simplifies the pipeline. Generalizable pattern: check whether existing models support multimodal input before pulling dedicated vision models.
+
+2. **Docling classification-first figure filtering** — Using a trained image classifier (not heuristics) as the primary gate for figure relevance. Size, position, and caption are weighted at only 35% combined. The classifier is deterministic, runs locally, and produces 0.99+ confidence on bar charts. Novel for multi-document biomedical pipelines where logo/journal-name filtering is critical.
+
+3. **Claims-as-content-addressed ledger** — SHA-256 hashing of normalized claim text as a stable deduplication key across sections. This is simpler and more reliable than embedding-based similarity (which would miss near-duplicates with different wording). The ledger also serves as a cross-session persistence layer, enabling incremental section writing across multiple sessions.
+
+4. **Cross-paper claim provenance via compact identifiers** — 16-char hex digests from SHA-256 of normalized claim text. Short enough for log output, long enough to be collision-resistant for 100K+ claims. Enables fast duplicate detection without storing full claim text in memory.
+
+### Phase 8: Publication-Scale Retrieval (Weeks 16-17) — Not Started
+
+Goal: Scale from 6 papers to 100s-1000s with sub-minute query times.
+
+#### Phase 8 Initiation Plan
+
+**1. Neo4j adapter (~4-6 hrs)**
+- Implement `Neo4jStorage` class satisfying the existing `BaseGraphStorage` interface
+- Migration: one config value (`graph_backend: "neo4j"`) swaps all consumers
+- Key Cypher queries: `get_neighbors`, `get_subgraph`, `query_relationships`
+- Connect to a local Neo4j container or Neo4j Aura free tier
+- Expected: handles 100K+ edges vs NetworkX's ~10K edge ceiling
+
+**2. Hierarchical clustering (~3-5 hrs)**
+- Level 1: broad topic assignment via embedding similarity (already partially done)
+- Level 2: per-topic fine-grained themes via LLM when needed
+- Reuses existing `ThematicClusterer` with tiered approach
+- Avoids O(n_papers) context explosion by screening at Level 1
+
+**3. Per-theme top-K retrieval (~2-3 hrs)**
+- Retrieve top-K chunks per theme via hybrid search (dense + sparse)
+- Already partially implemented in `_fit_summaries_to_context()`
+- Need: per-theme retrieval scoping, dynamic K based on theme complexity
+
+**4. Corpus-level claim index (L0 cache) (~3-4 hrs)**
+- Pre-extract claims from all papers at ingest time
+- Index claims in a dedicated ChromaDB collection (`corpus_claims`)
+- Query-time: retrieve from claim index vs re-extracting entities
+- Requires: extending `PreExtractor` to also produce claim-level extractions
+
+**5. Multi-tier caching L0-L4 (~2-3 hrs)**
+- L0: corpus-level claim index (dedicated ChromaDB collection)
+- L1: query decomposition (existing)
+- L2: per-theme synthesis (existing)
+- L3: cross-theme synthesis (existing)
+- L4: publication-section output cache (new — caches sectioned manuscript outputs)
+
+**6. Scale benchmarking (~2-4 hrs)**
+- Required: a corpus of 100+ diverse biomedical papers
+- Run the full pipeline at scale, measure: anchoring drift, inferential rate, latency
+- Compare against the 6-paper baseline from Phase 6
+- Document how scores change as the corpus diversifies (currently 88% grounded at 6 papers)
+
+**Initiation order:**
+1. First: acquire/generate 100+ paper corpus (PubMed/Semantic Scholar output)
+2. Then: Neo4j adapter (unblocks graph scalability)
+3. Then: Hierarchical clustering + top-K retrieval (unblocks context scaling)
+4. Then: L0 cache + L4 cache (unblocks latency scaling)
+5. Finally: Full-scale benchmark (validates everything)
+
+Target performance: 30-90s per query on 1000 papers (vs. current 5-8 min on 5 papers).
+
+### Phase 9 Preview: Internet & Literature Discovery Integration (May 2026 — POC built)
+
+Goal: Extend the pipeline with dynamic literature discovery — the system identifies knowledge gaps after local retrieval, queries external APIs (PubMed, Semantic Scholar) for relevant papers, ingests full‑text PDFs, integrates into ChromaDB/Zotero/KG, and re‑synthesizes with the expanded evidence base.
+
+#### POC Status (May 2026)
+
+**Built:**
+- `src/retrieval/pubmed.py` — thin PubMed E-utilities client (esearch, efetch, XML parsing)
+- `src/retrieval/semantic_scholar.py` — thin Semantic Scholar API client (search, paper lookup, DOI lookup)
+- `phase9_pubmed_demo.py` — Literature discovery POC: searches both APIs, compares against local corpus, reports novelty rate and keyword gaps. Results cached to `projects/default/literature_discovery.json`.
+
+**Initial POC results (May 2026, Semantic Scholar, 5 queries):**
+- 87% of papers found are novel (not in our 6-paper corpus)
+- Top novel keywords: rat (12), implant (9), surface (9), titanium (7), macrophage (5)
+- Shows clear coverage gaps in our 6-paper, single-lab corpus
+
+**What's NOT built (requires Phase 8 infrastructure):**
+- Full ingestion pipeline (auto-download PDFs → parse → embed → re-synthesize)
+- Coverage Check LLM node (assess per-theme coverage, generate targeted queries)
+- Auto-retry loops (re-search, re-fetch, re-synthesize)
+- Institutional proxy PDF access (EZProxy config exists, unused)
+
+#### Architecture
+
+#### Architecture
+
+```
+Query → Decompose → Coverage Check → Local Retrieve + External Fetch → Merge → Cluster → Extract → Synthesize
+```
+
+The new **Coverage Check** node uses an LLM to assess whether the local corpus covers each theme adequately:
+
+- Analyzes per‑theme evidence summaries, extracted entities, methods, model systems
+- Identifies specific knowledge gaps (e.g., \"no osteoblast data in obese Ti models\")
+- Generates targeted PubMed queries per gap (NOT broad theme queries)
+- LLM scores returned abstracts for novelty per gap (yes/partial/no)
+- Stops when all gaps have ≥1 novel paper, OR 2 rounds, OR LLM declares sufficiency
+
+No hardcoded thresholds — the LLM is the gatekeeper, not a numeric K.
+
+#### API Strategy
+
+| API | Provides | Rate Limit | Auth |
+|-----|----------|-----------|------|
+| **PubMed E‑utilities** (NCBI) | Abstracts, PMIDs, MeSH terms, PMC OA full‑text links | 3 req/s (no key), 10 req/s (with key) | Free, optional key |
+| **Semantic Scholar** | Citation graph, TLDR summaries, OA PDF links | 100 req/s | Free API key |
+| **Unpaywall** | Legal OA PDF links for paywalled papers | Basic: free | Optional for limits |
+| **PMC OA Service** | Full‑text XML/PDF for ~4M open‑access papers | REST API | Free |
+
+#### Full-Text Acquisition
+
+Getting from PMID/DOI → ingested PDF uses a resolution chain:
+
+1. **PubMed search** → PMIDs + abstracts
+2. **PMC OA Service** → free full‑text XML/PDF for OA papers
+3. **Unpaywall API** → legal OA versions of paywalled papers
+4. **Zotero (`pyzotero`)** → create item, trigger \"Find Available PDF\" (checks Unpaywall, OA Button, publisher OA)
+5. **Institutional proxy** (EZProxy) → route paywalled PDF requests through institutional access (configurable via `INSTITUTIONAL_PROXY_URL` env var)
+6. **Zotero Connector** (browser extension, manual fallback) → captures paywalled papers from publisher sites via institutional SSO
+
+Zotero is the integration hub: already handles metadata from PMID/DOI, PDF retrieval from multiple sources, and storage. The pipeline only needs to create Zotero items and read downloaded PDFs.
+
+#### Institutional Access
+
+- **EZProxy**: Most universities provide EZProxy URLs (e.g., `https://proxy.library.vcu.edu/login?url=`). Python requests can prepend this URL to publisher PDF requests, routing through institutional authentication.
+- **Zotero Connector + browser**: For publishers that block automated access (ScienceDirect, etc.), the Zotero Connector browser extension with institutional SSO is the fallback — one‑click PDF capture.
+- **Configuration**: `INSTITUTIONAL_PROXY_URL` and optional publisher credentials live in `.env`. Per‑lab configurable in production.
+
+#### Prerequisites (Phase 8 deliverables needed first)
+
+- **Neo4j graph storage**: Track provenance across local + external papers (100K+ edges)
+- **Hierarchical clustering**: Handle 1000+ paper corpora without O(n) context explosion
+- **Corpus‑level claim index (L0 cache)**: Instant coverage assessment without re‑reading all papers
+- **Multi‑tier caching L0‑L4**: Cache external searches to avoid re‑fetching the same papers
+
+#### Immediate proof‑of‑concept (built in Phase 7b — COMPLETE)
+
+- ✅ `src/retrieval/pubmed.py` — thin wrapper around NCBI E‑utilities (esearch, efetch)
+- ✅ `src/retrieval/semantic_scholar.py` — thin wrapper around Semantic Scholar API
+- ✅ Standalone script: `phase9_pubmed_demo.py` — \"given a theme query, search, show what novel info would be added\"
+- ✅ Measures coverage delta without modifying the pipeline graph
+- ✅ Results cached to `projects/default/literature_discovery.json`
+
+#### Baseline Comparison (built in Phase 7b — COMPLETE)
+
+`phase7_baseline_comparison.py` compares the full multi-agent pipeline against a naive single-pass RAG baseline:
+
+| Metric | Naive RAG | Full Pipeline |
+|--------|-----------|---------------|
+| Claims | 5 | 134 (26.8× more) |
+| Anchoring | 1.000 | 0.993 |
+| Ungrounded | 0 | 1 (0.7%) |
+| Unique citations | 3 | 6 |
+| Output | 959 chars | 28,467 chars |
+| Latency | ~30s | ~500s |
+
+> ⚠ **Interpretation caveats**: The naive RAG's anchoring score of 1.000 is misleading — it's easy to get perfect grounding when you only produce 5 safe, conservative claims. The full pipeline's 0.993 anchoring across 134 claims is the real achievement. At 6-paper scale, both approaches are well-grounded; the pipeline's value is in coverage breadth and cross-paper synthesis, not grounding precision. The gap will widen at Phase 8 scale (100+ papers).
 
 ## 11. Component Interfaces
 11.1 Hybrid Retriever
@@ -1182,12 +1412,18 @@ Air‑gap enforcement: Secure‑scope queries never reach public network
 
 ASCII enforcement: Final output contains zero non-ASCII characters
 
-### 12.3 Benchmarking Strategy (Phase 6 — built and validated)
+### 12.3 Benchmarking Strategy (Phase 6 — built and validated at 6‑paper scale)
+
+> ⚠ These benchmarks validate the evaluation framework, not production quality.
+> All results are from a 6‑paper corpus.  Scale‑level benchmarking (100+ papers)
+> is deferred to Phase 8.
 
 The original plan (20–30 human‑annotated QA pairs with manual rubric scoring) was
 redesigned for a single‑developer workflow.  All three tiers defined in the Phase 5
-handoff have been built, integrated, and validated.  Results from the latest run
-(May 2026, 6‑paper corpus, hybrid retrieval enabled):
+handoff have been built, integrated, and validated (the evaluation framework works —
+meaning it correctly discriminates grounded claims from fabricated claims, detects
+out‑of‑corpus queries, and produces calibrated LLM‑as‑Judge scores).  Results from
+the latest run (May 2026, 6‑paper corpus, hybrid retrieval enabled):
 
 **Tier A — Automated programmatic** (`phase5_benchmark.py`):
 - Anchoring score distribution: mean 0.993, min 0.964, std 0.016 (99.2% grounded)

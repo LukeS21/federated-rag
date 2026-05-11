@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Phase 5 → 6 API vs Local Comparison.
+"""Phase 6 API vs Local Comparison — true 1:1 survey‑graph comparison.
 
-Compares synthesis quality between DeepSeek v4-pro API and local Ollama
-models on 3-5 cached queries.  Measures anchoring scores, claim counts,
-entity appearance rate, and latency.
+Runs the **exact same survey graph** (``build_survey_graph``) through both
+local Ollama and DeepSeek API, to produce an apples‑to‑apples comparison of
+per‑theme anchoring scores, claim counts, latency, and decomposition quality.
 
-Two modes:
-  1. Cached comparison: Compare two cached local runs (default, no API cost)
-  2. Live API comparison: Re-run cached queries through DeepSeek API (--live)
+Model tiering (consistent with local Ollama split):
+  Cloud (DeepSeek):
+    Light tasks (per‑theme, extraction, decomposition) → deepseek‑chat
+    Heavy tasks (cross‑theme, critic, arbiter, gap analysis) → deepseek‑v4‑pro
+  Local (Ollama):
+    Light → gemma4:e4b (OLLAMA_SMALL_MODEL)
+    Heavy → qwen3.6:35b (OLLAMA_LARGE_MODEL)
+    Gap  → gemma4:e4b (GAP_ANALYSIS_MODEL) — but gap uses deepseek‑v4‑pro for cloud
+
+Cloud results persist to disk so local can be re‑run any number of times
+without re‑paying API credits.
 
 Usage:
-    python phase5_api_comparison.py                    # Compare cached local results
-    python phase5_api_comparison.py --live             # Live DeepSeek API comparison
-    python phase5_api_comparison.py --queries 3        # Number of queries to compare
-    python -m pytest phase5_api_comparison.py -v       # Regression guard
+    python phase5_api_comparison.py --run cloud          # DeepSeek (~$1, ~5 min)
+    python phase5_api_comparison.py --run local          # Ollama (~5‑8 min, reads saved cloud)
+    python phase5_api_comparison.py --run both           # Both sequentially (~10‑13 min)
+    python -m pytest phase5_api_comparison.py -v         # Regression guard
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -35,7 +44,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from src.anchoring.evidence_check import decompose_claims, compute_anchoring_score
 from src.unicode_map import scrub_unicode
 from src.retrieval.chroma_client import ChromaClient
+from src.retrieval.bm25_index import BM25Index
+from src.retrieval.hybrid_retriever import HybridRetriever
+from src.graph.networkx_json_storage import NetworkXJSONStorage
+from src.graph.graph_builder import build_survey_graph
+from src.ingestion.pdf_parser import PDFParser
+from src.ingestion.pre_summarizer import PreSummarizer
+from src.ingestion.pre_extractor import PreExtractor
+from src.citation_manager.citekey_utils import (
+    resolve_cite_key,
+    parse_paper_metadata,
+    try_zotero_add,
+)
+from src.ingestion.pdf_parser import (
+    compute_content_hash,
+    extract_title_from_chunks,
+    check_content_duplicate,
+    save_content_hash,
+)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 logger = logging.getLogger("api_comparison")
 
 # ── ANSI ───────────────────────────────────────────────────────────────────
@@ -47,53 +79,451 @@ MAGENTA = "\033[95m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 
+# ── Paths ──────────────────────────────────────────────────────────────────
+PROJECT_DIR = Path("projects/default")
+COMPARISON_DIR = PROJECT_DIR / "comparison"
+COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
+CHROMA_PATH = str(PROJECT_DIR / "chroma_data")
+BM25_CORPUS_PATH = str(PROJECT_DIR / "bm25_corpus.json")
+GRAPH_PATH = str(PROJECT_DIR / "project_graph.json")
+QUERY_CACHE_DIR = PROJECT_DIR / "query_cache"
 
-# ── Query loader ──────────────────────────────────────────────────────────
+NUM_CTX = 16384
+LLM_TIMEOUT = 900
+os.environ.setdefault("LLM_TIMEOUT", str(LLM_TIMEOUT))
+CLIENT_KWARGS = {"timeout": LLM_TIMEOUT}
 
-def load_cached_queries(project_dir: str = "projects/default",
-                        max_queries: int = 5) -> List[Dict[str, Any]]:
-    """Load cached query decompositions from the query cache.
+# Most recent survey query (loaded from cache)
+_DEFAULT_QUERY = ""
 
-    Returns list of dicts with {query, themes, cached_at, key}.
+
+def _get_default_query() -> str:
+    """Read the most recent query from the decomposition cache."""
+    global _DEFAULT_QUERY
+    if _DEFAULT_QUERY:
+        return _DEFAULT_QUERY
+
+    if not QUERY_CACHE_DIR.exists():
+        return "How do T cells and macrophages coordinate bone healing around titanium implants?"
+
+    latest_ts = 0
+    for f in sorted(QUERY_CACHE_DIR.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if data.get("type") == "decomposition":
+                ts = data.get("_cached_at", 0)
+                if ts > latest_ts:
+                    latest_ts = ts
+                    _DEFAULT_QUERY = data.get("query", "").strip()
+        except Exception:
+            continue
+
+    return _DEFAULT_QUERY if _DEFAULT_QUERY and len(_DEFAULT_QUERY) > 20 else (
+        "How do T cells and macrophages coordinate bone healing around titanium "
+        "implants? How does obesity impact this?"
+    )
+
+
+# ── Infrastructure setup (shared across runs) ──────────────────────────────
+
+_infra: Dict[str, Any] | None = None
+
+
+def _get_infrastructure() -> Dict[str, Any]:
+    """Lazy-init retriever, graph storage, chroma (once)."""
+    global _infra
+    if _infra is not None:
+        return _infra
+
+    logger.info("Setting up comparison infrastructure...")
+
+    chroma = ChromaClient(collection_name="public_corpus", persist_directory=CHROMA_PATH)
+    bm25 = BM25Index()
+    retriever = HybridRetriever(chroma_client=chroma, bm25_index=bm25)
+
+    # Hybrid retrieval in anchoring
+    from src.anchoring.evidence_check import set_anchoring_chroma
+    set_anchoring_chroma(chroma)
+
+    # Load BM25 from saved corpus
+    bm25_path = Path(BM25_CORPUS_PATH)
+    if bm25_path.exists():
+        try:
+            corpus = json.loads(bm25_path.read_text(encoding="utf-8"))
+            if isinstance(corpus, list) and corpus:
+                bm25.add_documents([str(x) for x in corpus])
+        except Exception:
+            pass
+    else:
+        # Build from ChromaDB
+        try:
+            data = chroma.collection.get(include=["documents"])
+            docs = (data or {}).get("documents") or []
+            if docs:
+                bm25.add_documents([str(d) for d in docs])
+        except Exception:
+            pass
+
+    graph_storage = NetworkXJSONStorage(GRAPH_PATH)
+
+    _infra = {
+        "chroma": chroma,
+        "bm25": bm25,
+        "retriever": retriever,
+        "graph_storage": graph_storage,
+    }
+    return _infra
+
+
+def _clear_query_cache() -> int:
+    """Remove all query cache entries to force fresh LLM calls. Returns count."""
+    if not QUERY_CACHE_DIR.exists():
+        return 0
+    removed = 0
+    for p in sorted(QUERY_CACHE_DIR.glob("*.json")):
+        try:
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+# ── Run survey graph for a given provider ─────────────────────────────────
+
+def _run_survey_for_provider(
+    query: str,
+    provider: str,
+) -> Dict[str, Any]:
+    """Run the full Survey Mode pipeline with *provider*.
+
+    Temporarily switches ``LLM_PROVIDER`` and model env vars, clears the
+    query cache (to avoid cross‑provider cache pollution), runs the graph,
+    then restores the original config.
+
+    Returns:
+        dict with ``elapsed_s``, ``per_theme``, ``cross_theme``, ``gap_analysis``,
+        ``n_themes``, ``n_claims_per_theme``, ``anchoring_scores``.
     """
-    cache_dir = Path(project_dir) / "query_cache"
-    if not cache_dir.exists():
-        return []
+    # Save original env
+    original = {
+        "LLM_PROVIDER": os.environ.get("LLM_PROVIDER", ""),
+        "OLLAMA_SMALL_MODEL": os.environ.get("OLLAMA_SMALL_MODEL", ""),
+        "OLLAMA_LARGE_MODEL": os.environ.get("OLLAMA_LARGE_MODEL", ""),
+        "GAP_ANALYSIS_MODEL": os.environ.get("GAP_ANALYSIS_MODEL", ""),
+    }
 
-    queries: Dict[str, Dict[str, Any]] = {}
-    for f in sorted(cache_dir.glob("*.json")):
+    try:
+        os.environ["LLM_PROVIDER"] = provider
+
+        # ── Per‑provider model config for comparison ──
+        if provider == "deepseek":
+            os.environ["OLLAMA_SMALL_MODEL"] = "deepseek-chat"
+            os.environ["OLLAMA_LARGE_MODEL"] = "deepseek-v4-pro"
+            os.environ["GAP_ANALYSIS_MODEL"] = "deepseek-v4-pro"
+        else:
+            # Local: use the current .env config (preserve user settings)
+            # but ensure GAP_ANALYSIS_MODEL is consistent with the heavy tier
+            # for a fair comparison against deepseek-v4-pro
+            os.environ["GAP_ANALYSIS_MODEL"] = os.getenv("GAP_ANALYSIS_MODEL",
+                                              os.getenv("OLLAMA_LARGE_MODEL", "qwen3.6:35b"))
+
+        # Force fresh LLM calls (clear query cache to avoid cross-provider pollution)
+        cleared = _clear_query_cache()
+        if cleared:
+            logger.info("  Cleared %d query cache entries for %s run", cleared, provider)
+
+        infra = _get_infrastructure()
+        retriever = infra["retriever"]
+        graph_storage = infra["graph_storage"]
+
+        # Build the survey graph
+        app = build_survey_graph(retriever, graph_storage)
+
+        initial_state = {
+            "user_query": query,
+            "query_scope": "public",
+            "mode": "survey",
+            "num_ctx": NUM_CTX,
+            "client_kwargs": CLIENT_KWARGS,
+        }
+
+        config = {"configurable": {"thread_id": f"cmp-{provider}-{int(time.time())}"}}
+        t0 = time.time()
+        final_state = app.invoke(initial_state, config)
+        elapsed = time.time() - t0
+
+        # Auto-approve (skip human-in-the-loop)
         try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if data.get("type") != "decomposition":
-            continue
-        q = data.get("query", "").strip()
-        if not q or len(q) < 10:
-            continue
-        # Keep only the most recent version of each query text
-        age = data.get("_cached_at", 0)
-        if q not in queries or age > queries[q].get("_cached_at", 0):
-            queries[q] = {**data, "key": f.stem[:12]}
+            app.update_state(config, {"human_approved": True})
+        except Exception:
+            pass
 
-    ordered = sorted(queries.values(), key=lambda d: d.get("_cached_at", 0), reverse=True)
-    return ordered[:max_queries]
+    finally:
+        # Restore original env
+        for k, v in original.items():
+            if v:
+                os.environ[k] = v
+            else:
+                os.environ.pop(k, None)
+
+    # ── Extract metrics ──────────────────────────────────────────────────
+    per_theme_raw = final_state.get("per_theme_syntheses", {})
+    per_theme: Dict[str, Any] = {}
+    for theme_name, ts in per_theme_raw.items():
+        if isinstance(ts, dict):
+            syn = ts.get("synthesis", "")
+            score = ts.get("anchoring_score", 0)
+        else:
+            syn = str(ts)
+            score = 0
+        per_theme[theme_name] = {
+            "synthesis_len": len(syn or ""),
+            "anchoring_score": round(float(score) if score else 0, 4),
+            "n_claims": len(decompose_claims(scrub_unicode(syn or ""))),
+        }
+
+    cross_text = final_state.get("cross_theme_synthesis", "") or ""
+    gap_text = final_state.get("gap_analysis", "") or ""
+    themes_list = final_state.get("decomposed_themes", [])
+
+    return {
+        "provider": provider,
+        "query": query,
+        "elapsed_s": round(elapsed, 1),
+        "n_themes": len(per_theme),
+        "n_decomposed_themes": len(themes_list),
+        "models": {
+            "per_theme": os.getenv("OLLAMA_SMALL_MODEL", "unknown"),
+            "cross_theme": os.getenv("OLLAMA_LARGE_MODEL", "unknown"),
+            "gap": os.getenv("GAP_ANALYSIS_MODEL", "unknown"),
+        },
+        "per_theme": per_theme,
+        "cross_theme": {
+            "text_len": len(cross_text),
+            "n_claims": len(decompose_claims(scrub_unicode(cross_text))),
+        },
+        "gap_analysis": {
+            "text_len": len(gap_text),
+        },
+        "anchoring_scores": {
+            name: ts["anchoring_score"] for name, ts in per_theme.items()
+        },
+    }
 
 
-def load_cross_theme_for_query(query: str, project_dir: str = "projects/default") -> Optional[Dict[str, Any]]:
-    """Load the cross-theme synthesis for a specific query."""
-    cache_dir = Path(project_dir) / "query_cache"
-    for f in sorted(cache_dir.glob("*.json")):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if data.get("type") == "cross_theme" and data.get("query", "").strip() == query:
-            return data
-    return None
+# ── Persistence ───────────────────────────────────────────────────────────
+
+def _save_run(results: Dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(results, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    logger.info("  Saved %s results to %s", results["provider"], path)
 
 
-# ── Metric extraction from a synthesis ─────────────────────────────────────
+def _load_run(provider: str) -> Optional[Dict[str, Any]]:
+    path = COMPARISON_DIR / f"{provider}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ── Comparison logic ──────────────────────────────────────────────────────
+
+def _compare(cloud: Dict[str, Any], local: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute side‑by‑side metrics."""
+    # Find common themes (match by name if possible)
+    cloud_scores = cloud.get("anchoring_scores", {})
+    local_scores = local.get("anchoring_scores", {})
+
+    cloud_avg = sum(cloud_scores.values()) / max(len(cloud_scores), 1)
+    local_avg = sum(local_scores.values()) / max(len(local_scores), 1)
+
+    cloud_claims = sum(ts.get("n_claims", 0) for ts in cloud.get("per_theme", {}).values())
+    local_claims = sum(ts.get("n_claims", 0) for ts in local.get("per_theme", {}).values())
+
+    cloud_models = cloud.get("models", {})
+    local_models = local.get("models", {})
+
+    comparison = {
+        "query": cloud.get("query", "")[:120],
+        "cloud": {
+            "provider": "deepseek",
+            "model_tiers": (
+                f"per-theme: {cloud_models.get('per_theme', '?')} | "
+                f"cross-theme: {cloud_models.get('cross_theme', '?')} | "
+                f"gap: {cloud_models.get('gap', '?')}"
+            ),
+            "n_themes": cloud.get("n_themes", 0),
+            "n_decomposed_themes": cloud.get("n_decomposed_themes", 0),
+            "avg_anchor_score": round(cloud_avg, 4),
+            "anchoring_scores": cloud_scores,
+            "total_claims": cloud_claims,
+            "cross_claims": cloud.get("cross_theme", {}).get("n_claims", 0),
+            "elapsed_s": cloud.get("elapsed_s", 0),
+        },
+        "local": {
+            "provider": "ollama",
+            "model_tiers": (
+                f"per-theme: {local_models.get('per_theme', '?')} | "
+                f"cross-theme: {local_models.get('cross_theme', '?')} | "
+                f"gap: {local_models.get('gap', '?')}"
+            ),
+            "n_themes": local.get("n_themes", 0),
+            "n_decomposed_themes": local.get("n_decomposed_themes", 0),
+            "avg_anchor_score": round(local_avg, 4),
+            "anchoring_scores": local_scores,
+            "total_claims": local_claims,
+            "cross_claims": local.get("cross_theme", {}).get("n_claims", 0),
+            "elapsed_s": local.get("elapsed_s", 0),
+        },
+        "deltas": {
+            "themes_diff": cloud.get("n_themes", 0) - local.get("n_themes", 0),
+            "anchor_score_diff": round(cloud_avg - local_avg, 4),
+            "claims_diff": cloud_claims - local_claims,
+        },
+    }
+    return comparison
+
+
+def _print_comparison(comparison: Dict[str, Any]) -> None:
+    """Pretty‑print a single comparison."""
+    cloud = comparison["cloud"]
+    local = comparison["local"]
+    deltas = comparison["deltas"]
+
+    print(f"\n{BOLD}{'=' * 70}{RESET}")
+    print(f"{BOLD}  API vs LOCAL — TRUE 1:1 SURVEY GRAPH COMPARISON{RESET}")
+    print(f"{BOLD}{'=' * 70}{RESET}")
+    print(f"\n  {CYAN}Query{RESET}: {comparison['query'][:100]}")
+    print(f"\n  {CYAN}Model tiering{RESET}:")
+    print(f"    Cloud:  {cloud['model_tiers']}")
+    print(f"    Local:  {local['model_tiers']}")
+    print()
+
+    # Header
+    print(f"  {'Metric':<32} {'Cloud (DeepSeek)':<18} {'Local (Ollama)':<18} {'Delta':<14}")
+    print(f"  {'-' * 32} {'-' * 18} {'-' * 18} {'-' * 14}")
+
+    print(f"  {'Themes (synthesized)':<32} {cloud['n_themes']:<18} {local['n_themes']:<18} "
+          f"{deltas['themes_diff']:>+d}")
+    print(f"  {'Themes (decomposed)':<32} {cloud['n_decomposed_themes']:<18} "
+          f"{local['n_decomposed_themes']:<18} "
+          f"{(cloud['n_decomposed_themes'] - local['n_decomposed_themes']):>+d}")
+
+    ds_avg = cloud["avg_anchor_score"]
+    lo_avg = local["avg_anchor_score"]
+    delta = deltas["anchor_score_diff"]
+    color = GREEN if abs(delta) < 0.05 else (YELLOW if abs(delta) < 0.10 else RED)
+    print(f"  {'Avg Anchor Score':<32} {ds_avg:<18.4f} {lo_avg:<18.4f} "
+          f"{color}{delta:>+.4f}{RESET}")
+
+    print(f"  {'Total Claims (per-theme)':<32} {cloud['total_claims']:<18} "
+          f"{local['total_claims']:<18} {deltas['claims_diff']:>+d}")
+    print(f"  {'Cross-theme Claims':<32} {cloud['cross_claims']:<18} "
+          f"{local['cross_claims']:<18}")
+    print(f"  {'Elapsed (s)':<32} {cloud['elapsed_s']:<18.0f} {local['elapsed_s']:<18.0f}")
+
+    # Per-theme anchoring scores
+    print(f"\n  {CYAN}Per‑theme anchoring scores{RESET}:")
+    all_themes = sorted(set(list(cloud["anchoring_scores"].keys()) + list(local["anchoring_scores"].keys())))
+    if all_themes:
+        print(f"  {'Theme':<50} {'Cloud':>8}  {'Local':>8}  {'Delta':>8}")
+        print(f"  {'-' * 50} {'-' * 8}  {'-' * 8}  {'-' * 8}")
+        for theme in all_themes:
+            cs = cloud["anchoring_scores"].get(theme, None)
+            ls = local["anchoring_scores"].get(theme, None)
+            cs_str = f"{cs:.4f}" if cs is not None else "N/A"
+            ls_str = f"{ls:.4f}" if ls is not None else "N/A"
+            if cs is not None and ls is not None:
+                d = cs - ls
+                d_str = f"{d:>+.4f}"
+            else:
+                d_str = ""
+            print(f"  {theme[:50]:<50} {cs_str:>8}  {ls_str:>8}  {d_str:>8}")
+
+    # Summary
+    print(f"\n  {CYAN}Summary{RESET}:")
+    if abs(delta) < 0.05:
+        print(f"  {GREEN}Local Ollama matches DeepSeek API closely "
+              f"(anchor delta: {delta:+.4f}){RESET}")
+    elif abs(delta) < 0.10:
+        print(f"  {YELLOW}Minor quality gap (anchor delta: {delta:+.4f}) — "
+              f"local models are acceptable{RESET}")
+    elif abs(delta) < 0.20:
+        print(f"  {YELLOW}Moderate gap (anchor delta: {delta:+.4f}) — "
+              f"acceptable for exploration, use API for publication{RESET}")
+    else:
+        print(f"  {RED}Large gap (anchor delta: {delta:+.4f}) — "
+              f"local models may need tuning{RESET}")
+
+    latency_ratio = local["elapsed_s"] / cloud["elapsed_s"] if cloud["elapsed_s"] else 0
+    if latency_ratio > 0:
+        print(f"  Local is {latency_ratio:.1f}× slower than cloud "
+              f"({local['elapsed_s']:.0f}s vs {cloud['elapsed_s']:.0f}s)")
+
+    print(f"\n{BOLD}{'=' * 70}{RESET}")
+
+
+# ── Main orchestration ────────────────────────────────────────────────────
+
+def run_cloud(query: str) -> Dict[str, Any]:
+    """Run DeepSeek API pipeline and persist results."""
+    logger.info("=" * 60)
+    logger.info("CLOUD RUN: DeepSeek API (deepseek-chat + deepseek-v4-pro)")
+    logger.info("=" * 60)
+
+    api_key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not api_key or api_key in ("your-key-here",):
+        raise RuntimeError("DEEPSEEK_API_KEY not set. Add it to .env.")
+
+    if not query:
+        query = _get_default_query()
+
+    logger.info("Query: %s...", query[:80])
+    results = _run_survey_for_provider(query, "deepseek")
+    _save_run(results, COMPARISON_DIR / "cloud.json")
+
+    logger.info("Cloud run complete: %d themes, avg anchor=%.4f, %.0fs",
+                results["n_themes"], sum(results["anchoring_scores"].values()) / max(len(results["anchoring_scores"]), 1),
+                results["elapsed_s"])
+    return results
+
+
+def run_local(query: str) -> Dict[str, Any]:
+    """Run local Ollama pipeline and compare against saved cloud results."""
+    cloud_results = _load_run("cloud")
+    if not cloud_results:
+        logger.warning("No saved cloud results found — run '--run cloud' first.")
+        logger.info("Will still run local for baseline metrics.")
+
+    logger.info("=" * 60)
+    logger.info("LOCAL RUN: Ollama (gemma4:e4b + qwen3.6:35b)")
+    logger.info("=" * 60)
+
+    if not query and cloud_results:
+        query = cloud_results.get("query", "")
+
+    if not query:
+        query = _get_default_query()
+
+    logger.info("Query: %s...", query[:80])
+    results = _run_survey_for_provider(query, "ollama")
+    _save_run(results, COMPARISON_DIR / "local.json")
+
+    logger.info("Local run complete: %d themes, avg anchor=%.4f, %.0fs",
+                results["n_themes"], sum(results["anchoring_scores"].values()) / max(len(results["anchoring_scores"]), 1),
+                results["elapsed_s"])
+
+    if cloud_results:
+        comparison = _compare(cloud_results, results)
+        comparison_json_path = COMPARISON_DIR / "comparison_report.json"
+        comparison_json_path.write_text(json.dumps(comparison, indent=2, ensure_ascii=False), encoding="utf-8")
+        _print_comparison(comparison)
+
+    return results
+
+
+# ── Metrics extraction (unchanged from original) ──────────────────────────
 
 def extract_metrics_from_synthesis(
     synthesis_text: str,
@@ -127,272 +557,107 @@ def load_evidence_chunks(project_dir: str = "projects/default") -> List[Dict[str
     return chunks
 
 
-# ── Live API comparison ────────────────────────────────────────────────────
+# ── Legacy query loader (kept for pytest) ─────────────────────────────────
 
-def run_deepseek_query(
-    query: str,
-    provider: str = "deepseek",
-) -> Dict[str, Any]:
-    """Run a survey query through DeepSeek API and return the synthesis.
+def load_cached_queries(project_dir: str = "projects/default",
+                        max_queries: int = 5) -> List[Dict[str, Any]]:
+    """Load cached query decompositions from the query cache."""
+    cache_dir = Path(project_dir) / "query_cache"
+    if not cache_dir.exists():
+        return []
 
-    Temporarily switches LLM_PROVIDER to deepseek, runs the full pipeline,
-    then restores the original provider.
-    """
-    original_provider = os.environ.pop("LLM_PROVIDER", "ollama")
-    os.environ["LLM_PROVIDER"] = provider
+    queries: Dict[str, Dict[str, Any]] = {}
+    for f in sorted(cache_dir.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("type") != "decomposition":
+            continue
+        q = data.get("query", "").strip()
+        if not q or len(q) < 10:
+            continue
+        age = data.get("_cached_at", 0)
+        if q not in queries or age > queries[q].get("_cached_at", 0):
+            queries[q] = {**data, "key": f.stem[:12]}
 
-    try:
-        from src.agents.query_decomposer import QueryDecomposer
-        from src.agents.synthesis_drafter import SynthesisDrafter
-
-        # Step 1: Decompose query
-        t0 = time.time()
-        decomposer = QueryDecomposer()
-        result = decomposer.decompose(query)
-        themes = result.get("themes", [])
-        decomp_latency = time.time() - t0
-        logger.info("  Decomposed into %d themes (%.1fs)", len(themes), decomp_latency)
-
-        # Step 2: Build summaries from evidence chunks
-        evidence = load_evidence_chunks()
-        summaries: List[str] = []
-        for ch in evidence:
-            meta = ch.get("metadata", {}) or {}
-            cs = meta.get("chunk_summary", ch.get("text", "")[:300])
-            if cs:
-                summaries.append(cs)
-        summary_text = "\n\n".join(summaries[:20])  # Cap to avoid context overflow
-        summary_chunks = [{"text": summary_text, "metadata": {"source": "all_papers"}}]
-
-        citations = sorted({(ch.get("metadata", {}) or {}).get("cite_key") or
-                             (ch.get("metadata", {}) or {}).get("source", "unknown")
-                             for ch in evidence})
-
-        # Step 3: Per-theme synthesis (single-pass for comparison)
-        t1 = time.time()
-        drafter = SynthesisDrafter(model="deepseek-v4-pro")
-        per_theme_results: Dict[str, Dict[str, Any]] = {}
-        for theme in themes[:3]:  # Cap at 3 themes for cost
-            theme_name = theme.get("theme", "theme")
-            t2 = time.time()
-            draft = drafter.draft(
-                query=f"{query} [Theme: {theme_name}]",
-                entities={},
-                chunks=summary_chunks,
-                citations=citations,
-                kg_context={},
-            )
-            theme_latency = time.time() - t2
-            metrics = extract_metrics_from_synthesis(draft, evidence)
-            metrics["latency"] = round(theme_latency, 1)
-            per_theme_results[theme_name] = metrics
-
-        per_theme_latency = time.time() - t1
-
-        # Step 4: Cross-theme synthesis
-        t3 = time.time()
-        combined = "\n\n".join(
-            f"## {name}\n{m['text']}"
-            for name, m in per_theme_results.items()
-        )
-        cross_chunks = [{"text": combined, "metadata": {"source": "cross_theme"}}]
-        cross_drafter = SynthesisDrafter(model="deepseek-v4-pro")
-        cross_synth = cross_drafter.draft(
-            query=f"{query}\n\nSynthesize into unified narrative. Include inline citations. Output plain text.",
-            entities={},
-            chunks=cross_chunks,
-            citations=citations,
-            kg_context={},
-        )
-        cross_latency = time.time() - t3
-        cross_metrics = extract_metrics_from_synthesis(cross_synth, evidence)
-        cross_metrics["latency"] = round(cross_latency, 1)
-
-        return {
-            "query": query,
-            "provider": provider,
-            "themes": len(themes),
-            "decomp_latency": round(decomp_latency, 1),
-            "per_theme_latency": round(per_theme_latency, 1),
-            "cross_theme_latency": round(cross_latency, 1),
-            "total_latency": round(decomp_latency + per_theme_latency + cross_latency, 1),
-            "per_theme": {
-                name: {
-                    "claims": m["claims"],
-                    "chars": m["chars"],
-                    "anchoring_score": m["anchoring_score"],
-                    "latency": m["latency"],
-                }
-                for name, m in per_theme_results.items()
-            },
-            "cross_theme": cross_metrics,
-        }
-    finally:
-        os.environ["LLM_PROVIDER"] = original_provider
+    ordered = sorted(queries.values(), key=lambda d: d.get("_cached_at", 0), reverse=True)
+    return ordered[:max_queries]
 
 
-# ── Comparison logic ───────────────────────────────────────────────────────
-
-def compare_results(
-    local_results: Dict[str, Any],
-    deepseek_results: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Compare local Ollama results against DeepSeek API results."""
-    # Extract local metrics
-    local_theme_scores = []
-    local_claims = 0
-    for ts in local_results.get("per_theme_syntheses", {}).values():
-        local_theme_scores.append(ts.get("anchoring_score", 0))
-        local_claims += len(decompose_claims(scrub_unicode(ts.get("synthesis", "") or "")))
-
-    local_cross_score = 0.0
-    if local_results.get("cross_theme_synthesis"):
-        local_cross_score = extract_metrics_from_synthesis(
-            local_results["cross_theme_synthesis"],
-            load_evidence_chunks(),
-        )["anchoring_score"]
-
-    comparison = {
-        "query": local_results.get("user_query", "unknown")[:120],
-        "local": {
-            "themes": len(local_results.get("per_theme_syntheses", {})),
-            "avg_anchor_score": round(sum(local_theme_scores) / max(len(local_theme_scores), 1), 4),
-            "cross_anchor_score": round(local_cross_score, 4),
-            "total_claims": local_claims,
-        },
-    }
-
-    if deepseek_results:
-        ds_theme_scores = [m["anchoring_score"] for m in deepseek_results.get("per_theme", {}).values()]
-        comparison["deepseek"] = {
-            "themes": deepseek_results.get("themes", 0),
-            "avg_anchor_score": round(sum(ds_theme_scores) / max(len(ds_theme_scores), 1), 4),
-            "cross_anchor_score": deepseek_results.get("cross_theme", {}).get("anchoring_score", 0),
-            "total_claims": sum(m["claims"] for m in deepseek_results.get("per_theme", {}).values()),
-            "total_latency": deepseek_results.get("total_latency", 0),
-        }
-
-        # Deltas
-        local_avg = comparison["local"]["avg_anchor_score"]
-        ds_avg = comparison["deepseek"]["avg_anchor_score"]
-        comparison["deltas"] = {
-            "anchor_score_diff": round(ds_avg - local_avg, 4),
-            "cross_anchor_diff": round(
-                comparison["deepseek"]["cross_anchor_score"] - comparison["local"]["cross_anchor_score"], 4
-            ),
-            "claims_diff": comparison["deepseek"]["total_claims"] - comparison["local"]["total_claims"],
-        }
-
-    return comparison
+def load_cross_theme_for_query(query: str, project_dir: str = "projects/default") -> Optional[Dict[str, Any]]:
+    """Load the cross-theme synthesis for a specific query."""
+    cache_dir = Path(project_dir) / "query_cache"
+    for f in sorted(cache_dir.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("type") == "cross_theme" and data.get("query", "").strip() == query:
+            return data
+    return None
 
 
-# ── Report printing ────────────────────────────────────────────────────────
+# ── Pytest integration ───────────────────────────────────────────────────
 
-def print_comparison_report(comparisons: List[Dict[str, Any]]) -> None:
-    """Print a side-by-side comparison report."""
-    print(f"\n{BOLD}{'=' * 70}{RESET}")
-    print(f"{BOLD}  API vs LOCAL COMPARISON REPORT{RESET}")
-    print(f"{BOLD}{'=' * 70}{RESET}")
-
-    for i, comp in enumerate(comparisons):
-        local = comp.get("local", {})
-        deepseek = comp.get("deepseek", {})
-        deltas = comp.get("deltas", {})
-
-        print(f"\n  {CYAN}Query {i + 1}{RESET}: {comp.get('query', '?')[:80]}")
-
-        print(f"    {'Metric':<30} {'Local (Ollama)':<20} {'DeepSeek API':<20} {'Delta':<15}")
-        print(f"    {'-' * 30} {'-' * 20} {'-' * 20} {'-' * 15}")
-        ds_themes = str(deepseek.get('themes',0)) if deepseek else "N/A"
-        print(f"    {'Themes':<30} {local.get('themes',0):<20} {ds_themes:<20}")
-        ds_avg = f"{deepseek.get('avg_anchor_score',0):.4f}" if deepseek else "N/A"
-        ds_cross = f"{deepseek.get('cross_anchor_score',0):.4f}" if deepseek else "N/A"
-        ds_claims = str(deepseek.get('total_claims',0)) if deepseek else "N/A"
-        print(f"    {'Avg Anchor Score':<30} {local.get('avg_anchor_score',0):<20.4f} "
-              f"{ds_avg:<20}")
-        print(f"    {'Cross Anchor Score':<30} {local.get('cross_anchor_score',0):<20.4f} "
-              f"{ds_cross:<20}")
-        print(f"    {'Total Claims':<30} {local.get('total_claims',0):<20} "
-              f"{ds_claims:<20}")
-
-        if deltas:
-            delta_sign = "+" if deltas.get("anchor_score_diff", 0) > 0 else ""
-            color = GREEN if abs(deltas.get("anchor_score_diff", 0)) < 0.10 else (
-                YELLOW if abs(deltas.get("anchor_score_diff", 0)) < 0.20 else RED
-            )
-            print(f"    {'Anchor Score Delta':<30} {'':<20} {'':<20} "
-                  f"{color}{delta_sign}{deltas.get('anchor_score_diff',0):.4f}{RESET}")
-
-            if deepseek and deepseek.get("total_latency"):
-                print(f"    {'Total Latency':<30} {'N/A':<20} "
-                      f"{deepseek.get('total_latency',0):.1f}s{'':<10}")
-
-    print(f"\n{BOLD}{'=' * 70}{RESET}")
-
-    # Summary
-    if any(c.get("deltas") for c in comparisons):
-        avg_delta = sum(
-            abs(c.get("deltas", {}).get("anchor_score_diff", 0))
-            for c in comparisons
-        ) / max(len(comparisons), 1)
-
-        if avg_delta < 0.05:
-            print(f"  {GREEN}Local Ollama matches DeepSeek API quality closely "
-                  f"(avg anchor delta: {avg_delta:.4f}){RESET}")
-        elif avg_delta < 0.15:
-            print(f"  {YELLOW}Moderate quality gap between local and API "
-                  f"(avg anchor delta: {avg_delta:.4f}){RESET}")
-        else:
-            print(f"  {RED}Significant quality gap — local models may need tuning "
-                  f"(avg anchor delta: {avg_delta:.4f}){RESET}")
-
-    print(f"{BOLD}{'=' * 70}{RESET}\n")
+def test_comparison_infra_loads() -> None:
+    """Infrastructure can be initialized without errors."""
+    infra = _get_infrastructure()
+    assert infra["retriever"] is not None
+    assert infra["graph_storage"] is not None
 
 
-# ── Pytest integration ─────────────────────────────────────────────────────
-
-def test_api_local_comparison() -> None:
-    """Pytest test: verifies that cached local results contain valid syntheses.
-
-    Does NOT make live API calls.  Verifies the local results are well-formed.
-    """
-    queries = load_cached_queries(max_queries=1)
-    if not queries:
-        raise AssertionError(
-            "No cached queries found. Run phase4_demo.py first."
-        )
-
-    query = queries[0]["query"]
-    cross_data = load_cross_theme_for_query(query)
-
-    if not cross_data:
-        raise AssertionError(
-            f"No cross-theme synthesis cached for query: {query[:60]}..."
-        )
-
-    cross_synth = cross_data.get("cross_theme_synthesis", "")
-    assert len(cross_synth) > 100, f"Cross-theme synthesis too short: {len(cross_synth)} chars"
-
-    gap = cross_data.get("gap_analysis", "")
-    assert len(gap) > 50, f"Gap analysis too short: {len(gap)} chars"
+def test_cloud_results_valid() -> None:
+    """Saved cloud comparison results are well-formed."""
+    import pytest
+    cloud = _load_run("cloud")
+    if cloud is None:
+        pytest.skip("No cloud results saved — run '--run cloud' first")
+    assert cloud["n_themes"] > 0
+    assert cloud["elapsed_s"] > 0
+    assert len(cloud["anchoring_scores"]) > 0
+    for score in cloud["anchoring_scores"].values():
+        assert 0.0 <= score <= 1.0
 
 
-# ── CLI ────────────────────────────────────────────────────────────────────
+def test_local_results_valid() -> None:
+    """Saved local comparison results are well-formed."""
+    import pytest
+    local = _load_run("local")
+    if local is None:
+        pytest.skip("No local results saved — run '--run local' first")
+    assert local["n_themes"] > 0
+    assert local["elapsed_s"] > 0
+    assert len(local["anchoring_scores"]) > 0
+    for score in local["anchoring_scores"].values():
+        assert 0.0 <= score <= 1.0
+
+
+def test_comparison_report_valid() -> None:
+    """Comparison report is well-formed when both runs exist."""
+    import pytest
+    cloud = _load_run("cloud")
+    local = _load_run("local")
+    if cloud is None or local is None:
+        pytest.skip("Both cloud and local results required")
+    comparison = _compare(cloud, local)
+    assert "deltas" in comparison
+    assert "anchor_score_diff" in comparison["deltas"]
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────
 
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Phase 5 → 6 API vs Local Comparison",
+        description="Phase 6 API vs Local Comparison — true 1:1 survey graph",
     )
-    parser.add_argument("--live", action="store_true",
-                        help="Run live queries through DeepSeek API (costs API credits)")
-    parser.add_argument("--queries", type=int, default=3,
-                        help="Number of cached queries to compare (default: 3)")
-    parser.add_argument("--project-dir", default="projects/default",
-                        help="Project directory")
-    parser.add_argument("--output", "-o", default=None,
-                        help="Save comparison JSON to path")
+    parser.add_argument("--run", choices=["cloud", "local", "both"],
+                        default=None,
+                        help="Which provider(s) to run (default: local only if cloud saved)")
+    parser.add_argument("--query", type=str, default=None,
+                        help="Research query (default: most recent from cache)")
     parser.add_argument("--no-color", action="store_true",
                         help="Disable ANSI colour")
     args = parser.parse_args()
@@ -401,108 +666,63 @@ def main():
         global GREEN, YELLOW, RED, CYAN, MAGENTA, RESET, BOLD
         GREEN = YELLOW = RED = CYAN = MAGENTA = RESET = BOLD = ""
 
-    # Load cached local queries
-    cached = load_cached_queries(args.project_dir, max_queries=args.queries)
-    if not cached:
-        print(f"{RED}No cached queries found.{RESET}")
-        print("Run 'python phase4_demo.py' first to generate cached syntheses.")
-        sys.exit(1)
+    query = args.query or ""
 
-    print(f"Found {len(cached)} cached queries for comparison.")
-
-    if args.live:
-        # Check DeepSeek API key
-        api_key = os.getenv("DEEPSEEK_API_KEY", "")
-        if not api_key or api_key == "your-key-here":
-            print(f"{RED}DEEPSEEK_API_KEY not set. Set in .env to use live mode.{RESET}")
+    if args.run == "cloud":
+        try:
+            run_cloud(query)
+        except RuntimeError as e:
+            print(f"{RED}Error: {e}{RESET}")
             sys.exit(1)
 
-        print(f"\n{BOLD}Running live DeepSeek API comparison...{RESET}")
-        print(f"  WARNING: This will consume API credits and send data to cloud.")
-        print(f"  Queries to run: {len(cached)}")
-        proceed = input("  Proceed? [y/N] ").strip().lower()
+    elif args.run == "local":
+        run_local(query)
+
+    elif args.run == "both":
+        print(f"\n{BOLD}Running both cloud and local comparison...{RESET}")
+        print(f"  Cloud: ~5 min | Local: ~5-8 min | Total: ~10-13 min")
+        print(f"  WARNING: Cloud run will consume DeepSeek API credits.\n")
+
+        api_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if not api_key or api_key in ("your-key-here",):
+            print(f"{RED}DEEPSEEK_API_KEY not set. Add it to .env.{RESET}")
+            sys.exit(1)
+
+        # Confirm
+        proceed = input(f"  Proceed with cloud + local runs? [y/N] ").strip().lower()
         if proceed not in ("y", "yes"):
             print("Cancelled.")
             sys.exit(0)
 
-        comparisons = []
-        for i, c in enumerate(cached):
-            query = c["query"]
-            print(f"\n[{i + 1}/{len(cached)}] Query: {query[:80]}...")
+        try:
+            run_cloud(query)
+        except RuntimeError as e:
+            print(f"{RED}Cloud run failed: {e}{RESET}")
+            sys.exit(1)
 
-            # Load cached local result
-            cross_data = load_cross_theme_for_query(query, args.project_dir)
-            if not cross_data:
-                print(f"  {YELLOW}No cached cross-theme for this query — skipping.{RESET}")
-                continue
+        run_local(query)
 
-            # Extract local metrics from cached
-            local_synth = cross_data.get("cross_theme_synthesis", "")
-            local_gap = cross_data.get("gap_analysis", "")
-            evidence = load_evidence_chunks(args.project_dir)
-            local_metrics = extract_metrics_from_synthesis(local_synth, evidence)
-
-            local_results = {
-                "user_query": query,
-                "per_theme_syntheses": {
-                    "combined": {
-                        "synthesis": local_synth,
-                        "anchoring_score": local_metrics["anchoring_score"],
-                    }
-                },
-                "cross_theme_synthesis": local_synth,
-                "gap_analysis": local_gap,
-            }
-
-            # Run DeepSeek API comparison
-            print(f"  Calling DeepSeek API...")
-            try:
-                ds_results = run_deepseek_query(query, provider="deepseek")
-            except Exception as e:
-                print(f"  {RED}DeepSeek API call failed: {e}{RESET}")
-                ds_results = None
-
-            comparisons.append(compare_results(local_results, ds_results))
     else:
-        # Cached-only mode: just analyze local results
-        print(f"\n{BOLD}Cached-only comparison (no live API calls):{RESET}")
-        comparisons = []
-        evidence = load_evidence_chunks(args.project_dir)
-        for i, c in enumerate(cached):
-            query = c["query"]
-            cross_data = load_cross_theme_for_query(query, args.project_dir)
-            if not cross_data:
-                continue
-            local_synth = cross_data.get("cross_theme_synthesis", "")
-            local_gap = cross_data.get("gap_analysis", "")
-            local_metrics = extract_metrics_from_synthesis(local_synth, evidence)
+        # Default: check if cloud results exist, run local if missing
+        cloud_exists = (COMPARISON_DIR / "cloud.json").exists()
+        local_exists = (COMPARISON_DIR / "local.json").exists()
 
-            local_results = {
-                "user_query": query,
-                "per_theme_syntheses": {
-                    "combined": {
-                        "synthesis": local_synth,
-                        "anchoring_score": local_metrics["anchoring_score"],
-                    }
-                },
-                "cross_theme_synthesis": local_synth,
-                "gap_analysis": local_gap,
-            }
-            comparisons.append(compare_results(local_results, None))
+        if cloud_exists and local_exists:
+            cloud = _load_run("cloud")
+            local = _load_run("local")
+            if cloud and local:
+                comparison = _compare(cloud, local)
+                _print_comparison(comparison)
+                return
 
-    if comparisons:
-        print_comparison_report(comparisons)
-
-        if args.output:
-            out_path = Path(args.output)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(
-                json.dumps(comparisons, indent=2, ensure_ascii=False, default=str),
-                encoding="utf-8",
-            )
-            print(f"Saved to {out_path}")
-    else:
-        print(f"\n{YELLOW}No comparisons produced — check cached data.{RESET}")
+        print(f"Usage: python phase5_api_comparison.py --run cloud|local|both")
+        print(f"  --run cloud  : Run DeepSeek API (~$1, ~5 min)")
+        print(f"  --run local  : Run local Ollama + compare against saved cloud (~8 min)")
+        print(f"  --run both   : Run cloud then local sequentially (~13 min)")
+        if cloud_exists:
+            print(f"\n  {GREEN}Cloud results exist.{RESET} Run '--run local' to compare.")
+        else:
+            print(f"\n  {YELLOW}No saved results.{RESET} Run '--run cloud' first.")
 
 
 if __name__ == "__main__":
