@@ -30,3 +30,5 @@ projects/default/query_cache/
 
 # R history
 .Rhistory
+projects/default/figures/
+logs/
