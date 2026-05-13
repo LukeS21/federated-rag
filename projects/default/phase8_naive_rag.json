@@ -1,0 +1,26 @@
+{
+  "query": "How do titanium implant surface modifications influence macrophage polarization, T cell responses, and osseointegration outcomes?",
+  "synthesis": "Nanostructured titanium surfaces can improve implant osseointegration by mediating macrophage polarization (Chunk 1).\nDental implant success critically depends on soft tissue integration (STI) to prevent peri-implantitis (Chunk 2).\nMacrophages can exhibit distinct pro-inflammatory (M1) or anti-inflammatory/pro-healing (M2) phenotypes, significantly impacting peri-implant tissue responses (Chunk 2).\nAlphabeta T cells contribute to macrophage polarization and MSC recruitment and proliferation on titanium implants (Chunk 3).\nCD4 + T cell subsets at the peri-implant site can be influenced by macrophage response to surface roughness and wettability of Ti implants (Chunk 5).\nT cell polarization depends upon the innate immune cells on the implant surface (Chunk 5).\nInnate immune cells, such as neutrophils and macrophages, are involved in wound healing (Chunk 6).\nMacrophages are recruited to the implant site and undergo phenotypic modulation following implantation (Chunk 7).\nPhysicochemical cues like topography and wettability can impact the inflammatory response and tissue integration after biomaterial implantation (Chunk 12).\nT cells are essential for immunomodulation of innate immune cells and play an important role in the host response to biomaterial implantation (Chunk 12).\nMicro-rough surfaces can regulate neutrophil inflammatory mediator release, neutrophil extracellular trap (NET) formation, and macrophage polarization (Chunk 11).\nBiomaterial surface modifications like roughness and wettability can dictate the recruitment and behavior of immune cells at the implant-tissue interface (Chunk 14).\nBiomaterial implantation triggers an immune response initially predominated by neutrophils, which activate an inflammatory cascade by producing cytokines, enzymes, immune cell recruitment chemokines, and DNA fiber networks called neutrophil extracellular traps (NETs) (Chunk 15).",
+  "claims": [
+    "Nanostructured titanium surfaces can improve implant osseointegration by mediating macrophage polarization (Chunk 1).",
+    "Dental implant success critically depends on soft tissue integration (STI) to prevent peri-implantitis (Chunk 2).",
+    "Macrophages can exhibit distinct pro-inflammatory (M1) or anti-inflammatory/pro-healing (M2) phenotypes, significantly impacting peri-implant tissue responses (Chunk 2).",
+    "Alphabeta T cells contribute to macrophage polarization and MSC recruitment and proliferation on titanium implants (Chunk 3).",
+    "CD4 + T cell subsets at the peri-implant site can be influenced by macrophage response to surface roughness and wettability of Ti implants (Chunk 5).",
+    "T cell polarization depends upon the innate immune cells on the implant surface (Chunk 5).",
+    "Innate immune cells, such as neutrophils and macrophages, are involved in wound healing (Chunk 6).",
+    "Macrophages are recruited to the implant site and undergo phenotypic modulation following implantation (Chunk 7).",
+    "Physicochemical cues like topography and wettability can impact the inflammatory response and tissue integration after biomaterial implantation (Chunk 12).",
+    "T cells are essential for immunomodulation of innate immune cells and play an important role in the host response to biomaterial implantation (Chunk 12).",
+    "Micro-rough surfaces can regulate neutrophil inflammatory mediator release, neutrophil extracellular trap (NET) formation, and macrophage polarization (Chunk 11).",
+    "Biomaterial surface modifications like roughness and wettability can dictate the recruitment and behavior of immune cells at the implant-tissue interface (Chunk 14).",
+    "Biomaterial implantation triggers an immune response initially predominated by neutrophils, which activate an inflammatory cascade by producing cytokines, enzymes, immune cell recruitment chemokines, and DNA fiber networks called neutrophil extracellular traps (NETs) (Chunk 15)."
+  ],
+  "claim_count": 13,
+  "anchoring_score": 1.0,
+  "ungrounded_count": 0,
+  "chunks_retrieved": 25,
+  "elapsed_seconds": 36.034705583006144,
+  "model": "gemma4:e4b",
+  "timestamp": 1778521391.517836
+}

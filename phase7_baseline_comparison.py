@@ -50,9 +50,6 @@ from src.retrieval.bm25_index import BM25Index
 from src.retrieval.hybrid_retriever import HybridRetriever
 from src.unicode_map import scrub_unicode
 
-# Ensure monkey-patch for include_figures
-import src.vision.figure_embedder  # noqa: F401
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

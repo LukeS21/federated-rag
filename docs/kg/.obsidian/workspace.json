@@ -1,0 +1,200 @@
+{
+  "main": {
+    "id": "d0608a54dfbac5e0",
+    "type": "split",
+    "children": [
+      {
+        "id": "0939982db86371b6",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "64eff0c8e8afbdaf",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "architecture/knowledge-graph.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "knowledge-graph"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "e9ad8d670083c2dd",
+    "type": "split",
+    "children": [
+      {
+        "id": "f335fe5eadcacd35",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "2910eabdd456287a",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "40bc9d6be57011d2",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "07bc0ebb018b1665",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "c5e6e3ebd212238a",
+    "type": "split",
+    "children": [
+      {
+        "id": "726d9e68fcd69289",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "39d5656ab5cb5c66",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "architecture/knowledge-graph.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for knowledge-graph"
+            }
+          },
+          {
+            "id": "26a07c593e8fef86",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "architecture/knowledge-graph.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from knowledge-graph"
+            }
+          },
+          {
+            "id": "40c4c4de994e107b",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "2caa9c2e17acaaf1",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "0071f2cd8a30366e",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "architecture/knowledge-graph.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of knowledge-graph"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "graph:Open graph view": false,
+      "switcher:Open quick switcher": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false,
+      "templater-obsidian:Templater": false
+    }
+  },
+  "active": "64eff0c8e8afbdaf",
+  "lastOpenFiles": [
+    "architecture/hybrid-retriever.md",
+    "architecture/human-in-the-loop.md",
+    "architecture/extraction-pipeline.md",
+    "architecture/evidence-anchoring.md",
+    "architecture/deep-mode-graph.md",
+    "architecture/debate-chain.md",
+    "architecture/agent-state.md",
+    "dev/quick-start.md",
+    "dashboard.md",
+    "gaps/baseline-single-run.md"
+  ]
+}

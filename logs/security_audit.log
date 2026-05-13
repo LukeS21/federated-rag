@@ -66,3 +66,133 @@
 {"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T22:34:41.805366+00:00"}
 {"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T22:53:22.284292+00:00"}
 {"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T22:53:22.285186+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T22:57:49.749056+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T22:57:49.749268+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:06:38.632821+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:06:38.633052+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:08:20.405390+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:08:20.405605+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:13:31.448212+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:13:31.448474+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:18:39.244133+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:18:39.244334+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:22:40.454184+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:22:40.454403+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:26:28.791620+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:26:28.791854+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:27:23.673982+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:27:23.674198+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:37:50.475925+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "2a8195b426fbe236", "timestamp": "2026-05-09T23:37:50.476634+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:42:46.418836+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "2a8195b426fbe236", "timestamp": "2026-05-09T23:42:46.419686+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:45:25.133639+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-09T23:45:25.133889+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-09T23:46:19.305532+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "2a8195b426fbe236", "timestamp": "2026-05-09T23:46:19.306517+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T00:02:40.227437+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "2a8195b426fbe236", "timestamp": "2026-05-10T00:02:40.228916+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T00:27:21.020632+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "2a8195b426fbe236", "timestamp": "2026-05-10T00:27:21.022323+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T00:48:13.306971+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "2a8195b426fbe236", "timestamp": "2026-05-10T00:48:13.307187+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T01:10:23.444401+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T01:10:23.444815+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T01:14:31.198999+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T01:14:31.199424+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T01:37:04.193083+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T01:37:04.193395+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T02:27:49.695909+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T02:27:49.696356+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T02:44:01.522117+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T02:44:01.522290+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T03:00:26.475584+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T03:00:26.475721+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T03:03:56.899457+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "2a8195b426fbe236", "timestamp": "2026-05-10T03:03:56.899978+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T03:21:38.276966+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T03:21:38.277576+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T03:56:50.200787+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T03:56:50.200953+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T05:05:21.630762+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T05:05:21.631253+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T05:10:13.141558+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T05:10:13.141742+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T05:19:35.451884+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T05:19:35.452093+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T05:28:52.153144+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T05:28:52.153344+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T05:33:43.473529+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T05:33:43.473782+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T05:45:10.298830+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T05:45:10.299026+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T05:46:34.622158+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T05:46:34.622339+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T06:09:42.519252+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T06:09:42.519472+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T06:10:15.683397+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "a749c002a8b1c7e6", "timestamp": "2026-05-10T06:10:15.683730+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T06:14:32.102666+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "a749c002a8b1c7e6", "timestamp": "2026-05-10T06:14:32.102991+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T06:25:34.062622+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T06:25:34.063148+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T15:25:54.132984+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T15:25:54.133456+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T15:26:44.783436+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "a749c002a8b1c7e6", "timestamp": "2026-05-10T15:26:44.783700+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T15:36:10.435800+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "a749c002a8b1c7e6", "timestamp": "2026-05-10T15:36:10.436901+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T15:46:05.447575+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T15:46:05.448181+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T16:30:34.886113+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T16:30:34.886696+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T16:39:57.025429+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T16:39:57.025651+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T16:43:50.249686+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T16:43:50.249968+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T17:31:37.128429+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T17:31:37.129017+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T19:49:53.230306+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T19:49:53.230873+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T21:18:05.858166+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T21:18:05.858594+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T21:41:24.105775+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T21:41:24.106521+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T22:08:11.846545+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T22:08:11.847269+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T22:13:27.984206+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T22:13:27.984534+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T22:42:53.127074+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T22:42:53.127821+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T22:47:18.680907+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T22:47:18.681199+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T23:05:00.230763+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T23:05:00.231067+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T23:30:01.338372+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T23:30:01.339205+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T23:48:07.675087+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T23:48:07.675998+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-10T23:53:39.714918+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-10T23:53:39.715169+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T01:02:15.293054+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T01:02:15.293541+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T01:47:55.561311+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T01:47:55.561744+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T02:24:34.267465+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T02:24:34.268289+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T03:40:11.928059+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T03:40:11.928953+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T03:50:51.336661+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T03:50:51.337288+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T04:17:45.894861+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T04:17:45.895670+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T04:30:47.637623+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T04:30:47.638194+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T04:37:35.675218+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T04:37:35.675580+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T16:43:33.584362+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T16:43:33.584991+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T16:54:39.715460+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T16:54:39.715770+00:00"}
+{"type": "scope_routing", "query_scope": "public", "mode": "survey", "routing_decision": "survey_pipeline", "context_keys": ["public_context"], "timestamp": "2026-05-11T16:56:55.531775+00:00"}
+{"type": "access", "operation": "query_decompose", "resource": "survey", "query_hash": "050579eeae87a043", "timestamp": "2026-05-11T16:56:55.531946+00:00"}

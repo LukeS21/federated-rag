@@ -8,7 +8,7 @@ from PIL import Image
 from src.retrieval.chroma_client import ChromaClient
 from src.retrieval.bm25_index import BM25Index
 from src.retrieval.hybrid_retriever import HybridRetriever
-from src.vision.figure_embedder import FigureEmbedder, query_with_figures
+from src.vision.figure_embedder import FigureEmbedder
 
 
 @pytest.fixture

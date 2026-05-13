@@ -5,6 +5,7 @@ Coordinates the full vision pipeline during PDF ingestion:
   1. Extract figures from PDF via Docling
   2. Filter to keep only data-relevant figures (classification-based)
   3. Describe figures via gemma4:e4b (already loaded as fast-tier text model)
+     or defer to a background queue with ``describe=False`` for scale.
   4. Embed descriptions into ChromaDB for cross-modal retrieval
 
 Usage (during PDF ingest)::
@@ -12,9 +13,14 @@ Usage (during PDF ingest)::
     hybrid_retriever.ingest(text_chunks)
     vision_ingest_pdf(pdf_path, hybrid_retriever)
     # -> figures are now in ChromaDB alongside text chunks
+
+Scale tip — at 100+ papers, use ``describe=False`` to embed captions
+immediately (~0 LLM cost), then call ``describe_queued_figures()`` as a
+background task to generate full descriptions later.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -28,6 +34,85 @@ from src.retrieval.hybrid_retriever import HybridRetriever
 logger = logging.getLogger(__name__)
 
 FIGURES_CACHE_DIR = Path("projects/default/figure_descriptions.json")
+FIGURE_QUEUE_PATH = Path("projects/default/figure_description_queue.json")
+
+
+def _load_queue() -> List[Dict]:
+    """Load the deferred-description queue from disk."""
+    if not FIGURE_QUEUE_PATH.exists():
+        return []
+    try:
+        return json.loads(FIGURE_QUEUE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _save_queue(queue: List[Dict]) -> None:
+    """Persist the deferred-description queue."""
+    FIGURE_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FIGURE_QUEUE_PATH.write_text(
+        json.dumps(queue, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+
+
+def describe_queued_figures(
+    hybrid_retriever: HybridRetriever,
+    max_figures: int | None = None,
+) -> Dict[str, int]:
+    """Process the deferred figure description queue.
+
+    Reads figures that were ingested with ``describe=False``, runs the
+    vision model to generate full descriptions, and re-embeds them into
+    ChromaDB (replacing the caption-only entries).
+
+    Args:
+        hybrid_retriever: The HybridRetriever for ChromaDB updates.
+        max_figures: Cap on number of figures to describe (None = all).
+
+    Returns:
+        Dict with {"processed": N, "described": N, "failed": N}.
+    """
+    queue = _load_queue()
+    if not queue:
+        logger.info("Figure description queue is empty")
+        return {"processed": 0, "described": 0, "failed": 0}
+
+    logger.info("Processing figure description queue: %d figures", len(queue))
+    vd = VisionDescriptor()
+
+    result = {"processed": 0, "described": 0, "failed": 0}
+    remaining = []
+    limit = max_figures or len(queue)
+
+    for entry in queue[:limit]:
+        result["processed"] += 1
+        try:
+            described = vd.describe_figures(
+                entry["figures"],
+                unload_first=None,
+                reload_after=False,
+                fallback_to_caption=True,
+            )
+            result["described"] += sum(
+                1 for f in described if f.get("description", "").strip()
+                and f.get("description") != f.get("caption", "")
+            )
+            # Re-embed described figures into ChromaDB
+            embedder = FigureEmbedder(hybrid_retriever)
+            embedder.embed(described, pdf_source=entry["pdf_name"])
+            logger.info("Re-embedded described figures for %s", entry["pdf_name"])
+        except Exception as e:
+            logger.warning("Deferred description failed for %s: %s", entry["pdf_name"], e)
+            result["failed"] += 1
+
+    # Keep remaining entries for next run
+    remaining = queue[limit:]
+    _save_queue(remaining)
+
+    logger.info("Figure description queue: %d processed, %d described, %d failed, %d remaining",
+                 result["processed"], result["described"], result["failed"], len(remaining))
+    return result
 
 
 def vision_ingest_pdf(
@@ -47,12 +132,14 @@ def vision_ingest_pdf(
         hybrid_retriever: The HybridRetriever whose ChromaDB collection
                           will receive figure embeddings.
         describe: If True, call the vision model to generate descriptions.
-                  If False, embed captions only (fast, zero LLM cost).
+                  If False, embed captions only (fast, zero LLM cost) and
+                  queue for deferred description via ``describe_queued_figures()``.
         threshold: Relevance threshold for FigureFilter (default 0.35).
 
     Returns:
         Dict with counts: {"extracted": N, "kept": N, "embedded": N,
-                           "described": N, "skipped_figures": N}.
+                           "described": N, "skipped_figures": N,
+                           "queued": N (when describe=False)}.
     """
     result: Dict[str, int] = {
         "extracted": 0,
@@ -60,6 +147,7 @@ def vision_ingest_pdf(
         "embedded": 0,
         "described": 0,
         "skipped_figures": 0,
+        "queued": 0,
     }
 
     try:
@@ -85,17 +173,14 @@ def vision_ingest_pdf(
                      len(figures), pdf_path.name)
         return result
 
-    # ── 3. Describe ──
+    # ── 3. Describe (or defer to queue) ──
     if describe:
         try:
             vd = VisionDescriptor()
-            # Don't unload the text model explicitly — gemma4:e4b is likely
-            # already loaded for extraction/summarization tasks and we want
-            # to keep it. The VisionDescriptor will use the same model.
             kept_figures = vd.describe_figures(
                 kept_figures,
-                unload_first=None,   # don't unload — gemma4 is already loaded
-                reload_after=False,  # don't unload — it's needed for processing
+                unload_first=None,
+                reload_after=False,
                 fallback_to_caption=True,
             )
             result["described"] = sum(
@@ -110,9 +195,23 @@ def vision_ingest_pdf(
             for fig in kept_figures:
                 fig["description"] = fig.get("caption", "")
     else:
-        # Use captions as descriptions (fast path, zero LLM)
+        # Fast path: embed captions now, queue for later description
         for fig in kept_figures:
             fig["description"] = fig.get("caption", "")
+        # Queue for deferred processing
+        queue = _load_queue()
+        queue.append({
+            "pdf_name": pdf_path.name,
+            "pdf_path": str(pdf_path),
+            "figures": [
+                {k: v for k, v in f.items() if k != "description"}
+                for f in kept_figures
+            ],
+        })
+        _save_queue(queue)
+        result["queued"] = len(kept_figures)
+        logger.info("Vision ingest: queued %d figures for %s for deferred description",
+                     len(kept_figures), pdf_path.name)
 
     # ── 4. Embed ──
     try:
@@ -120,7 +219,7 @@ def vision_ingest_pdf(
         count = embedder.embed(kept_figures, pdf_source=pdf_path.name)
         result["embedded"] = count
         logger.info("Vision ingest: embedded %d figure descriptions for %s",
-                     count, pdf_path.name)
+                      count, pdf_path.name)
     except Exception as e:
         logger.error("Figure embedding failed for %s: %s", pdf_path.name, e)
 

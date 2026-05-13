@@ -2,8 +2,8 @@
 Figure-to-text embedding for cross-modal retrieval.
 
 Embeds figure descriptions into ChromaDB alongside text chunks, using a
-``chunk_type="figure"`` metadata tag.  Extends the existing ``HybridRetriever``
-with an ``include_figures`` parameter for cross-modal queries.
+``chunk_type="figure"`` metadata tag.  The ``HybridRetriever.query()``
+accepts ``include_figures=True`` for cross-modal queries.
 
 Figure embeddings use the same ChromaDB collection as text chunks (shared
 semantic space from the same ``all-MiniLM-L6-v2`` embedding model), enabling
@@ -100,116 +100,3 @@ class FigureEmbedder:
         )
         logger.info("Embedded %d figure descriptions into ChromaDB", len(ids))
         return len(ids)
-
-
-def query_with_figures(
-    retriever: HybridRetriever,
-    query: str,
-    n_results: int = 5,
-    filter_references: bool = True,
-    include_figures: bool = False,
-    max_chunks: int = 20,
-    **kwargs,
-) -> List[Dict]:
-    """Query the hybrid retriever with optional figure results.
-
-    When ``include_figures=True``, figure descriptions are included in results
-    alongside text chunks.  The ChromaDB query is run with a broader fetch to
-    ensure figure results surface.
-
-    Args:
-        retriever: Configured HybridRetriever.
-        query: Search query string.
-        n_results: Number of results to return.
-        filter_references: Exclude reference chunks.
-        include_figures: Include figure description results.
-        max_chunks: Cap on result count.
-        **kwargs: Passed to ``retriever.query()``.
-
-    Returns:
-        List of ``{"text": str, "metadata": dict}`` results.
-    """
-    if not include_figures:
-        return retriever.query(
-            query,
-            n_results=n_results,
-            filter_references=filter_references,
-            max_chunks=max_chunks,
-            **kwargs,
-        )
-
-    # When including figures, we need to NOT filter by chunk_type in the
-    # query call, then do our own filtering that preserves figures.
-    results = retriever.query(
-        query,
-        n_results=n_results * 2,
-        filter_references=False,  # we'll filter below
-        max_chunks=max_chunks * 2,
-        **kwargs,
-    )
-
-    # Separate figures and text/reference, then interleave
-    figures = []
-    texts = []
-    for r in results:
-        meta = r.get("metadata", {})
-        if meta.get("chunk_type") == "figure":
-            figures.append(r)
-        elif not (filter_references and meta.get("chunk_type") == "reference"):
-            texts.append(r)
-
-    # Return text results first, then figures
-    final = texts[:max_chunks - min(len(figures), max_chunks // 3)]
-    final.extend(figures[: max_chunks // 3])
-    return final[:max_chunks]
-
-
-# Monkey-patch HybridRetriever to support include_figures
-def _extend_hybrid_retriever() -> None:
-    """Extend HybridRetriever.query to accept include_figures parameter."""
-    _original_query = HybridRetriever.query
-
-    def extended_query(
-        self,
-        query: str,
-        n_results: int = 5,
-        filter_references: bool = True,
-        similarity_threshold: float | None = None,
-        max_chunks: int = 20,
-        include_figures: bool = False,
-    ) -> List[Dict]:
-        # ── Fetch raw results (no figure/reference filtering yet) ──
-        raw_results = _original_query(
-            self, query,
-            n_results=n_results * (2 if include_figures else 1),
-            filter_references=False,
-            similarity_threshold=similarity_threshold,
-            max_chunks=max_chunks * (2 if include_figures else 1),
-        )
-
-        if include_figures:
-            # Separate figures from text, then interleave
-            figures = []
-            texts = []
-            for r in raw_results:
-                meta = r.get("metadata", {})
-                if meta.get("chunk_type") == "figure":
-                    figures.append(r)
-                elif not (filter_references and meta.get("chunk_type") == "reference"):
-                    texts.append(r)
-            final = texts[:max_chunks - min(len(figures), max_chunks // 3)]
-            final.extend(figures[:max_chunks // 3])
-            return final[:max_chunks]
-        else:
-            # Filter out figure AND reference chunks
-            return [
-                r for r in raw_results
-                if r.get("metadata", {}).get("chunk_type") not in ("figure",)
-                and not (filter_references and r.get("metadata", {}).get("chunk_type") == "reference")
-            ][:max_chunks]
-
-    HybridRetriever.query = extended_query
-
-
-# Apply the extension at module load time
-_extend_hybrid_retriever()

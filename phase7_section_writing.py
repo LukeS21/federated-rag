@@ -31,9 +31,6 @@ load_dotenv(override=True)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Trigger monkey-patch BEFORE importing HybridRetriever
-import src.vision.figure_embedder  # noqa: F401 — adds include_figures to query
-
 from src.retrieval.chroma_client import ChromaClient
 from src.retrieval.bm25_index import BM25Index
 from src.retrieval.hybrid_retriever import HybridRetriever

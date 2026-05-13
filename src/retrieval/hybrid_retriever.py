@@ -54,14 +54,21 @@ class HybridRetriever:
         filter_references: bool = True,
         similarity_threshold: float | None = None,
         max_chunks: int = 20,
+        include_figures: bool = False,
     ) -> List[Dict]:
         """Query both indexes and fuse results.
 
         When ``similarity_threshold`` is set, ChromaDB results are filtered
         by L2 distance before fusion (lower = more similar).  The final result
         list is capped at ``max_chunks`` to prevent context‑window overflow.
+
+        When ``include_figures=True``, figure description chunks are interleaved
+        with text results (up to 1/3 of max_chunks).  Figure chunks are retrieved
+        via ChromaDB only (not BM25 — descriptions are AI‑generated).
         """
-        fetch_n = max(n_results * 5, max_chunks * 2, 50)
+        base_n = n_results * (2 if include_figures else 1)
+        base_max = max_chunks * (2 if include_figures else 1)
+        fetch_n = max(base_n * 5, base_max * 2, 50)
 
         # Dense
         chroma_res = self.chroma.query(
@@ -93,19 +100,41 @@ class HybridRetriever:
         # Fuse lists preserving order
         fused_texts = reciprocal_rank_fusion(dense_texts, sparse_texts)
 
-        # Build final result list with metadata where possible
-        results = []
+        # Build raw result list with metadata where possible
+        raw_results = []
         seen = set()
         for text in fused_texts:
             if text in seen:
                 continue
             seen.add(text)
             meta = text_meta.get(text, {})
-
-            if filter_references and meta.get("chunk_type") == "reference":
-                continue
-
-            results.append({"text": text, "metadata": meta})
-            if len(results) >= max_chunks:
+            raw_results.append({"text": text, "metadata": meta})
+            if len(raw_results) >= base_max:
                 break
-        return results
+
+        if include_figures:
+            # Separate figures from text/reference, then interleave
+            figures = []
+            texts = []
+            for r in raw_results:
+                meta = r.get("metadata", {})
+                if meta.get("chunk_type") == "figure":
+                    figures.append(r)
+                elif not (filter_references and meta.get("chunk_type") == "reference"):
+                    texts.append(r)
+            final = texts[:max_chunks - min(len(figures), max_chunks // 3)]
+            final.extend(figures[:max_chunks // 3])
+            return final[:max_chunks]
+        else:
+            # Filter out figure AND reference chunks
+            results = []
+            for r in raw_results:
+                meta = r.get("metadata", {})
+                if meta.get("chunk_type") in ("figure",):
+                    continue
+                if filter_references and meta.get("chunk_type") == "reference":
+                    continue
+                results.append(r)
+                if len(results) >= max_chunks:
+                    break
+            return results

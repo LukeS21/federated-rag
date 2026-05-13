@@ -9,43 +9,73 @@
   "colorGroups": [
     {
       "query": "tag:gaps",
-      "color": {"a": 1, "rgb": 14700331}
+      "color": {
+        "a": 1,
+        "rgb": 14700331
+      }
     },
     {
       "query": "tag:decisions",
-      "color": {"a": 1, "rgb": 5411676}
+      "color": {
+        "a": 1,
+        "rgb": 5411676
+      }
     },
     {
       "query": "tag:vision",
-      "color": {"a": 1, "rgb": 7881055}
+      "color": {
+        "a": 1,
+        "rgb": 7881055
+      }
     },
     {
       "query": "tag:synthesis",
-      "color": {"a": 1, "rgb": 16744448}
+      "color": {
+        "a": 1,
+        "rgb": 16744448
+      }
     },
     {
       "query": "tag:architecture",
-      "color": {"a": 1, "rgb": 6711039}
+      "color": {
+        "a": 1,
+        "rgb": 6711039
+      }
     },
     {
       "query": "tag:models",
-      "color": {"a": 1, "rgb": 16764108}
+      "color": {
+        "a": 1,
+        "rgb": 16764108
+      }
     },
     {
       "query": "tag:testing",
-      "color": {"a": 1, "rgb": 4360181}
+      "color": {
+        "a": 1,
+        "rgb": 4360181
+      }
     },
     {
       "query": "tag:benchmarks",
-      "color": {"a": 1, "rgb": 11009599}
+      "color": {
+        "a": 1,
+        "rgb": 11009599
+      }
     },
     {
       "query": "tag:phases",
-      "color": {"a": 1, "rgb": 8894184}
+      "color": {
+        "a": 1,
+        "rgb": 8894184
+      }
     },
     {
       "query": "tag:dev",
-      "color": {"a": 1, "rgb": 10724259}
+      "color": {
+        "a": 1,
+        "rgb": 10724259
+      }
     }
   ],
   "collapse-display": false,
@@ -58,6 +88,6 @@
   "repelStrength": 10,
   "linkStrength": 1,
   "linkDistance": 250,
-  "scale": 0.3628873693012118,
+  "scale": 0.9283603904380482,
   "close": true
 }

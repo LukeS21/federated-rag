@@ -169,22 +169,24 @@ with tab_query:
                 from src.retrieval.chroma_client import ChromaClient
                 from src.retrieval.bm25_index import BM25Index
                 from src.retrieval.hybrid_retriever import HybridRetriever
-                from src.graph.networkx_json_storage import NetworkXJSONStorage
+                from src.graph import create_graph_storage
                 from src.unicode_map import scrub_unicode
 
                 CHROMA_PATH = str(PROJECT_DIR / "chroma_data")
                 GRAPH_PATH = str(PROJECT_DIR / "project_graph.json")
 
                 chroma = ChromaClient(collection_name="public_corpus", persist_directory=CHROMA_PATH)
-                bm25 = BM25Index()
-                # Rebuild BM25 index from ChromaDB data
-                all_docs = chroma.collection.get(include=["documents", "metadatas"])
-                if all_docs.get("documents"):
-                    bm25.add_documents([d for d, m in zip(all_docs["documents"],
-                                            all_docs.get("metadatas") or [])
-                                        if (m or {}).get("chunk_type") != "reference"])
+                # BM25 with persistence — load from disk if available
+                bm25 = BM25Index(persist_dir=PROJECT_DIR / "bm25_index")
+                if not bm25.load():
+                    # Fallback: rebuild from ChromaDB
+                    all_docs = chroma.collection.get(include=["documents", "metadatas"])
+                    if all_docs.get("documents"):
+                        bm25.add_documents([d for d, m in zip(all_docs["documents"],
+                                                all_docs.get("metadatas") or [])
+                                            if (m or {}).get("chunk_type") != "reference"])
                 hybrid = HybridRetriever(chroma_client=chroma, bm25_index=bm25)
-                graph_storage = NetworkXJSONStorage(file_path=GRAPH_PATH)
+                graph_storage = create_graph_storage(file_path=GRAPH_PATH)
 
                 # Check if we need to ingest
                 data_dir = Path("data")

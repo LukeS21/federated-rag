@@ -9,9 +9,6 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# Apply the include_figures monkey-patch to HybridRetriever BEFORE importing it
-import src.vision.figure_embedder  # noqa: F401 — triggers monkey-patch of HybridRetriever.query
-
 from src.retrieval.chroma_client import ChromaClient
 from src.retrieval.bm25_index import BM25Index
 from src.retrieval.hybrid_retriever import HybridRetriever

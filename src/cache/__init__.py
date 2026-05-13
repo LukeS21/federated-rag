@@ -6,4 +6,4 @@ cached LLM responses or query results misleading. All cache keys include
 this version string, so bumping it transparently invalidates stale entries.
 """
 
-CACHE_VERSION = "v3"  # v3: stronger anti-hallucination constraint in Drafter prompt
+CACHE_VERSION = "v4"  # v4: Phase 8 — SQLite cache migration, native include_figures, BM25 persistence

@@ -46,6 +46,7 @@ class ClaimLedger:
             ledger_path: Path to persist the ledger to disk (JSON).
         """
         self.claims: List[Dict[str, Any]] = []
+        self._by_id: Dict[str, Dict[str, Any]] = {}
         self.ledger_path = Path(ledger_path) if ledger_path else None
         if self.ledger_path and self.ledger_path.exists():
             self.load()
@@ -95,6 +96,7 @@ class ClaimLedger:
             "timestamp": time.time(),
         }
         self.claims.append(record)
+        self._by_id[claim_id] = record
         logger.debug("Ledger: added claim %s [section=%s, %d citations]",
                       claim_id, section, len(citations))
         return record
@@ -109,13 +111,15 @@ class ClaimLedger:
         return [self.add_claim(t, section, grounded=grounded) for t in claim_texts]
 
     def find_duplicates(self, claim_text: str) -> List[Dict[str, Any]]:
-        """Find existing claims with the same stable ID."""
+        """Find existing claims with the same stable ID. O(1) lookup."""
         cid = self._claim_id(claim_text)
-        return [c for c in self.claims if c["claim_id"] == cid]
+        claim = self._by_id.get(cid)
+        return [claim] if claim else []
 
     def is_duplicate(self, claim_text: str) -> bool:
-        """Return True if this claim text already exists in the ledger."""
-        return len(self.find_duplicates(claim_text)) > 0
+        """Return True if this claim text already exists in the ledger. O(1)."""
+        cid = self._claim_id(claim_text)
+        return cid in self._by_id
 
     def filter_new_claims(self, claim_texts: List[str]) -> List[str]:
         """Return only claim texts that are not yet in the ledger."""
@@ -258,12 +262,14 @@ class ClaimLedger:
 
         data = json.loads(src.read_text(encoding="utf-8"))
         self.claims = data.get("claims", [])
+        self._by_id = {c["claim_id"]: c for c in self.claims}
         logger.info("Ledger loaded: %d claims from %s", len(self.claims), src)
         return self
 
     def clear(self) -> None:
         """Reset the ledger to empty."""
         self.claims = []
+        self._by_id = {}
 
     def __len__(self) -> int:
         return len(self.claims)

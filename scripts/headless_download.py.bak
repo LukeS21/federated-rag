@@ -1,0 +1,550 @@
+#!/usr/bin/env python3
+"""
+Headless PDF downloader — generic approach via network response interception.
+
+Instead of per-publisher scraping, this monitors ALL network responses
+in the browser for PDF content (Content-Type: application/pdf). Works for
+any publisher, any URL pattern, new tabs — no publisher-specific code needed.
+
+Resolution chain:
+  1. Direct HTTP for repository URLs (S2 OA, PMC, arXiv — fast, no browser)
+  2. Headless browser via EZProxy for paywalled publishers:
+     a. Navigate to DOI through EZProxy
+     b. Intercept ALL PDF responses from network
+     c. Click likely PDF links on the page
+     d. Navigate new tabs to capture their PDFs
+
+Usage:
+    python scripts/headless_download.py                # Batch
+    python scripts/headless_download.py --doi "..."    # Single paper
+    python scripts/headless_download.py --visible      # Show browser
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import logging
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from dotenv import load_dotenv; load_dotenv(override=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("headless_download")
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("pip install playwright && python -m playwright install chromium")
+    sys.exit(1)
+
+EXTERNAL_DIR = Path("data/external")
+STATUS_PATH = EXTERNAL_DIR / "zotero_sync_status.json"
+AUTH_PATH = EXTERNAL_DIR / "vcu_auth.json"
+EZPROXY = os.getenv("INSTITUTIONAL_PROXY_URL", "https://proxy.library.vcu.edu/login?url=")
+UNPAYWALL_EMAIL = os.getenv("UNPAYWALL_EMAIL", "")
+
+import requests as http
+
+
+def _get_pdf_urls(doi: str) -> tuple[list[str], str | None]:
+    """Resolve DOI to fast candidate URLs + PMID. Skips S2 (rate-limited)."""
+    doi_clean = doi.strip().lower().replace("https://doi.org/", "")
+    urls: list[str] = []
+    pmid: str | None = None
+
+    # — PubMed PMID (fast, reliable, 10 req/s) —
+    try:
+        resp = http.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            params={"db": "pubmed", "term": f"{doi_clean}[doi]", "retmode": "json",
+                    "retmax": "1", "api_key": os.getenv("PUBMED_API_KEY", "")},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            ids = resp.json().get("esearchresult", {}).get("idlist", [])
+            if ids:
+                pmid = ids[0]
+    except Exception:
+        pass
+
+    # — European PMC / PMC by PMID —
+    if pmid:
+        urls.append(f"https://europepmc.org/articles/PMC{pmid}/pdf?pdf=render")
+
+    return urls, pmid
+
+
+def _try_fast_download(urls: list[str]) -> bytes | None:
+    """Try downloading from direct URLs with requests (fast, no browser)."""
+    repo_domains = ["europepmc", "ncbi.nlm.nih", "arxiv", "biorxiv", "medrxiv",
+                     "pubmedcentral", "semanticscholar"]
+    for url in urls:
+        if not url:
+            continue
+        try:
+            r = http.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            }, timeout=45, allow_redirects=True, stream=True)
+            if r.status_code == 200:
+                content = b""
+                for chunk in r.iter_content(8192):
+                    content += chunk
+                    if len(content) > 30_000_000:
+                        break
+                if len(content) > 1000 and content[:4] == b"%PDF":
+                    logger.info("  [fast-http] %d KB", len(content) // 1024)
+                    return content
+        except Exception:
+            continue
+    return None
+
+
+def _intercept_pdf_responses(context, page, timeout_s: int = 30) -> bytes | None:
+    """Generic approach: intercept ALL network PDF responses in the browser.
+
+    Attaches response listeners to every page (including dynamically opened
+    tabs).  Monitors for PDF responses, clicks likely PDF links on the page,
+    and navigates new tabs.  Returns the first PDF found, or None.
+    """
+    captured: list[bytes] = []
+
+    def on_response(response):
+        try:
+            ct = response.headers.get("content-type", "").lower()
+            if "pdf" in ct or "octet-stream" in ct:
+                body = response.body()
+                if body and len(body) > 1000 and body[:4] == b"%PDF":
+                    captured.append(body)
+        except Exception:
+            pass
+
+    def on_page(new_page):
+        """Attach response listener + download handler to new tabs."""
+        new_page.on("response", on_response)
+
+        def on_dl(dl):
+            try:
+                tmp = EXTERNAL_DIR / "tmp_headless.pdf"
+                dl.save_as(str(tmp))
+                if tmp.stat().st_size > 1000:
+                    content = tmp.read_bytes()
+                    if content[:4] == b"%PDF":
+                        captured.append(content)
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        new_page.on("download", on_dl)
+
+    # Attach to initial page
+    page.on("response", on_response)
+    context.on("page", on_page)
+
+    deadline = time.time() + timeout_s
+
+    # — Click likely PDF links on the page —
+    click_selectors = [
+        'a[href*=".pdf"]:visible',
+        'a:has-text("PDF"):visible',
+        'a:has-text("Download PDF"):visible',
+        'a:has-text("Full Text"):visible',
+        'a:has-text("Download"):visible',
+    ]
+    for sel in click_selectors:
+        if captured or time.time() > deadline:
+            break
+        try:
+            el = page.query_selector(sel)
+            if el:
+                el.click(timeout=3000)
+                time.sleep(2)
+        except Exception:
+            continue
+
+    # — Wait for any new tabs to load and capture PDFs —
+    while time.time() < deadline:
+        if captured:
+            break
+        # Check all pages in context
+        for pg in context.pages:
+            if captured:
+                break
+            try:
+                pg.bring_to_front()
+                pg.wait_for_timeout(500)
+                pg_url = pg.url
+                # If URL points to PDF, try reading content
+                if pg_url.lower().endswith(".pdf") or "/pdf" in pg_url.lower():
+                    try:
+                        content = pg.evaluate("document.body.innerText") or ""
+                        # Browser might render PDF inline
+                        raw = pg.content()
+                        if raw and len(raw) > 500:
+                            raw_bytes = raw.encode() if isinstance(raw, str) else raw
+                            if raw_bytes[:4] == b"%PDF":
+                                captured.append(raw_bytes)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        time.sleep(2)
+
+    return captured[0] if captured else None
+
+
+def download_headless(doi: str, visible: bool = False) -> str | None:
+    """Simple approach: browser establishes EZProxy session, Python downloads.
+
+    1. Navigate EZProxy DOI to establish session
+    2. Build direct PDF URLs by publisher pattern
+    3. Download with requests + EZProxy cookies
+    """
+    doi_clean = doi.strip().lower().replace("https://doi.org/", "")
+    doi_hash = hashlib.sha256(doi_clean.encode()).hexdigest()[:8]
+
+    existing = list(EXTERNAL_DIR.glob(f"*_{doi_hash}.pdf"))
+    if existing:
+        return "skipped"
+
+    # ── Fast Tier: Direct OA URLs (European PMC) ──
+    urls, _ = _get_pdf_urls(doi)
+    pdf_bytes = _try_fast_download(urls)
+    if pdf_bytes:
+        safe = doi_clean.replace("/", "_")[:50]
+        fname = EXTERNAL_DIR / f"{safe}_{doi_hash}.pdf"
+        fname.write_bytes(pdf_bytes)
+        return str(fname)
+
+    # ── EZProxy Tier: Navigate DOI to establish session, then download ──
+    ezy_target = EZPROXY + f"https://doi.org/{doi_clean}"
+    landing_url = ""
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=not visible,
+            args=["--disable-blink-features=AutomationControlled"])
+        ctx_kwargs = {"viewport": {"width": 1280, "height": 900},
+                       "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        if AUTH_PATH.exists():
+            ctx_kwargs["storage_state"] = str(AUTH_PATH)
+        context = browser.new_context(**ctx_kwargs)
+        page = context.new_page()
+
+        try:
+            page.goto(ezy_target, timeout=60000, wait_until="domcontentloaded")
+            landing_url = page.url
+            page.wait_for_timeout(2000)
+        except Exception:
+            pass
+        finally:
+            browser.close()
+
+    if not landing_url or "login" in landing_url.lower():
+        return None
+
+    # ── Build candidate PDF URLs from the landing page URL ──
+    # EZProxy rewrites domains: original.com → original-com.proxy.library.vcu.edu
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(landing_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+
+    candidates: list[str] = []
+
+    # Extract PII for ScienceDirect
+    pii_match = re.search(r'/pii/(S\d{16})', landing_url)
+    if pii_match and "sciencedirect" in landing_url.lower():
+        pii = pii_match.group(1)
+        candidates.append(f"{base}/science/article/pii/{pii}/pdfft")
+
+    # Wiley: replace /doi/ with /doi/pdfdirect/
+    if "onlinelibrary.wiley" in landing_url.lower():
+        candidates.append(landing_url.replace("/doi/", "/doi/pdfdirect/").split("?")[0])
+
+    # Springer: /article/ → /content/pdf/
+    if "link.springer" in landing_url.lower():
+        # Extract the DOI path
+        doi_path = landing_url.split("/article/")[-1].split("?")[0]
+        candidates.append(f"{base}/content/pdf/{doi_path}.pdf")
+
+    # Sage: /doi/abs/ or /doi/full/ → /doi/pdf/
+    if "journals.sagepub" in landing_url.lower():
+        candidates.append(landing_url.replace("/doi/abs/", "/doi/pdf/").replace("/doi/full/", "/doi/pdf/").split("?")[0])
+
+    # Also try the page URL itself as a fallback
+    candidates.append(landing_url)
+
+    # ── Download candidates with requests + EZProxy cookies ──
+    session = http.Session()
+    if AUTH_PATH.exists():
+        auth = json.loads(AUTH_PATH.read_text())
+        for c in auth.get("cookies", []):
+            session.cookies.set(c.get("name", ""), c.get("value", ""),
+                              domain=c.get("domain", ""), path=c.get("path", "/"))
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "application/pdf,*/*",
+    })
+
+    for url in candidates:
+        dl_url = EZPROXY + url if "proxy.library.vcu.edu" not in url else url
+        try:
+            r = session.get(dl_url, timeout=30, allow_redirects=True)
+            if r.status_code == 200 and len(r.content) > 1000 and r.content[:4] == b"%PDF":
+                pdf_bytes = r.content
+                logger.info("  OK [%s] %d KB", url[:60], len(pdf_bytes)//1024)
+                break
+        except Exception:
+            pass
+
+    if pdf_bytes:
+        safe = doi_clean.replace("/", "_")[:50]
+        fname = EXTERNAL_DIR / f"{safe}_{doi_hash}.pdf"
+        fname.write_bytes(pdf_bytes)
+        return str(fname)
+
+    return None
+        safe = doi_clean.replace("/", "_")[:50]
+        fname = EXTERNAL_DIR / f"{safe}_{doi_hash}.pdf"
+        fname.write_bytes(pdf_bytes)
+        return str(fname)
+
+    # ── Tier 2: headless browser with request interception ──
+    ezy_target = EZPROXY + f"https://doi.org/{doi_clean}"
+    captured_pdf_urls: list[str] = []  # collect PDF URLs from intercepted responses
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=not visible,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        ctx_kwargs = {
+            "viewport": {"width": 1280, "height": 900},
+            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        }
+        if AUTH_PATH.exists():
+            ctx_kwargs["storage_state"] = str(AUTH_PATH)
+
+        context = browser.new_context(**ctx_kwargs)
+        page = context.new_page()
+        landing_url = ""
+        collected_urls: list[str] = []  # scoped outside try block
+
+        try:
+            page.goto(ezy_target, timeout=60000, wait_until="domcontentloaded")
+            landing_url = page.url  # save BEFORE any clicks/navigation
+            page.wait_for_timeout(2000)
+
+            if "login" in page.url.lower() and "doi.org" not in page.url:
+                browser.close()
+                return None
+
+            # Click PDF links — expanded selectors for all common publishers
+            click_selectors = [
+                'a[href*=".pdf"]:visible',
+                'a:has-text("PDF"):visible',
+                'a:has-text("Download PDF"):visible',
+                'a:has-text("Full Text"):visible',
+                'a:has-text("Download"):visible',
+                'button:has-text("PDF")',
+            ]
+            
+            clicked_something = False
+            clicked_urls: list[str] = []
+
+            for sel in click_selectors:
+                try:
+                    el = page.query_selector(sel)
+                    if el:
+                        href = (el.get_attribute("href") or "")[:200]
+                        logger.info("  Clicking %s → %s", sel, href[:80])
+                        el.click(timeout=3000)
+                        page.wait_for_timeout(3000)
+                        clicked_something = True
+                        clicked_urls.append(href)
+                        break
+                except Exception:
+                    continue
+            
+            # Convert viewer URLs to direct PDF URLs per publisher
+            if clicked_something:
+                for pg in list(context.pages):
+                    pg_url = pg.url
+                    direct_pdf = None
+                    
+                    # Wiley: /doi/epdf/X → /doi/pdfdirect/X
+                    if "onlinelibrary.wiley.com" in pg_url and "/epdf/" in pg_url:
+                        direct_pdf = pg_url.replace("/epdf/", "/pdfdirect/")
+                    # Sage: /doi/reader/X → /doi/pdf/X
+                    elif "journals.sagepub.com" in pg_url and "/reader/" in pg_url:
+                        direct_pdf = pg_url.replace("/doi/reader/", "/doi/pdf/").replace("?download=true", "")
+                    # Wiley: /doi/abs/ → /doi/pdf/
+                    elif "onlinelibrary.wiley.com" in pg_url and ("/abs/" in pg_url or "/doi/" in pg_url):
+                        direct_pdf = pg_url.split("?")[0].replace("/abs/", "/pdfdirect/").replace("/doi/", "/pdfdirect/")
+                    # Any clicked URL ending in .pdf
+                    elif any(".pdf" in href for href in clicked_urls):
+                        for href in clicked_urls:
+                            if ".pdf" in href and "suppl" not in href.lower():
+                                base = pg_url.split("://")[-1].split("/")[0]
+                                direct_pdf = f"https://{base}{href}" if href.startswith("/") else href
+                                break
+                    
+                    if direct_pdf:
+                        logger.info("  → direct PDF: %s", direct_pdf[:100])
+                        collected_urls.append(direct_pdf)  # save for later download
+                        try:
+                            pg.goto(direct_pdf, timeout=30000, wait_until="domcontentloaded")
+                        except Exception:
+                            pass
+
+            # Try publisher-specific URL patterns when no link was found
+            if not clicked_something:
+                current_url = page.url
+                if "onlinelibrary.wiley.com" in current_url:
+                    pdf_url = current_url.replace("doi/abs/", "doi/pdfdirect/").replace("doi/", "doi/pdfdirect/")
+                    page.goto(pdf_url, timeout=30000, wait_until="domcontentloaded")
+                    logger.info("  Wiley direct: %s", pdf_url[:80])
+                elif "link.springer.com" in current_url:
+                    page.goto(current_url + ".pdf", timeout=30000, wait_until="domcontentloaded")
+                elif "tandfonline.com" in current_url:
+                    page.goto(current_url + "?download=true", timeout=30000, wait_until="domcontentloaded")
+                elif "journals.sagepub.com" in current_url:
+                    pdf_url = current_url.replace("/doi/abs/", "/doi/pdf/").replace("/doi/full/", "/doi/pdf/")
+                    if pdf_url != current_url:
+                        page.goto(pdf_url, timeout=30000, wait_until="domcontentloaded")
+                else:
+                    logger.info("  No PDF link found on %s", current_url[:120])
+
+        except Exception as e:
+            logger.debug("  Browser: %s", str(e)[:80])
+        finally:
+            for pg in context.pages:
+                url = pg.url
+                skip_reason = ""
+                if url == landing_url:
+                    skip_reason = "matches landing"
+                elif "via%3Dihub" in url:
+                    skip_reason = "via ihub"
+                elif "font" in url.lower():
+                    skip_reason = "font"
+                
+                if skip_reason:
+                    continue
+                
+                if url not in collected_urls:
+                    collected_urls.append(url)
+            browser.close()
+
+    # — Download collected URLs with requests + EZProxy cookies —
+    logger.info("  Collected: %d URLs (landing: %s)", len(collected_urls), landing_url[:80])
+    for u in collected_urls:
+        logger.info("    %s", u[:120])
+    session = http.Session()
+    if AUTH_PATH.exists():
+        auth = json.loads(AUTH_PATH.read_text())
+        for c in auth.get("cookies", []):
+            session.cookies.set(c.get("name", ""), c.get("value", ""),
+                              domain=c.get("domain", ""), path=c.get("path", "/"))
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "application/pdf,*/*",
+    })
+
+    for url in collected_urls[-10:]:
+        if "chrome-extension" in url or "suppl" in url.lower():
+            continue
+        dl_url = EZPROXY + url if "proxy.library.vcu.edu" not in url else url
+        try:
+            r = session.get(dl_url, timeout=30, allow_redirects=True)
+            if r.status_code == 200 and len(r.content) > 1000 and r.content[:4] == b"%PDF":
+                pdf_bytes = r.content
+                logger.info("  Got PDF: %d bytes", len(pdf_bytes))
+                break
+        except Exception:
+            pass
+
+    if pdf_bytes:
+        safe = doi_clean.replace("/", "_")[:50]
+        fname = EXTERNAL_DIR / f"{safe}_{doi_hash}.pdf"
+        fname.write_bytes(pdf_bytes)
+        logger.info("  OK [headless] %s (%d KB)", fname.name, len(pdf_bytes) // 1024)
+        return str(fname)
+
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Headless PDF downloader (generic)")
+    parser.add_argument("--doi", type=str, help="Download a single DOI")
+    parser.add_argument("--visible", action="store_true", help="Show browser")
+    parser.add_argument("--limit", type=int, default=0, help="Limit batch to N papers")
+    args = parser.parse_args()
+
+    if args.doi:
+        result = download_headless(args.doi, visible=args.visible)
+        print(f"Result: {result}")
+        return
+
+    if not STATUS_PATH.exists():
+        logger.error("No sync status found")
+        return
+
+    status = json.loads(STATUS_PATH.read_text())
+    to_download = []
+    for key, item in status.items():
+        if not isinstance(item, dict):
+            continue
+        if item.get("status") not in ("awaiting_zotero", "zotero_created"):
+            continue
+        doi = item.get("doi", "")
+        if not doi:
+            continue
+        to_download.append((key, item))
+    
+    if args.limit:
+        to_download = to_download[:args.limit]
+
+    logger.info("BATCH: %d papers (limit=%d)", len(to_download), args.limit or len(to_download))
+
+    results = {"downloaded": 0, "skipped": 0, "failed": 0}
+    for i, (key, item) in enumerate(to_download):
+        doi = item.get("doi", "")
+        title = item.get("title", "")[:60]
+        logger.info("[%d/%d] %s", i + 1, len(to_download), title)
+
+        try:
+            result = download_headless(doi, visible=args.visible)
+            if result == "skipped":
+                results["skipped"] += 1
+            elif result:
+                results["downloaded"] += 1
+                item["status"] = "headless_downloaded"
+                item["pdf_path"] = result
+            else:
+                results["failed"] += 1
+        except Exception as e:
+            results["failed"] += 1
+            logger.warning("FAIL: %s", str(e)[:80])
+
+        if (i + 1) % 10 == 0:
+            logger.info("  --- %d/%d: %d ok, %d fail ---",
+                         i + 1, len(to_download), results["downloaded"], results["failed"])
+            status["_updated_at"] = time.time()
+            STATUS_PATH.write_text(json.dumps(status, indent=2, ensure_ascii=False))
+
+    status["_updated_at"] = time.time()
+    STATUS_PATH.write_text(json.dumps(status, indent=2, ensure_ascii=False))
+    logger.info("DONE: %d downloaded, %d skipped, %d failed",
+                 results["downloaded"], results["skipped"], results["failed"])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

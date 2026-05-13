@@ -32,3 +32,8 @@ projects/default/query_cache/
 .Rhistory
 projects/default/figures/
 logs/
+data/external/
+# Phase 8-9 binary/runtime data
+projects/*/chroma_data/
+projects/*/bm25_index/
+data/external/vcu_auth.json

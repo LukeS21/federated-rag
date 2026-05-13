@@ -1,0 +1,117 @@
+{
+  "pipeline": "Europe PMC + Semantic Scholar",
+  "query": "titanium implant macrophage polarization osseointegration surface modification",
+  "target_count": 10,
+  "search_time_s": 0.826,
+  "papers_found": 10,
+  "fetch_time_s": 2.809,
+  "parse_time_s": 0.319,
+  "total_chunks": 414,
+  "total_words": 262484,
+  "s2_time_s": 20.617,
+  "s2_papers_matched": 10,
+  "s2_embeddings_fetched": 8,
+  "total_time_s": 24.571,
+  "paper_details": [
+    {
+      "title": "Macrophages, Foreign Body Giant Cells and Their Response to Implantable Biomater",
+      "pmcid": "PMC5512621",
+      "doi": "10.3390/ma8095269",
+      "chunks": 19,
+      "words": 13408,
+      "sections": 11,
+      "figures": 5,
+      "xml": true
+    },
+    {
+      "title": "Calcium Phosphate Bioceramics: A Review of Their History, Structure, Properties,",
+      "pmcid": "PMC5506916",
+      "doi": "10.3390/ma10040334",
+      "chunks": 47,
+      "words": 61761,
+      "sections": 28,
+      "figures": 16,
+      "xml": true
+    },
+    {
+      "title": "Antibacterial metals and alloys for potential biomedical implants.",
+      "pmcid": "PMC7876544",
+      "doi": "10.1016/j.bioactmat.2021.01.030",
+      "chunks": 86,
+      "words": 37597,
+      "sections": 57,
+      "figures": 26,
+      "xml": true
+    },
+    {
+      "title": "Application of hydroxyapatite nanoparticles in tumor-associated bone segmental d",
+      "pmcid": "PMC6677551",
+      "doi": "10.1126/sciadv.aax6946",
+      "chunks": 37,
+      "words": 13076,
+      "sections": 28,
+      "figures": 6,
+      "xml": true
+    },
+    {
+      "title": "Inflammasomes in Alveolar Bone Loss.",
+      "pmcid": "PMC8221428",
+      "doi": "10.3389/fimmu.2021.691013",
+      "chunks": 26,
+      "words": 27247,
+      "sections": 19,
+      "figures": 4,
+      "xml": true
+    },
+    {
+      "title": "Recent advances in regenerative biomaterials.",
+      "pmcid": "PMC9745784",
+      "doi": "10.1093/rb/rbac098",
+      "chunks": 40,
+      "words": 30463,
+      "sections": 22,
+      "figures": 15,
+      "xml": true
+    },
+    {
+      "title": "Recent Advances of Chitosan Formulations in Biomedical Applications.",
+      "pmcid": "PMC9504745",
+      "doi": "10.3390/ijms231810975",
+      "chunks": 41,
+      "words": 24997,
+      "sections": 32,
+      "figures": 6,
+      "xml": true
+    },
+    {
+      "title": "Engineering immunomodulatory and osteoinductive implant surfaces via mussel adhe",
+      "pmcid": "PMC8748715",
+      "doi": "10.1038/s41467-021-27816-1",
+      "chunks": 29,
+      "words": 14166,
+      "sections": 19,
+      "figures": 7,
+      "xml": true
+    },
+    {
+      "title": "On the road to smart biomaterials for bone research: definitions, concepts, adva",
+      "pmcid": "PMC7878740",
+      "doi": "10.1038/s41413-020-00131-z",
+      "chunks": 29,
+      "words": 17678,
+      "sections": 21,
+      "figures": 5,
+      "xml": true
+    },
+    {
+      "title": "GelMA-based bioactive hydrogel scaffolds with multiple bone defect repair functi",
+      "pmcid": "PMC10504735",
+      "doi": "10.1186/s40824-023-00422-6",
+      "chunks": 60,
+      "words": 22091,
+      "sections": 39,
+      "figures": 18,
+      "xml": true
+    }
+  ]
+}

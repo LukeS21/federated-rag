@@ -1,0 +1,103 @@
+{
+  "downloaded": 16,
+  "total_attempted": 200,
+  "timestamp": 1778472368.452281,
+  "papers": [
+    {
+      "title": "Inducing macrophage M2-Type polarization via anodized anisotropic TiO2 nanoporous topography on tita",
+      "path": "data/external/2025_Inducing macrophage M2-Type polarization via anodi_bbaeea69.pdf",
+      "year": "2025",
+      "doi": "10.1186/s12903-025-07131-7"
+    },
+    {
+      "title": "Surface Modification of Dental Titanium Implant by Layer-by-Layer Electrostatic Self-Assembly.",
+      "path": "data/external/2022_Surface Modification of Dental Titanium Implant by_779fc616.pdf",
+      "year": "2022",
+      "doi": "10.3389/fphys.2017.00574"
+    },
+    {
+      "title": "Potential role of metal nanoparticles in treatment of peri-implant mucositis and peri-implantitis.",
+      "path": "data/external/2024_Potential role of metal nanoparticles in treatment_5783e9b4.pdf",
+      "year": "2024",
+      "doi": "10.1186/s12938-024-01294-0"
+    },
+    {
+      "title": "Micro-arc oxidation (MAO) and its potential for improving the performance of titanium implants in bi",
+      "path": "data/external/2023_Micro-arc oxidation (MAO) and its potential for im_2e3eccc8.pdf",
+      "year": "2023",
+      "doi": "10.3389/fbioe.2023.1282590"
+    },
+    {
+      "title": "Enhanced peri-implantitis management through purple-LED irradiation coupled with silver ion applicat",
+      "path": "data/external/2025_Enhanced peri-implantitis management through purpl_cedf9c81.pdf",
+      "year": "2025",
+      "doi": "10.1038/s41598-025-96075-7"
+    },
+    {
+      "title": "3D-printed porous titanium rods equipped with vancomycin-loaded hydrogels and polycaprolactone membr",
+      "path": "data/external/2024_3D-printed porous titanium rods equipped with vanc_7efc5e59.pdf",
+      "year": "2024",
+      "doi": "10.1038/s41598-024-72457-1"
+    },
+    {
+      "title": "Proliferation of osteoblast precursor cells on the surface of TiO2 nanowires anodically grown on a β",
+      "path": "data/external/2022_Proliferation of osteoblast precursor cells on the_d00e0ade.pdf",
+      "year": "2022",
+      "doi": "10.1038/s41598-022-11981-4"
+    },
+    {
+      "title": "Immobilization of pamidronic acids on the nanotube surface of titanium discs and their interaction w",
+      "path": "data/external/2013_Immobilization of pamidronic acids on the nanotube_f90f8a68.pdf",
+      "year": "2013",
+      "doi": "10.1186/1556-276X-8-124"
+    },
+    {
+      "title": "Sclerostin-Mediated Impaired Osteogenesis by Fibroblast-Like Synoviocytes in the Particle-Induced Os",
+      "path": "data/external/2021_Sclerostin-Mediated Impaired Osteogenesis by Fibro_c3feb4f2.pdf",
+      "year": "2021",
+      "doi": "10.3389/fmolb.2021.666295"
+    },
+    {
+      "title": "Exosomes from adipose-derived stem cells regulate M1/M2 macrophage phenotypic polarization to promot",
+      "path": "data/external/2022_Exosomes from adipose-derived stem cells regulate_4e45cc5b.pdf",
+      "year": "2022",
+      "doi": "10.1186/s13287-022-02823-1"
+    },
+    {
+      "title": "Effects of bone surface topography and chemistry on macrophage polarization.",
+      "path": "data/external/2024_Effects of bone surface topography and chemistry o_7399fad4.pdf",
+      "year": "2024",
+      "doi": "10.1038/s41598-024-62484-3"
+    },
+    {
+      "title": "Nutrient element-based bioceramic coatings on titanium alloy stimulating osteogenesis by inducing be",
+      "path": "data/external/2020_Nutrient element-based bioceramic coatings on tita_a8b72e8b.pdf",
+      "year": "2020",
+      "doi": "10.1039/c4tb00837e"
+    },
+    {
+      "title": "Innate immune regulation in dental implant osseointegration.",
+      "path": "data/external/2024_Innate immune regulation in dental implant osseoin_db3a0ea7.pdf",
+      "year": "2024",
+      "doi": "10.2186/jpr.JPR_D_23_00198"
+    },
+    {
+      "title": "Hydrophilic titanium surfaces reduce neutrophil inflammatory response and NETosis.",
+      "path": "data/external/2020_Hydrophilic titanium surfaces reduce neutrophil in_da71d684.pdf",
+      "year": "2020",
+      "doi": "10.1039/c9bm01474h"
+    },
+    {
+      "title": "Bioengineered bacteria-derived outer membrane vesicles as a versatile antigen display platform for t",
+      "path": "data/external/2021_Bioengineered bacteria-derived outer membrane vesi_a8718162.pdf",
+      "year": "2021",
+      "doi": "10.1038/s41467-021-22308-8"
+    },
+    {
+      "title": "Regulatory T cells in embryo implantation and the immune response to pregnancy.",
+      "path": "data/external/2019_Regulatory T cells in embryo implantation and the_d0e61221.pdf",
+      "year": "2019",
+      "doi": "10.1172/JCI122182"
+    }
+  ]
+}
