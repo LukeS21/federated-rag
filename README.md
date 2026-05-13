@@ -10,8 +10,8 @@ Phase 5.5 Local Model Optimization & Speed (dense claims, debate simplification,
 Phase 6 UI, Polish & Deployment (Streamlit, GLiNER-PII, correctness benchmarking layer)   ✅ Core Complete (May 2026)
 Phase 6.5 Gap Closure (parallelization, compression, cache versioning, security fuzzer)   ✅ Complete (May 2026)
 Phase 7 Vision Pipeline & Multi‑Turn Synthesis (figure extraction, vision model, section writing, claim ledger)   ✅ Complete (May 2026)
-Phase 8 Publication-Scale Retrieval   ⬜ Not Started
-Phase 9 Internet & Literature Discovery   ⬜ POC built, full infrastructure deferred to Phase 8
+Phase 8 Publication-Scale Retrieval (PDF acquisition, EZProxy/Playwright pipeline)   ✅ Deprecated — see Phase 9
+Phase 9 API-Based Literature Ingestion (Europe PMC XML, Semantic Scholar SPECTER2)   🟡 In Progress
 ```
 ___
 
@@ -1609,6 +1609,64 @@ federated_rag/
 ├── pyproject.toml
 └── README.md
 ```
+
+## Phase 9: API-Based Literature Ingestion (In Progress)
+
+### Architecture Decision
+
+Phase 8 attempted to download PDFs via Playwright/EZProxy browser automation.  This
+proved fundamentally unsustainable: per-publisher URL patterns, WAF blocks, IP
+blacklists, signed-URL expiry, and 45–90s per paper.  Phase 9 replaces this entirely
+with a REST‑API‑based approach using Europe PMC structured full-text XML.
+
+**Core pipeline** (22s for 10 papers, 27× faster than Playwright):
+
+```
+Europe PMC search (OPEN_ACCESS:Y) → fullTextXML fetch → JATS XML parse → chunks
+Semantic Scholar → DOI resolve → SPECTER2 embedding batch fetch
+```
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Europe PMC client | `src/retrieval/europe_pmc.py` | Search + full-text XML fetch + metadata |
+| JATS XML parser | `src/ingestion/pmc_xml_parser.py` | XML sections → chunk dicts (drop-in compatible with PDFParser) |
+| SPECTER2 embeddings | `src/retrieval/semantic_scholar.py` | 768‑dim vectors for fine‑grained similarity |
+| Test harness | `phase9_europe_pmc_test.py` | End‑to‑end benchmark |
+
+### Coverage tradeoff
+
+Europe PMC only returns papers archived in PubMed Central (~6.5M biomedical OA
+papers).  Papers without PMC deposition are classified as "abstract-only" —
+visible in the knowledge graph but never used for grounded claims.  For NIH-funded
+biomedical research, PMC coverage is ~80–90%.
+
+### Speed comparison
+
+| Metric | Phase 8 (Playwright) | Phase 9 (API) |
+|--------|---------------------|---------------|
+| Per paper | 45–90s | ~2.9s (27× faster) |
+| 10 papers | ~600s | **21.95s** |
+| Search | — | 0.71s |
+| Full-text fetch | — | 2.53s (10 XMLs) |
+| XML parse | — | 0.31s |
+| SPECTER2 | — | 18.40s (one‑time, cacheable) |
+
+### Known gaps (see HANDOFF.md §12 for full list)
+
+1. No retry logic on transient API failures
+2. No progress persistence (crash = restart)
+3. Ingestion not yet wired to ChromaDB
+4. Figure image download from XML `<graphic>` URLs not implemented
+5. SPECTER2 embeddings not cached (re‑fetched each run)
+
+### Phase 8 status
+
+The Playwright/EZProxy PDF download pipeline in `scripts/headless_download.py` is
+**deprecated but preserved.**  It produced 115 valid PDFs that remain in
+`data/external/`.  It still works for non‑OA papers when VCU EZProxy auth is fresh
+and publisher IP rate limits are not triggered.
 
 ## Obsidian Setup
 

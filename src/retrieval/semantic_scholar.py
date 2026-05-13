@@ -33,7 +33,8 @@ class SemanticScholarClient:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("S2_API_KEY", "")
         self._last_request = 0.0
-        self._min_interval = 0.01 if self.api_key else 1.0  # 100/s with key, 1/s without
+        # Free tier: 1 req/s. Use 2.0s margin to avoid 429 rate-limit errors.
+        self._min_interval = 2.0
 
     def _headers(self) -> Dict[str, str]:
         h = {"Accept": "application/json"}
@@ -130,17 +131,64 @@ class SemanticScholarClient:
         try:
             resp = requests.get(
                 f"{S2_BASE}/paper/DOI:{doi}",
-                params={"fields": "title,paperId,url,abstract,tldr,year,authors,externalIds,openAccessPdf,journal,citationCount"},
+                params={"fields": "title,paperId,url,abstract,tldr,year,authors,externalIds,openAccessPdf,journal,citationCount,embedding"},
                 headers=self._headers(),
                 timeout=30,
             )
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            return self._normalize_paper(resp.json())
+            data = resp.json()
+            if not data or not isinstance(data, dict):
+                return None
+            return self._normalize_paper(data)
         except Exception as e:
-            logger.error("Semantic Scholar DOI lookup failed: %s", e)
+            logger.warning("Semantic Scholar DOI lookup failed (%s): %s", doi, e)
             return None
+
+    def search_by_title(self, title: str, limit: int = 3) -> List[Dict[str, Any]]:
+        """Search Semantic Scholar by title keywords (fallback for DOI misses).
+
+        Uses first 10 words of the title as the query to find the closest match.
+        """
+        query = " ".join(title.split()[:10])
+        return self.search(query, limit=limit, fields=(
+            "title,paperId,url,abstract,tldr,year,authors,externalIds,"
+            "openAccessPdf,journal,citationCount,embedding"
+        ))
+
+    def resolve_paper(
+        self, doi: str, title: str = ""
+    ) -> Dict[str, Any] | None:
+        """Resolve a paper with DOI-first lookup, falling back to title search.
+
+        Args:
+            doi: Paper DOI.
+            title: Paper title (used as fallback query).
+
+        Returns:
+            Normalized paper dict with paper_id and embedding if available,
+            or None if the paper cannot be found in Semantic Scholar.
+        """
+        # Try DOI first
+        paper = self.search_by_doi(doi)
+        if paper and paper.get("paper_id"):
+            return paper
+
+        # Fallback: title search
+        if title:
+            logger.debug("DOI %s not in S2, trying title search...", doi)
+            results = self.search_by_title(title, limit=3)
+            for r in results:
+                # Prefer exact DOI match, but accept any reasonable match
+                if r.get("doi") == doi or r.get("title", "").lower() == title.lower():
+                    return r
+            # Accept first result as best-effort match
+            if results:
+                logger.debug("  Title fallback matched: %s", results[0].get("title", "")[:60])
+                return results[0]
+
+        return None
 
     def _normalize_paper(self, paper: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize a Semantic Scholar paper dict to a standard format."""
@@ -153,7 +201,7 @@ class SemanticScholarClient:
             "paper_id": paper.get("paperId", ""),
             "title": paper.get("title", ""),
             "abstract": paper.get("abstract", ""),
-            "tldr": (paper.get("tldr", {}) or {}).get("text", ""),
+            "tldr": (paper.get("tldr") or {}).get("text", ""),
             "year": paper.get("year"),
             "url": paper.get("url", ""),
             "doi": external_ids.get("DOI", ""),
@@ -163,4 +211,40 @@ class SemanticScholarClient:
             "citation_count": paper.get("citationCount"),
             "open_access_pdf": open_access.get("url", ""),
             "pub_types": paper.get("publicationTypes", []),
+            "embedding": (paper.get("embedding") or {}).get("vector"),
         }
+
+    # ----------------------------------------------------------------- SPECTER2
+
+    def get_embeddings_batch(self, s2_paper_ids: List[str]) -> Dict[str, Optional[List[float]]]:
+        """Fetch SPECTER2 embeddings for a batch of Semantic Scholar paper IDs.
+
+        Args:
+            s2_paper_ids: List of Semantic Scholar paper IDs.
+
+        Returns:
+            Dict mapping paper_id → 768-dim embedding vector (or None on failure).
+        """
+        if not s2_paper_ids:
+            return {}
+
+        self._rate_limit()
+        try:
+            resp = requests.post(
+                f"{S2_BASE}/paper/batch",
+                params={"fields": "paperId,embedding"},
+                headers=self._headers(),
+                json={"ids": s2_paper_ids},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            result: Dict[str, Optional[List[float]]] = {}
+            for paper in resp.json():
+                pid = paper.get("paperId", "")
+                emb = (paper.get("embedding", {}) or {}).get("vector")
+                result[pid] = emb
+            logger.info("Fetched %d SPECTER2 embeddings", len(result))
+            return result
+        except Exception as e:
+            logger.error("SPECTER2 batch fetch failed: %s", e)
+            return {}
