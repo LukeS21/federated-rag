@@ -30,9 +30,12 @@ logging.basicConfig(
 logger = logging.getLogger("phase9_test")
 
 SEARCH_QUERY = "titanium implant macrophage polarization osseointegration surface modification"
+PROJECT_DIR = Path("projects/default")
+CHROMA_PATH = str(PROJECT_DIR / "chroma_data")
+BM25_CORPUS_PATH = str(PROJECT_DIR / "bm25_corpus.json")
 
 
-def test_pipeline(count: int = 10):
+def test_pipeline(count: int = 10, ingest: bool = False):
     from src.retrieval.europe_pmc import EuropePMCClient
     from src.ingestion.pmc_xml_parser import PMCXMLParser
     from src.retrieval.semantic_scholar import SemanticScholarClient
@@ -145,8 +148,60 @@ def test_pipeline(count: int = 10):
     logger.info("  Matched %d papers, %d with embeddings in %.2fs",
                  len(s2_ids), results["s2_embeddings_fetched"], t_s2)
 
+    # ── Phase 5: Ingest into ChromaDB + BM25 (optional) ──
+    t_ingest = 0.0
+    results["ingested_pmcids"] = []
+    if ingest:
+        logger.info("\n─ Phase 5: Ingesting chunks into ChromaDB + BM25...")
+        from src.retrieval.chroma_client import ChromaClient
+        from src.retrieval.bm25_index import BM25Index
+        from src.retrieval.hybrid_retriever import HybridRetriever
+        from src.anchoring.evidence_check import set_anchoring_chroma
+        from src.utils.ingest_progress import IngestProgress
+
+        t0 = time.monotonic()
+        progress = IngestProgress()
+        chroma = ChromaClient(collection_name="public_corpus", persist_directory=CHROMA_PATH)
+        bm25 = BM25Index(persist_dir=PROJECT_DIR / "bm25_index")
+        set_anchoring_chroma(chroma)
+
+        # Load existing BM25 corpus from disk so new chunks accumulate
+        if not bm25.load():
+            logger.debug("  No existing BM25 corpus — starting fresh")
+
+        retriever = HybridRetriever(chroma_client=chroma, bm25_index=bm25)
+        ingested = 0
+        skipped = 0
+        for p in papers:
+            pmcid = p.get("pmcid", "")
+            if not pmcid:
+                continue
+            if progress.is_completed(pmcid):
+                skipped += 1
+                logger.debug("  Skipping %s (already ingested)", pmcid)
+                continue
+            xml = xml_docs.get(pmcid)
+            if not xml:
+                continue
+            chunks = parser.parse(xml, pmcid=pmcid, doi=p.get("doi", ""))
+            if not chunks:
+                continue
+            retriever.ingest(chunks)
+            progress.checkpoint(pmcid)
+            results["ingested_pmcids"].append(pmcid)
+            ingested += 1
+            logger.debug("  Ingested %s: %d chunks", pmcid, len(chunks))
+
+        progress.finalize()
+        bm25.save()
+        t_ingest = time.monotonic() - t0
+        results["ingest_time_s"] = round(t_ingest, 3)
+        results["papers_ingested"] = ingested
+        logger.info("  Ingested %d papers in %.2fs (%d skipped, %d total)",
+                     ingested, t_ingest, skipped, len(papers))
+
     # ── Summary ──
-    total_time = t_search + t_fetch + t_parse + t_s2
+    total_time = t_search + t_fetch + t_parse + t_s2 + t_ingest
     results["total_time_s"] = round(total_time, 3)
     results["paper_details"] = paper_stats
 
@@ -163,11 +218,15 @@ def test_pipeline(count: int = 10):
     logger.info("  Total chunks:       %d", len(all_chunks))
     logger.info("  Total words:        %d", results["total_words"])
     logger.info("  SPECTER2 embeddings: %d", results["s2_embeddings_fetched"])
+    if ingest:
+        logger.info("  Papers ingested:    %d", results.get("papers_ingested", 0))
     logger.info("")
     logger.info("  Search time:   %6.2fs", t_search)
     logger.info("  Fetch time:    %6.2fs", t_fetch)
     logger.info("  Parse time:    %6.2fs", t_parse)
     logger.info("  S2 time:       %6.2fs", t_s2)
+    if ingest:
+        logger.info("  Ingest time:   %6.2fs", t_ingest)
     logger.info("  ─────────────────────")
     logger.info("  TOTAL:         %6.2fs", total_time)
     logger.info("")
@@ -201,9 +260,11 @@ def main():
                         help="Number of papers to test (default: 10)")
     parser.add_argument("--query", type=str, default=SEARCH_QUERY,
                         help="Search query")
+    parser.add_argument("--ingest", action="store_true",
+                        help="Ingest parsed chunks into ChromaDB + BM25")
     args = parser.parse_args()
 
-    test_pipeline(count=args.count)
+    test_pipeline(count=args.count, ingest=args.ingest)
 
 
 if __name__ == "__main__":

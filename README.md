@@ -11,7 +11,11 @@ Phase 6 UI, Polish & Deployment (Streamlit, GLiNER-PII, correctness benchmarking
 Phase 6.5 Gap Closure (parallelization, compression, cache versioning, security fuzzer)   ✅ Complete (May 2026)
 Phase 7 Vision Pipeline & Multi‑Turn Synthesis (figure extraction, vision model, section writing, claim ledger)   ✅ Complete (May 2026)
 Phase 8 Publication-Scale Retrieval (PDF acquisition, EZProxy/Playwright pipeline)   ✅ Deprecated — see Phase 9
-Phase 9 API-Based Literature Ingestion (Europe PMC XML, Semantic Scholar SPECTER2)   🟡 In Progress
+Phase 9 API-Based Literature Ingestion (Europe PMC XML, SPECTER2, retry, persistence, ChromaDB wiring)   🟡 50% Complete (May 2026)
+Phase 10 Autonomous Background Agent (orchestrator daemon, subagents, handoff)           ⬜ Designed — not built
+Phase 11 Memory Cascade & Community Routing (hierarchical KG, relevance router)          ⬜ Designed — not built
+Phase 12 Skills & Experiential Memory (skill library, trajectory logging, agent learnings) ⬜ Designed — not built
+Phase 13 Output Tools & Structured Writing (templates, anchored writer, citation integrator) ⬜ Designed — not built
 ```
 ___
 
@@ -1567,16 +1571,42 @@ federated_rag/
 │   │   ├── zotero_adapter.py
 │   │   └── mendeley_adapter.py  # future
 │   ├── ingestion/
-│   │   └── pdf_parser.py
+│   │   ├── pdf_parser.py
+│   │   └── pmc_xml_parser.py      # Phase 9 — JATS XML → chunk dicts
 │   ├── retrieval/
 │   │   ├── chroma_client.py
 │   │   ├── bm25_index.py
-│   │   └── hybrid_retriever.py
+│   │   ├── hybrid_retriever.py
+│   │   ├── europe_pmc.py          # Phase 9 — Europe PMC REST client
+│   │   └── semantic_scholar.py    # Phase 9 — SPECTER2 embeddings
+│   ├── utils/
+│   │   └── ingest_progress.py     # Phase 9 — checkpoint-based progress
+│   ├── memory/                    # Phase 11 — planned
+│   │   ├── community_detector.py
+│   │   ├── community_summarizer.py
+│   │   ├── relevance_router.py
+│   │   ├── cascade.py
+│   │   ├── disclosure.py
+│   │   └── experiential.py       # Phase 12 — agent learnings
+│   ├── skills/                    # Phase 12 — planned
+│   │   ├── skill_loader.py
+│   │   ├── skill_creator.py
+│   │   ├── trajectory_logger.py
+│   │   └── skill_evals.py
+│   ├── outputs/                   # Phase 13 — planned
+│   │   ├── templates.py
+│   │   ├── anchored_writer.py
+│   │   └── citation_integrator.py
 │   ├── graph/
 │   │   ├── nodes.py
 │   │   ├── graph_builder.py
 │   │   ├── base_graph.py
 │   │   └── networkx_json_storage.py
+│   ├── agents/
+│   │   ├── orchestrator.py       # Phase 10 — planned (background daemon)
+│   │   ├── subagents.py           # Phase 10 — planned (parallel workers)
+│   │   ├── handoff.py             # Phase 10 — planned (auto HANDOFF.md)
+│   │   └── scheduler.py           # Phase 10 — planned (cron/timer)
 │   └── anchoring/
 │       └── evidence_check.py
 ├── tests/
@@ -1595,14 +1625,22 @@ federated_rag/
 │   └── default/
 │       ├── chroma_data/
 │       ├── bm25_index/
-│       └── project_graph.json
+│       ├── project_graph.json
+│       └── ingest_progress.json
 ├── data/
 │   └── test.pdf
 ├── docker/
 │   └── docker-compose.yml
+├── phases/                       # Phase 10+ — planned
+│   └── phase10_daemon.py
+├── skills/                    # Phase 12 — git‑backed skill library
+├── agent-learnings/           # Phase 12 — experiential memory
+├── HANDOFF.md                 # Phase 10 — auto‑generated orchestrator handoff
 ├── phase1_demo.py
 ├── phase2_demo.py
 ├── phase3_demo.py
+├── phase4_demo.py
+├── phase9_europe_pmc_test.py  # Phase 9 — pipeline test + ingestion CLI
 ├── requirements.txt
 ├── .env
 ├── .gitignore
@@ -1610,7 +1648,7 @@ federated_rag/
 └── README.md
 ```
 
-## Phase 9: API-Based Literature Ingestion (In Progress)
+## Phase 9: API-Based Literature Ingestion (50% Complete)
 
 ### Architecture Decision
 
@@ -1619,21 +1657,27 @@ proved fundamentally unsustainable: per-publisher URL patterns, WAF blocks, IP
 blacklists, signed-URL expiry, and 45–90s per paper.  Phase 9 replaces this entirely
 with a REST‑API‑based approach using Europe PMC structured full-text XML.
 
-**Core pipeline** (22s for 10 papers, 27× faster than Playwright):
+**Core pipeline** (14s for 5 papers, 27× faster than Playwright):
 
 ```
-Europe PMC search (OPEN_ACCESS:Y) → fullTextXML fetch → JATS XML parse → chunks
-Semantic Scholar → DOI resolve → SPECTER2 embedding batch fetch
+Europe PMC search (OPEN_ACCESS:Y) → fullTextXML fetch (3-retry backoff)
+  → JATS XML parse → chunk dicts → ChromaDB + BM25 ingest → progress checkpoint
+Semantic Scholar → DOI resolve (title fallback) → SPECTER2 embedding batch fetch
 ```
 
 ### Components
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| Europe PMC client | `src/retrieval/europe_pmc.py` | Search + full-text XML fetch + metadata |
-| JATS XML parser | `src/ingestion/pmc_xml_parser.py` | XML sections → chunk dicts (drop-in compatible with PDFParser) |
-| SPECTER2 embeddings | `src/retrieval/semantic_scholar.py` | 768‑dim vectors for fine‑grained similarity |
-| Test harness | `phase9_europe_pmc_test.py` | End‑to‑end benchmark |
+| Component | File | Purpose | Status |
+|-----------|------|---------|--------|
+| Europe PMC client | `src/retrieval/europe_pmc.py` | Search + full-text XML fetch + metadata + 3-retry backoff | ✅ Complete |
+| JATS XML parser | `src/ingestion/pmc_xml_parser.py` | XML sections → chunk dicts (drop-in compatible with PDFParser) | ✅ Complete |
+| SPECTER2 embeddings | `src/retrieval/semantic_scholar.py` | 768‑dim vectors for fine‑grained similarity | ✅ Complete |
+| Retry logic | `src/retrieval/europe_pmc.py` | 3-retry exponential backoff (1s, 2s) on 5xx/timeout | ✅ New — May 14 |
+| Progress persistence | `src/utils/ingest_progress.py` | Checkpoints every 10 papers, resumes on restart | ✅ New — May 14 |
+| Ingestion wiring | `phase9_europe_pmc_test.py` | `--ingest` flag: parse → hybrid.ingest() → checkpoint | ✅ New — May 14 |
+| Coverage diagnostic | — | PMC vs Semantic Scholar comparison query | ⬜ Not yet |
+| Figure pipeline | — | XML `<graphic>` → image download → vision_ingest | ⬜ Not yet |
+| SPECTER2 caching | — | Store locally, skip re-fetch | ⬜ Not yet |
 
 ### Coverage tradeoff
 
@@ -1653,13 +1697,17 @@ biomedical research, PMC coverage is ~80–90%.
 | XML parse | — | 0.31s |
 | SPECTER2 | — | 18.40s (one‑time, cacheable) |
 
-### Known gaps (see HANDOFF.md §12 for full list)
+### Known gaps
 
-1. No retry logic on transient API failures
-2. No progress persistence (crash = restart)
-3. Ingestion not yet wired to ChromaDB
-4. Figure image download from XML `<graphic>` URLs not implemented
-5. SPECTER2 embeddings not cached (re‑fetched each run)
+**Closed (May 14)**:
+1. ~~No retry logic on transient API failures~~ → `_request()` with 3-retry backoff
+2. ~~No progress persistence (crash = restart)~~ → `IngestProgress` with 10-paper checkpoints
+3. ~~Ingestion not yet wired to ChromaDB~~ → `--ingest` flag on test harness
+
+**Remaining**:
+4. Coverage diagnostic (PMC vs Semantic Scholar comparison)
+5. Figure image download from XML `<graphic>` URLs not implemented
+6. SPECTER2 embeddings not cached (re‑fetched each run)
 
 ### Phase 8 status
 
@@ -1668,7 +1716,226 @@ The Playwright/EZProxy PDF download pipeline in `scripts/headless_download.py` i
 `data/external/`.  It still works for non‑OA papers when VCU EZProxy auth is fresh
 and publisher IP rate limits are not triggered.
 
-## Obsidian Setup
+### Novel approaches in Phase 9
+
+- **Chunk ID uniqueness via per‑paper source prefixes**: source field includes PMCID
+  (`"europe_pmc_xml_PMC12345"`) plus `chunk_index` on every chunk.  Without this,
+  ChromaDB silently overwrites chunks across papers (IDs like `europe_pmc_xml__0`
+  would collide).
+- **Polymorphic per‑request Accept header**: session default is `application/json`
+  (search endpoint requires it) but `fullTextXML` overrides to `text/xml` per‑call.
+  Verified: retry loop preserves per‑call header overrides.
+- **Test harness as ingestion CLI**: `--ingest` flag reuses the benchmark script
+  for production ingestion.  Same ChromaDB collection and BM25 persist dir as
+  Phase 3/4.  No new collections or path divergence.
+- **Instrumental progress persistence**: file-based checkpointing (JSON) rather
+  than a database. Same pattern as Phase 8's `zotero_sync_status.json`.  Extensible
+  to KG updates, skill generation, and trajectory logging in Phase 10.
+
+## Phase 10: Autonomous Background Agent (Designed — Not Built)
+
+### Architecture Decision
+
+Phase 10 introduces the first fully autonomous component: a background research
+daemon that runs on cron/timer, detects knowledge gaps from the KG structure,
+searches for relevant literature, ingests and extracts entities, updates the KG,
+and writes a handoff for its own next cycle.  It uses the Phase 9 ingestion
+pipeline as its engine and the Phase 3/4 KG as its memory.
+
+**Dual-agent separation**: The background agent (research, KG maintenance, skill
+improvement) and the user-facing agent (query routing, evidence-grounded synthesis)
+are separate processes sharing persistent storage.  The background agent never
+talks to the user; the user agent never manages memory.  This avoids the Letta
+red-teaming problem (models resist believing they persist) by using instrumental
+framing: agents know they are temporary processes writing to external memory for
+future instances.
+
+**API-to-local strategy**: DeepSeek API during Phases 9-13 and a 2-4 week
+accumulation phase (building a high-quality KG, refined skills, tuned thresholds).
+Switch background agent to local Ollama (Qwen3.6 35B-A3B) once the foundation
+is mature.  User agent keeps API synthesis (Drafter/Critic/Arbiter) until local
+models close the gap.  Re-evaluate with each new open-weight MoE release.
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Orchestrator | `src/agents/orchestrator.py` | Background daemon loop: gap detect → search → ingest → extract → KG → handoff |
+| Subagents | `src/agents/subagents.py` | Parallel search/extract workers via ThreadPoolExecutor |
+| Handoff protocol | `src/agents/handoff.py` | Auto-generated HANDOFF.md with completed/in_progress/next_strategy/gaps |
+| Scheduler | `src/agents/scheduler.py` | Cron/timer integration, user priority override |
+| Web search | `src/retrieval/web_search.py` | Discovery-only web client (DuckDuckGo, no API key); never evidence source |
+| Daemon entry | `phases/phase10_daemon.py` | `python phases/phase10_daemon.py --interval 3600` |
+
+### Key architectural choices
+
+- **Web = discovery compass, never evidence source**: Web search (DuckDuckGo /
+  Semantic Scholar) identifies topics and directions.  All claims must be grounded
+  in peer-reviewed papers.  Discovery results tagged `source_type: "discovery"`,
+  never ingested into evidence chains.
+- **Instrumental agent framing**: Agents know they're temporary; they write to
+  external memory for future instances.  "Your output will be read by the next
+  instance" is both honest and effective.
+- **Single Ollama model at a time**: Background and user agents share Qwen3.6
+  35B-A3B via priority scheduling (user preempts background).  Dual-model loading
+  exceeds M3 Max 36GB practical limits.
+- **KG updated at ingest time**: PreExtractor receives `graph_storage` parameter
+  during Phase 10 ingestion, so the KG accumulates without requiring a query.
+
+## Phase 11: Memory Cascade & Community Routing (Designed — Not Built)
+
+### Architecture Decision
+
+The knowledge graph (built by Phase 10) is hierarchically clustered into communities
+using Leiden/Louvain community detection.  Each community receives a multi-level
+LLM-generated summary (cheap model, DeepSeek Chat or local Qwen).  At query time,
+a relevance router (cheap model) scores each community for relevance; only relevant
+communities receive detailed chunk retrieval; irrelevant communities contribute
+only a one-paragraph summary as background context.
+
+**MoE for memory**: This is the "mixture of experts for memories" pattern — a cheap
+routing model decides which knowledge clusters to activate, and the expensive
+synthesis model only sees what passes the router.  Inspired by Microsoft Dynamic
+Community Selection (Nov 2024: 77% cost reduction, 58-60% quality improvement).
+
+**Evidence provenance preserved at every layer**: Entity nodes reference source
+chunks.  Community summaries cite entity nodes.  Memory blocks reference community
+summaries.  The anchoring check always verifies against Layer 0 (source text).
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Community detector | `src/memory/community_detector.py` | Leiden/Louvain on NetworkX KG; multi-level hierarchy |
+| Community summarizer | `src/memory/community_summarizer.py` | LLM summaries per community at each hierarchy level |
+| Relevance router | `src/memory/relevance_router.py` | Cheap model scores communities 0-1 for query relevance |
+| Memory cascade | `src/memory/cascade.py` | Chunk → summary → entity → community → memory block pipeline |
+| Progressive disclosure | `src/memory/disclosure.py` | system/ vs research/ vs archive/ memory tiers, context budget tracking |
+
+### Cascade layers
+
+| Layer | Compression ratio | Contents | Evidence link |
+|-------|------------------|----------|---------------|
+| 0 — Source text | 1:1 | Raw chunks from papers | Original text |
+| 1 — Chunk summaries | ~5:1 | Pre‑summarized chunks (TF‑IDF or LLM) | → Layer 0 chunk_index |
+| 2 — Entity nodes | ~20:1 | KG nodes with evidence phrases | → Layer 1 source metadata |
+| 3 — Community summaries | ~100:1 | LLM summaries per community cluster | → Layer 2 entity IDs |
+| 4 — Memory blocks | Variable | Agent‑curated context files | → Layer 3 community IDs |
+
+## Phase 12: Skills & Experiential Memory (Designed — Not Built)
+
+### Architecture Decision
+
+Agents learn from their own trajectories by reflecting on successes and failures,
+then generating reusable skill files (.md) stored in a git‑backed `skills/` directory.
+Skills are model‑agnostic, portable, and improve with more usage (reflection on
+multiple trajectories produces better skills than reflection on one).  A separate
+`agent-learnings/` directory stores experiential memory: user preferences,
+research strategies, and tool performance data.
+
+**Skills over prompt optimization**: Letta's Skill Learning (Dec 2025) demonstrated
+36.8% relative improvement from trajectory‑learned skills.  Skills are A/B tested
+(Leta Evals) and gated before deployment — a skill only replaces its predecessor
+if it passes evaluation thresholds.
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Skill loader | `src/skills/skill_loader.py` | Mounts relevant skills from directory based on task |
+| Skill creator | `src/skills/skill_creator.py` | Two‑stage: reflection on trajectory → create/update skill .md |
+| Trajectory logger | `src/skills/trajectory_logger.py` | JSONL logging of all agent actions, successes, failures |
+| Skill evals | `src/skills/skill_evals.py` | A/B test new skill vs current on historical tasks; gate deployment |
+| Experiential memory | `src/memory/experiential.py` | agent-learnings/ store for preferences, strategies, tool data |
+
+### Skill improvement lifecycle
+
+```
+Agent runs task → trajectory logged → sleep‑time reflection on successes/failures
+  → skill v2 created from reflection → A/B tested against v1 on historical tasks
+  → if passes gate: git commit, v2 replaces v1; if fails: v1 retained
+  → future agents automatically load latest version
+```
+
+## Phase 13: Output Tools & Structured Writing (Designed — Not Built)
+
+### Architecture Decision
+
+The evidence‑grounded synthesis pipeline (Phase 3 Drafter→Critic→Arbiter→Anchoring)
+is extended with domain‑specific output templates for grants (Specific Aims,
+Significance, Approach), papers (Introduction, Methods, Results, Discussion),
+literature reviews, and procedural documents.  An evidence‑anchored writer ensures
+every claim carries a citation and passes the anchoring check before inclusion.
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Templates | `src/outputs/templates.py` | Grant, paper, methods, review prompt templates |
+| Anchored writer | `src/outputs/anchored_writer.py` | Evidence‑anchored output generation with pre‑output anchoring gate |
+| Citation integrator | `src/outputs/citation_integrator.py` | Auto‑citation insertion, format consistency, reference list generation |
+
+## Cross‑Cutting Architectural Decisions (Phases 9-13)
+
+These decisions span multiple phases and represent the core design philosophy.
+
+### Evidence provenance chain (all phases)
+
+Every claim in the system can be traced from the highest‑level synthesis (Phase 13
+outputs) down to the original source text (Phase 2 chunk).  Each compression layer
+references the layer below.  The anchoring check always verifies against Layer 0.
+No evidence‑free claims at any level.
+
+### API‑first, local‑switchover (Phases 10-13)
+
+Build and accumulate with DeepSeek API (v4‑Pro for synthesis, Chat for extraction/
+routing).  When the KG, skills, and community structure are mature (estimated
+2-4 weeks post‑Phase 13), switch the background agent to local Ollama (Qwen3.6
+35B-A3B).  The local model inherits a well‑organized system: high‑quality KG,
+refined skills encoding frontier‑model strategies, tuned community routing thresholds.
+It performs comprehension and maintenance, not discovery and foundation‑building.
+
+### Model tiering (all phases — extended from Phase 5.5)
+
+| Task | Phase 9-13 (API) | Phase 13+ (local) |
+|------|-----------------|-------------------|
+| Entity extraction | DeepSeek Chat | Qwen3.6 35B-A3B |
+| Community summarization | DeepSeek Chat | Qwen3.6 35B-A3B |
+| Relevance routing | DeepSeek Chat | Qwen3.6 35B-A3B |
+| Gap analysis / reflection | DeepSeek Chat | Qwen3.6 35B-A3B |
+| Skill creation | DeepSeek Chat | Qwen3.6 35B-A3B |
+| Drafter (synthesis) | DeepSeek v4‑Pro | DeepSeek v4‑Pro (API retained) |
+| Critic (Socratic) | DeepSeek v4‑Pro | DeepSeek v4‑Pro (API retained) |
+| Arbiter (revision) | DeepSeek v4‑Pro | DeepSeek v4‑Pro (API retained) |
+| Anchoring check | Programmatic (TF‑IDF) | Programmatic (no change) |
+
+Synthesis (Drafter/Critic/Arbiter) is the bottleneck for local capability.
+Three‑call cascade where each step builds on the previous; degradation in any
+step compounds.  Retaining API synthesis while running everything else local is
+the pragmatic hybrid until open‑weight MoE models close the gap (re‑evaluate
+with each major release, ~every 3-4 months).
+
+### Community‑gated retrieval (Phase 11 — MoE for memory)
+
+Cheap model scores knowledge graph communities for query relevance.  Relevant
+communities → detailed chunk retrieval.  Irrelevant communities → summary only
+(background context).  Improves context utilization (LLM attention on relevant
+evidence), effective memory capacity (1M papers feasible if only 3 clusters
+relevant per query), and cost (77% reduction per Microsoft's numbers).
+
+### Skills as the learning primitive (Phase 12)
+
+Reusable .md skill files generated from agent trajectories, not static prompts.
+Git‑versioned for rollback.  Model‑agnostic (portable across DeepSeek, Qwen,
+future models).  Improve with cumulative usage (reflection on more trajectories
+→ better skills).  A/B tested before deployment via Letta Evals‑style gating.
+
+### Web as discovery compass (Phase 10)
+
+Web search identifies topics and directions.  All evidence must come from
+peer‑reviewed papers.  Discovery results are never ingested into evidence chains.
+This prevents a common failure mode where web content creeps into evidence
+through summarization drift.
 
 The project includes a knowledge graph at `docs/kg/` — 99 interconnected Markdown
 notes designed for [Obsidian](https://obsidian.md).  No API keys, no external

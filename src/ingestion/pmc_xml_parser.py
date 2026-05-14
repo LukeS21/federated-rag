@@ -126,6 +126,10 @@ class PMCXMLParser:
         ref_chunks = self._extract_references(article, cite_key, pmcid, doi)
         chunks.extend(ref_chunks)
 
+        # Add chunk_index to each chunk's metadata (required for unique IDs)
+        for i, chunk in enumerate(chunks):
+            chunk["metadata"]["chunk_index"] = i
+
         return chunks
 
     # ----------------------------------------------------------------- helpers
@@ -169,7 +173,7 @@ class PMCXMLParser:
             "cite_key": cite_key,
             "pmcid": pmcid,
             "doi": doi,
-            "source": "europe_pmc_xml",
+            "source": f"europe_pmc_xml_{pmcid}" if pmcid else "europe_pmc_xml",
         }
         if extra_meta:
             meta.update(extra_meta)

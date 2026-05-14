@@ -24,7 +24,6 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
 
 import requests
 
@@ -51,11 +50,41 @@ class EuropePMCClient:
             time.sleep(self._min_interval - elapsed)
         self._last_request = time.monotonic()
 
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Optional[Dict] = None,
+        headers: Optional[Dict] = None,
+        timeout: int = 45,
+    ) -> requests.Response:
+        """HTTP request with rate limiting and 3-retry exponential backoff.
+
+        Retries on transient errors (5xx, timeouts, connection errors).
+        Does NOT retry on 4xx client errors.
+        """
+        last_exc = None
+        for attempt in range(3):
+            try:
+                self._rate_limit()
+                resp = self.session.request(
+                    method, url, params=params, headers=headers, timeout=timeout,
+                )
+                resp.raise_for_status()
+                return resp
+            except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as e:
+                last_exc = e
+                if isinstance(e, requests.HTTPError) and e.response is not None and 400 <= e.response.status_code < 500:
+                    raise
+                if attempt < 2:
+                    delay = 2 ** attempt
+                    logger.debug("Retry %d/3 for %s after %.1fs: %s", attempt + 1, url, delay, e)
+                    time.sleep(delay)
+        raise last_exc
+
     def _get(self, url: str, params: Optional[Dict] = None) -> requests.Response:
-        self._rate_limit()
-        resp = self.session.get(url, params=params, timeout=45)
-        resp.raise_for_status()
-        return resp
+        return self._request("GET", url, params=params)
 
     # ------------------------------------------------------------------ search
 
@@ -141,19 +170,21 @@ class EuropePMCClient:
             XML string, or None if full text is not available.
         """
         try:
-            self._rate_limit()
-            resp = self.session.get(
+            resp = self._request(
+                "GET",
                 f"{EPMC_BASE}/{pmcid}/fullTextXML",
                 headers={"Accept": "text/xml, application/xml, */*"},
-                timeout=45,
             )
-            if resp.status_code == 200 and len(resp.text) > 500:
+            if len(resp.text) > 500:
                 return resp.text
             logger.debug("No full text for %s (status=%d, len=%d)",
                          pmcid, resp.status_code, len(resp.text))
             return None
         except requests.HTTPError as e:
-            logger.debug("HTTP error fetching %s: %s", pmcid, e)
+            if e.response is not None and 400 <= e.response.status_code < 500:
+                logger.debug("HTTP %d fetching %s: %s", e.response.status_code, pmcid, e)
+                return None
+            logger.warning("HTTP error fetching %s after retries: %s", pmcid, e)
             return None
         except Exception as e:
             logger.warning("Error fetching %s: %s", pmcid, e)
