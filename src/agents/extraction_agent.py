@@ -144,37 +144,71 @@ class ExtractionAgent:
             )
 
         system_prompt = (
+            "CRITICAL FORMAT INSTRUCTION — YOU MUST FOLLOW THIS EXACTLY. "
+            "Failure to use the correct format means your output will be DISCARDED.\n\n"
             "You are a biomedical entity extraction specialist. "
-            "The research query, document chunks, and discovered categories "
-            "ARE PROVIDED in the user message below. Do NOT state that data is missing. "
-            "Extract all specific entities that fall under each category.\n\n"
-            "Output format — line‑tagged (one blank line between entities):\n"
-            "  TYPE: category_name\n"
-            "  ENTITY: entity_text\n"
-            "  DIRECTION: elevated | decreased | unchanged | ... (optional)\n"
-            "  CONTEXT: brief context (optional)\n"
-            "  CONDITIONS: experimental conditions (optional)\n"
-            "  EVIDENCE: exact quoted sentence(s) from the chunks\n"
-            "  SOURCE: the full chunk label including source (e.g. \"Chunk 3 | paper.pdf\")\n\n"
-            "Rules:\n"
-            " - Every entity block MUST start with TYPE: and include ENTITY:, EVIDENCE:, SOURCE:.\n"
-            " - Normalise synonyms (e.g. \"TNF-alpha\" and \"TNF-alpha\" become \"TNF-alpha\").\n"
-            " - QUOTE evidence exactly — copy the sentence verbatim from the chunks.\n"
-            " - Use ONLY plain ASCII.  No markdown fences, no JSON, no preamble."
+            "Given research chunks and discovered categories, extract every entity.\n\n"
+            "--- CORRECT OUTPUT FORMAT ---\n"
+            "Each entity block uses KEY: value lines, separated by one blank line:\n\n"
+            "TYPE: material\n"
+            "ENTITY: Ti-6Al-4V\n"
+            "DIRECTION: unchanged\n"
+            "EVIDENCE: Ti-6Al-4V alloy was used for all implantation experiments.\n"
+            "SOURCE: Chunk 5 | paper_a.pdf\n\n"
+            "TYPE: cytokine\n"
+            "ENTITY: IL-6\n"
+            "DIRECTION: elevated\n"
+            "EVIDENCE: IL-6 levels were significantly elevated in the treated group.\n"
+            "SOURCE: Chunk 12 | paper_b.pdf\n\n"
+            "--- END OF FORMAT EXAMPLE ---\n\n"
+            "FORMAT RULES (VIOLATIONS WILL BE REJECTED):\n"
+            "1. Every entity block MUST start with TYPE: on its own line.\n"
+            "2. Required fields: TYPE:, ENTITY:, EVIDENCE:, SOURCE:.\n"
+            "3. Optional fields: DIRECTION:, CONTEXT:, CONDITIONS:.\n"
+            "4. Separate entities with ONE blank line (empty line).\n"
+            "5. NO markdown — NO **bold**, NO *italics*, NO bullet points, NO headers.\n"
+            "6. NO JSON — NO braces, NO brackets, NO quotes.\n"
+            "7. NO preamble — do NOT write 'Here are the entities' or 'Keywords:'.\n"
+            "8. NO summary or conclusion at the end — just the entity blocks.\n"
+            "9. QUOTE evidence VERBATIM from the chunks. Do not paraphrase.\n"
+            "10. Plain ASCII only.\n\n"
+            "WRONG FORMAT (DO NOT DO THIS):\n"
+            '  **Keywords:**  *Materials:* Titanium, ...    <-- WRONG, NO markdown\n'
+            '  {"category": "materials", "entities": [...]} <-- WRONG, NO JSON\n'
+            '  - Titanium (evidence: ...)                    <-- WRONG, NO bullets\n'
         )
 
         user_prompt = (
             f"Research Query: {query}\n\n"
             f"Discovered Categories:\n{categories_text}\n\n"
             f"{ner_hint}"
-            f"Retrieved Chunks (format: [Chunk N] text):\n{chunk_summaries}\n\n"
-            "Extract all entities grouped by the categories above. "
-            "Use the line‑tagged format described in the system prompt. "
-            "For every entity, provide the evidence phrase and the source chunk label."
+            f"Retrieved Chunks (format: [Chunk N | source] text):\n{chunk_summaries}\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Use ONLY the line‑tagged format shown in the system prompt.\n"
+            "2. Start every entity with TYPE: on its own line.\n"
+            "3. Always include ENTITY:, EVIDENCE:, and SOURCE: for every entity.\n"
+            "4. Copy evidence VERBATIM from the chunks above — do not summarize.\n"
+            "5. NO markdown, NO JSON, NO bullet points.\n"
+            "6. Begin immediately with the first TYPE: line. No introduction."
         )
 
         raw_output = self._call_llm(system_prompt, user_prompt)
-        return self._parse_line_tagged(raw_output, context="entity_extraction")
+        result = self._parse_line_tagged(raw_output, context="entity_extraction")
+
+        # Fallback: if line‑tagged produced nothing, try parsing markdown keyword lists
+        if not result:
+            result = self._parse_markdown_fallback(raw_output)
+            if result:
+                logger.info("Markdown fallback parser recovered %d categories from entity_extraction",
+                             len(result))
+            else:
+                logger.warning(
+                    "Both line‑tagged and markdown parsers failed for entity_extraction. "
+                    "Raw (first 300 chars): %s",
+                    raw_output[:300],
+                )
+
+        return result
 
     # ------------------------------------------------------------------
     #  Internal helpers
@@ -305,6 +339,150 @@ class ExtractionAgent:
 
     @staticmethod
     def _parse_line_tagged(text: str, context: str = "") -> Dict[str, Any]:
+        """Parse line‑tagged entity blocks into the standard dict format.
+
+        Each entity block is separated by a blank line and starts with
+        ``TYPE: category_name``.  Individual fields are ``KEY: value``
+        lines.  Returns a dict keyed by category name (same structure as
+        the old JSON parser).
+        """
+        text = scrub_unicode(text)
+        if "<think>" in text:
+            text = _strip_thinking(text)
+
+        result: Dict[str, List[Dict[str, str]]] = {}
+        current_entity: Dict[str, str] = {}
+        current_type = ""
+
+        for line in text.strip().split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                if current_entity and current_type:
+                    result.setdefault(current_type, []).append(dict(current_entity))
+                    current_entity = {}
+                    current_type = ""
+                continue
+
+            if ":" not in stripped:
+                continue
+
+            key, _, value = stripped.partition(":")
+            key = key.strip().lower()
+            value = value.strip()
+
+            if key == "type":
+                if current_entity and current_type:
+                    result.setdefault(current_type, []).append(dict(current_entity))
+                    current_entity = {}
+                current_type = value
+            elif value:
+                current_entity[key] = value
+
+        # Flush trailing entity
+        if current_entity and current_type:
+            result.setdefault(current_type, []).append(dict(current_entity))
+
+        if not result:
+            logger.warning(
+                "Line‑tagged parse produced empty result for %s. "
+                "Raw (first 200 chars): %s",
+                context,
+                text[:200],
+            )
+
+        return result
+
+    @staticmethod
+    def _parse_markdown_fallback(text: str) -> Dict[str, Any]:
+        """Fallback parser for markdown-formatted keyword lists.
+
+        Handles output patterns like::
+
+            **Keywords:**
+            * **Materials:** Titanium, Titanium Alloy, Stainless Steel, ...
+            * **Methods:** ELISA, flow cytometry, microCT, ...
+
+            **Bioactive Materials and Composites**
+            * **Bioactive Glass:** (description)
+            * **Bioactive Ceramic:** (description)
+
+        Each ``**bold header**`` becomes a category, and ``* **bold entity:**``
+        items become entities under that category.  Evidence defaults to
+        the description text after the colon.
+        """
+        text = scrub_unicode(text)
+        if "<think>" in text:
+            text = _strip_thinking(text)
+
+        result: Dict[str, List[Dict[str, str]]] = {}
+        current_category = ""
+
+        lines = text.strip().split("\n")
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # Detect **Category Header** (standalone bold line)
+            bold_header = re.match(r"^\*\*(.+?)\*\*\s*$", stripped)
+            if bold_header:
+                name = bold_header.group(1).strip().rstrip(":")
+                if name.lower() not in ("keywords", "key variables", "experimental methods"):
+                    current_category = name
+                continue
+
+            # Detect comma-separated list after bullet (* Materials: Ti, Al, ...)
+            # Checked first — comma-delimited items get split into separate entities.
+            bullet_list = re.match(r"^\*\s*(?:\*\*(.+?)\*\*:?|(.+?):)\s*(.+)", stripped)
+            if bullet_list:
+                cat_name = (bullet_list.group(1) or bullet_list.group(2) or "").strip().rstrip(":")
+                items_text = (bullet_list.group(3) or "").strip()
+                if "," in items_text:
+                    items = [i.strip().rstrip("*") for i in items_text.split(",") if len(i.strip()) > 2]
+                    if items and cat_name:
+                        for item in items:
+                            result.setdefault(cat_name, []).append({
+                                "entity": item,
+                                "evidence": "",
+                                "source": "",
+                            })
+                        continue
+                # Fall through to bullet_entity — not a comma list
+
+            # Detect * **Entity:** description (single bold entity per bullet)
+            bullet_entity = re.match(r"^\*\s*\*\*(.+?)\*\*:?\s*(.*)", stripped)
+            if bullet_entity:
+                entity_name = bullet_entity.group(1).strip().rstrip(":")
+                description = bullet_entity.group(2).strip()
+
+                if entity_name:
+                    result.setdefault(current_category or entity_name, []).append({
+                        "entity": entity_name,
+                        "evidence": description or "",
+                        "source": "",
+                    })
+                continue
+
+            # Detect * **Entity** (bold, no colon, no description)
+            bullet_no_colon = re.match(r"^\*\s*\*\*(.+?)\*\*\s*$", stripped)
+            if bullet_no_colon:
+                entity_name = bullet_no_colon.group(1).strip()
+                if entity_name:
+                    result.setdefault(current_category or entity_name, []).append({
+                        "entity": entity_name,
+                        "evidence": "",
+                        "source": "",
+                    })
+                continue
+
+        if not result:
+            return {}
+
+        logger.info(
+            "Markdown fallback parsed %d categories from %d-char output",
+            len(result), len(text),
+        )
+        return result
         """Parse line‑tagged entity blocks into the standard dict format.
 
         Each entity block is separated by a blank line and starts with

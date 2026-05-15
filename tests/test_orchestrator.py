@@ -7,6 +7,7 @@ Strategy:
     to avoid network calls.
   - Dry-run mode is tested to confirm it skips ingestion.
 """
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import networkx as nx
@@ -15,8 +16,26 @@ import pytest
 from src.agents.orchestrator import (
     DEFAULT_SEED_TERMS,
     Orchestrator,
+    STATE_PATH,
+    PID_PATH,
 )
 from src.graph.networkx_json_storage import NetworkXJSONStorage
+
+
+@pytest.fixture(autouse=True)
+def _clean_state_files():
+    """Remove state/PID files between tests so _load_state() starts fresh."""
+    for p in (STATE_PATH, PID_PATH):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
+    yield
+    for p in (STATE_PATH, PID_PATH):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

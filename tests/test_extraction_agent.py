@@ -148,3 +148,65 @@ def test_parse_line_tagged_handles_thinking_block(mock_llm_invoke):
     )
     assert "cytokine" in out
     assert out["cytokine"][0]["entity"] == "TNF-alpha"
+
+
+def test_parse_markdown_fallback_keywords_list():
+    """Parse markdown keyword lists that Qwen outputs when ignoring line‑tagged format."""
+    text = (
+        "**Keywords:**\n\n"
+        "* **Materials:** Titanium, Titanium Alloy, Stainless Steel, Polymer\n"
+        "* **Methods:** ELISA, flow cytometry, microCT, PCR\n\n"
+        "**Cytokines**\n"
+        "* **IL-6:** elevated in obese mice post-implantation\n"
+        "* **TNF-alpha:** correlated with macrophage activation\n"
+    )
+    result = ExtractionAgent._parse_markdown_fallback(text)
+    assert "Materials" in result
+    assert len(result["Materials"]) == 4
+    assert result["Materials"][0]["entity"] == "Titanium"
+    assert result["Materials"][1]["entity"] == "Titanium Alloy"
+    assert "Methods" in result
+    assert len(result["Methods"]) == 4
+    assert "Cytokines" in result
+    assert result["Cytokines"][0]["entity"] == "IL-6"
+    assert "elevated in obese mice" in result["Cytokines"][0]["evidence"]
+
+
+def test_parse_markdown_fallback_bold_headers():
+    """Parse markdown with **bold** section headers and bullet entities."""
+    text = (
+        "**Bioactive Materials and Composites**\n\n"
+        "* **Bioactive Glass:** Mentioned in the context of bone regeneration\n"
+        "* **Bioactive Ceramic:** General category for materials used in bone regeneration\n"
+        "* **Hydroxyapatite:** HA coatings showed improved osseointegration\n"
+    )
+    result = ExtractionAgent._parse_markdown_fallback(text)
+    assert "Bioactive Materials and Composites" in result
+    assert len(result["Bioactive Materials and Composites"]) == 3
+    assert result["Bioactive Materials and Composites"][0]["entity"] == "Bioactive Glass"
+
+
+def test_parse_markdown_fallback_empty():
+    """Non-markdown text should produce empty result."""
+    result = ExtractionAgent._parse_markdown_fallback("Some plain text without formatting.")
+    assert result == {}
+
+
+def test_extract_entities_falls_back_to_markdown(mock_llm_invoke):
+    """When line‑tagged parsing fails, the fallback should try markdown parsing."""
+    mock_llm_invoke.return_value = (
+        "**Materials**\n\n"
+        "* **Titanium:** Ti-6Al-4V alloy for implants\n"
+        "* **Hydroxyapatite:** HA coatings for bone\n"
+    )
+    agent = ExtractionAgent()
+    out = agent.extract_entities(
+        [{"text": "Ti-6Al-4V implant study"}],
+        {"discovered_categories": [{"name": "materials", "description": "Test"}],
+         "key_variables": [], "experimental_methods": []},
+        "q",
+    )
+    assert "Materials" in out or "materials" in out
+    entities = out.get("Materials", out.get("materials", []))
+    assert len(entities) >= 1
+    assert entities[0]["entity"] == "Titanium"

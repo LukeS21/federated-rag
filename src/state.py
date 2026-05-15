@@ -46,6 +46,13 @@ class AgentState(TypedDict):
     claim_ledger_json: NotRequired[str]
     figure_context: NotRequired[List[Dict]]
 
+    # Phase 11: Community routing & progressive disclosure
+    community_data: NotRequired[Dict]
+    community_summaries: NotRequired[Dict]
+    relevant_communities: NotRequired[List[int]]
+    community_scores: NotRequired[Dict[str, float]]
+    disclosure_tier: NotRequired[int]
+
     # Runtime configuration (optional)
     num_ctx: NotRequired[int]
     client_kwargs: NotRequired[Dict[str, Any]]

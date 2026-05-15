@@ -372,9 +372,9 @@ The human `HANDOFF.md` remains a developer‑to‑developer artifact.
 
 | # | Gap | Severity | Description |
 |---|------|----------|-------------|
-| A | State file write‑only | Low | `orchestrator_state.json` is written every cycle but never read on restart. Daemon restarts from cycle 0 (idempotent via `IngestProgress`). |
-| B | No handoff file cleanup | Low | `cycle_N_handoff.md` files accumulate forever. No rotation/retention. |
-| C | No daemon log management | Medium | `basicConfig` to stderr only. No file handler, no rotation. |
+| A | State file write‑only | ~~Low~~ ✅ Closed | ~~`orchestrator_state.json` is written every cycle but never read on restart.~~ Fixed: `_load_state()` reads state on init, restores cycle and total_ingested. |
+| B | No handoff file cleanup | ~~Low~~ ✅ Closed | ~~`cycle_N_handoff.md` files accumulate forever.~~ Fixed: `_cleanup_handoffs()` removes files older than 7 days after each cycle. |
+| C | No daemon log management | ~~Medium~~ ✅ Closed | ~~`basicConfig` to stderr only. No file handler, no rotation.~~ Fixed: `_ensure_file_logging()` adds RotatingFileHandler (5 backups × 5 MB) to `orchestrator.log`. |
 | D | Line‑tagged format untested with real Ollama | Medium | All 7 parser tests use mocked LLM output. Real model may need prompt tuning. |
 | E | No long‑running daemon validation | Medium | Only single cycles tested. Multi‑hour runs needed. |
 | F | Coverage‑gated routing not wired | Low | `run_coverage_diagnostic()` exists but orchestrator doesn't route on < 30 %. |

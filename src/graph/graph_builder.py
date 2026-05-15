@@ -257,6 +257,7 @@ def build_survey_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
 
     from src.state import AgentState
     from src.graph.survey_nodes import (
+        survey_community_route_node,
         survey_cross_theme_synthesize_node,
         survey_per_document_extract_node,
         survey_per_theme_synthesize_node,
@@ -271,6 +272,7 @@ def build_survey_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
 
     workflow.add_node("survey_query_decompose", survey_query_decompose_node)
     workflow.add_node("survey_retrieve", lambda state: survey_retrieve_node(state, hybrid_retriever))
+    workflow.add_node("survey_community_route", lambda state: survey_community_route_node(state, graph_storage))
     workflow.add_node("survey_thematic_cluster", survey_thematic_cluster_node)
     workflow.add_node("survey_per_document_extract", lambda state: survey_per_document_extract_node(state, graph_storage))
     workflow.add_node("survey_per_theme_synthesize",
@@ -281,7 +283,8 @@ def build_survey_graph(hybrid_retriever: Any, graph_storage: BaseGraphStorage):
 
     workflow.set_entry_point("survey_query_decompose")
     workflow.add_edge("survey_query_decompose", "survey_retrieve")
-    workflow.add_edge("survey_retrieve", "survey_thematic_cluster")
+    workflow.add_edge("survey_retrieve", "survey_community_route")
+    workflow.add_edge("survey_community_route", "survey_thematic_cluster")
     workflow.add_edge("survey_thematic_cluster", "survey_per_document_extract")
     workflow.add_edge("survey_per_document_extract", "survey_per_theme_synthesize")
     workflow.add_edge("survey_per_theme_synthesize", "survey_cross_theme_synthesize")

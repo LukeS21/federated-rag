@@ -17,6 +17,7 @@ PROJECT_DIR = Path("projects/default")
 GRAPH_PATH = PROJECT_DIR / "project_graph.json"
 STATE_PATH = PROJECT_DIR / "orchestrator_state.json"
 PID_PATH = PROJECT_DIR / "orchestrator.pid"
+LOG_PATH = PROJECT_DIR / "orchestrator.log"
 DEFAULT_INTERVAL_MINUTES = 60
 DEFAULT_MAX_PAPERS_PER_QUERY = 5
 DEFAULT_SEED_TERMS = [
@@ -24,6 +25,39 @@ DEFAULT_SEED_TERMS = [
     "titanium implant osseointegration",
     "macrophage polarization biomaterials",
 ]
+
+_FILE_HANDLER_SETUP = False
+
+
+def _ensure_file_logging() -> None:
+    """Add a RotatingFileHandler to the orchestrator logger (Phase 10 Gap C).
+
+    Called once per process lifetime.  Writes to
+    ``projects/default/orchestrator.log`` with 5 backups × 5 MB each.
+    """
+    global _FILE_HANDLER_SETUP
+    if _FILE_HANDLER_SETUP:
+        return
+    _FILE_HANDLER_SETUP = True
+
+    try:
+        from logging.handlers import RotatingFileHandler
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            str(LOG_PATH),
+            maxBytes=5 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        ))
+        logger.addHandler(handler)
+        logger.info("File logging initialized: %s", LOG_PATH)
+    except Exception:
+        pass  # don't crash if we can't set up logging
 
 
 class Orchestrator:
@@ -69,6 +103,31 @@ class Orchestrator:
         self._total_ingested = 0
         self._scheduler = None
 
+        # Phase 10 Gap A: resume from state file on restart
+        self._load_state()
+
+    def _load_state(self) -> None:
+        """Restore cycle counter and ingestion total from state file.
+
+        If the daemon crashed or was killed, restoring state prevents
+        resetting to cycle 0 on restart.  IngestProgress checkpoints
+        still ensure idempotency — re-ingesting the same paper is a no-op.
+        """
+        if not STATE_PATH.exists():
+            return
+        try:
+            data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            saved_cycle = data.get("last_cycle", 0)
+            saved_total = data.get("total_ingested", 0)
+            if isinstance(saved_cycle, int) and saved_cycle > 0:
+                self._cycle = saved_cycle
+                logger.info("Resumed daemon state: cycle=%d, total_ingested=%d",
+                             self._cycle, saved_total)
+            if isinstance(saved_total, int):
+                self._total_ingested = saved_total
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.debug("State file unreadable, starting fresh: %s", exc)
+
     # ------------------------------------------------------------------
     #  Public API
     # ------------------------------------------------------------------
@@ -81,10 +140,13 @@ class Orchestrator:
         logger.info("=== Orchestrator cycle %d starting ===", self._cycle + 1)
         return self._run_cycle()
 
-    def start(self) -> None:
+    def start(self, cooldown_seconds: int = 60) -> None:
         """Start the daemon loop (non-blocking).
 
-        Runs ``run_once()`` on the configured interval.
+        Runs ``run_once()`` in a continuous chain: execute → *cooldown_seconds*
+        → execute → ...  A long-running cycle doesn't delay the next start —
+        the cooldown begins only after the cycle finishes.
+
         Call ``stop()`` to terminate.
         """
         from src.agents.scheduler import Scheduler
@@ -95,12 +157,13 @@ class Orchestrator:
 
         self._write_pid()
         self._write_state("started")
+        _ensure_file_logging()
         self._scheduler = Scheduler()
         self._scheduler.schedule(
-            self.interval_minutes, self.run_once,
+            self.run_once, cooldown_seconds=cooldown_seconds,
         )
-        logger.info("Orchestrator daemon started (pid=%d, interval=%d min)",
-                     os.getpid(), self.interval_minutes)
+        logger.info("Orchestrator daemon started (pid=%d, cooldown=%ds)",
+                     os.getpid(), cooldown_seconds)
 
     def stop(self, timeout: float = 30.0) -> None:
         """Stop the daemon loop and wait for the current cycle to finish."""
@@ -171,8 +234,18 @@ class Orchestrator:
                 logger.error("KG save failed: %s", exc)
                 summary["errors"].append(f"kg_save: {exc}")
 
+            # 4.5 ─ Phase 11: Update community detection (offline)
+            try:
+                community_result = self._update_communities()
+                summary["communities"] = community_result
+            except Exception as exc:
+                logger.warning("Community detection update skipped: %s", exc)
+
         # 5 ─ Write handoff (cycle-specific file, never overwrites human HANDOFF.md)
         self._write_handoff(summary)
+
+        # 5.5 ─ Phase 10 Gap B: rotate old handoff files
+        self._cleanup_handoffs()
 
         self._total_ingested += summary["papers_ingested"]
 
@@ -422,6 +495,37 @@ class Orchestrator:
             logger.debug("PreExtractor failed for %s: %s", pmcid, exc)
 
     # ------------------------------------------------------------------
+    #  Step 4.5: Phase 11 Community Detection
+    # ------------------------------------------------------------------
+
+    def _update_communities(self) -> Dict[str, Any]:
+        """Run community detection on the KG and cache results.
+
+        Runs after every cycle so communities stay current as new entities
+        are added to the graph.  Uses Louvain algorithm via NetworkX.
+        """
+        try:
+            from src.graph.community_detection import detect_communities
+            result = detect_communities(
+                self.graph_storage,
+                force_recompute=True,
+            )
+            n_comm = result.get("n_communities", 0)
+            mod = result.get("modularity", 0.0)
+            logger.info(
+                "Phase 11 community detection: %d communities (modularity=%.3f, %d nodes)",
+                n_comm, mod, result.get("n_nodes", 0),
+            )
+            return {
+                "n_communities": n_comm,
+                "modularity": mod,
+                "n_nodes": result.get("n_nodes", 0),
+            }
+        except Exception as exc:
+            logger.warning("Community detection failed (non-fatal): %s", exc)
+            return {"n_communities": 0, "modularity": 0.0, "error": str(exc)}
+
+    # ------------------------------------------------------------------
     #  Step 5: Handoff
     # ------------------------------------------------------------------
 
@@ -443,6 +547,26 @@ class Orchestrator:
             )
         except Exception as exc:
             logger.warning("Handoff write failed: %s", exc)
+
+    def _cleanup_handoffs(self, max_age_days: int = 7) -> None:
+        """Remove handoff files older than *max_age_days*.
+
+        Prevents unbounded accumulation of ``cycle_N_handoff.md`` files
+        in the project directory.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            for path in PROJECT_DIR.glob("cycle_*_handoff.md"):
+                try:
+                    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+                    age_days = (now - mtime).days
+                    if age_days > max_age_days:
+                        path.unlink()
+                        logger.info("Cleaned up old handoff: %s (%d days old)", path.name, age_days)
+                except OSError:
+                    pass
+        except Exception as exc:
+            logger.debug("Handoff cleanup failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     #  State file + PID management

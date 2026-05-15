@@ -31,6 +31,7 @@ from src.cache.query_cache import (
     cache_theme_synthesis, load_theme_synthesis,
     cache_cross_theme, load_cross_theme,
 )
+from src.graph.community_detection import detect_communities, get_community_papers
 from src.ingestion.pre_extractor import PreExtractor
 from src.retrieval.hybrid_retriever import HybridRetriever
 from src.scrubber import final_scrub
@@ -238,6 +239,97 @@ def survey_retrieve_node(
         updates["public_context"] = chunks
     if scope in ("secure", "both"):
         updates["secure_context"] = chunks
+    return updates
+
+
+# ---------------------------------------------------------------------------
+#  Node S2b: Community Route (Phase 11)
+# ---------------------------------------------------------------------------
+def survey_community_route_node(
+    state: AgentState,
+    graph_storage: BaseGraphStorage | None = None,
+) -> Dict[str, Any]:
+    """Detect communities and route query to relevant research clusters.
+
+    Runs Louvain community detection on the KG (cached to disk), loads
+    community summaries, and determines which communities are relevant to
+    the user's query. Chunks from irrelevant communities are filtered out
+    of the retrieval results.
+
+    Graceful degradation: if community detection fails or no communities
+    are found, passes through all chunks unchanged.
+    """
+    chunks = state.get("public_context") or []
+    query = state["user_query"]
+
+    if graph_storage is None or not chunks:
+        return {}
+
+    updates: Dict[str, Any] = {}
+
+    try:
+        community_data = detect_communities(graph_storage)
+        n_comm = community_data.get("n_communities", 0)
+        if n_comm == 0:
+            logger.info("Community routing: no communities detected — pass-through")
+            return {"community_data": community_data}
+
+        updates["community_data"] = community_data
+
+        # Load or generate community summaries
+        try:
+            from src.agents.community_summarizer import CommunitySummarizer
+            summarizer = CommunitySummarizer()
+            summaries = summarizer.summarize(graph_storage, community_data=community_data)
+            updates["community_summaries"] = summaries
+        except Exception as e:
+            logger.warning("Community summarization failed: %s", e)
+            summaries = {}
+
+        # Route query to relevant communities
+        try:
+            from src.agents.relevance_router import RelevanceRouter
+            router = RelevanceRouter()
+            routing = router.route(query, summaries)
+            relevant = routing.get("relevant_communities", [])
+            scores = routing.get("scores", {})
+            method = routing.get("method", "embedding")
+
+            updates["relevant_communities"] = relevant
+            updates["community_scores"] = scores
+
+            logger.info(
+                "Community routing (%s): %d/%d communities relevant — %s",
+                method, len(relevant), n_comm,
+                [f"c{cid}:{scores.get(cid, 0):.2f}" for cid in relevant[:5]],
+            )
+
+            # Filter chunks to relevant communities' papers
+            if relevant:
+                community_papers = get_community_papers(community_data, graph_storage)
+                relevant_papers: set = set()
+                for cid in relevant:
+                    relevant_papers.update(community_papers.get(cid, []))
+
+                if relevant_papers:
+                    filtered = [
+                        ch for ch in chunks
+                        if (ch.get("metadata", {}) or {}).get("source", "unknown") in relevant_papers
+                    ]
+                    dropped = len(chunks) - len(filtered)
+                    if dropped > 0:
+                        logger.info("Community routing: filtered %d/%d chunks (%d relevant papers)",
+                                      dropped, len(chunks), len(relevant_papers))
+                        updates["public_context"] = filtered
+                else:
+                    logger.info("Community routing: no papers found for relevant communities — pass-through")
+
+        except Exception as e:
+            logger.warning("Relevance routing failed: %s — pass-through", e)
+
+    except Exception as e:
+        logger.warning("Community detection failed: %s — pass-through", e)
+
     return updates
 
 
@@ -993,6 +1085,21 @@ def survey_scrub_node(state: AgentState) -> Dict[str, Any]:
     # Build final output
     parts = ["# SURVEY SYNTHESIS\n"]
     parts.append(final_scrub(cross_synth))
+
+    # Phase 11: Community context (progressive disclosure tier 1)
+    community_data = state.get("community_data", {})
+    relevant = state.get("relevant_communities", [])
+    community_summaries = state.get("community_summaries", {})
+    if relevant and community_summaries:
+        parts.append("\n\n# RESEARCH COMMUNITIES\n")
+        parts.append(f"Query mapped to {len(relevant)} relevant research communities.\n")
+        for cid in relevant:
+            info = community_summaries.get(cid, community_summaries.get(str(cid), {}))
+            summary = info.get("summary", "") if isinstance(info, dict) else ""
+            n_entities = info.get("n_entities", "?") if isinstance(info, dict) else "?"
+            if summary:
+                parts.append(f"\n## Community {cid} ({n_entities} entities)\n{summary[:300]}")
+
     parts.append("\n\n# RESEARCH GAPS\n")
     parts.append(final_scrub(gap))
     parts.append("\n\n# PER-THEME DETAILS\n")
