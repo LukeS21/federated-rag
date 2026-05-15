@@ -1309,6 +1309,98 @@ Web discovery: DuckDuckGo/DDG → discovery-tagged results (never evidence)
 | F | Coverage‑gated routing not wired | Low | `run_coverage_diagnostic()` exists but orchestrator doesn't gate EZProxy routing on coverage < 30 %. |
 | G | SPECTER2 embeddings unused | Low | 8 embeddings cached, 0 queried. `paper_similarity_search()` could recommend related papers. |
 
+##### Phase 10 lessons learned
+
+1. **Thread‑based timers need generous margins in tests** — The scheduler's
+   `schedule(interval_minutes)` multiplies by 60 internally. Tests using
+   `schedule(0.1)` expected 100 ms ticks but got 6‑second ticks. Always
+   document whether a time parameter is in seconds or minutes.
+
+2. **BM25 rebuild contention is the real parallel bottleneck — not RAM** —
+   Threading EPMC fetch/parse is safe (I/O‑bound, ~8 MB for 4 concurrent
+   XMLs). But calling `ingest()` from multiple threads triggers redundant
+   BM25 full‑corpus rebuilds. Fix: parallelize fetch+parse, accumulate all
+   chunks, call `ingest()` once. The `_ingest_chunks_batch()` method exists
+   specifically for this.
+
+3. **Mock import paths must target the definition site** — Lazy imports
+   (`from X import Y` inside function bodies) can't be patched at the
+   importing module's path. Always patch at the module where the class is
+   defined, not where it's imported.
+
+4. **PMCXMLParser.MIN_CHUNK_WORDS = 20 means mock XML needs real content** —
+   Unit tests using `<article><body><p>Short.</p></body></article>` produced
+   zero chunks because 2‑word sections are silently skipped. Mock XML data
+   must contain ≥20‑word paragraphs.
+
+5. **State must be written AFTER counters are incremented** — `_write_state()`
+   was called before `_total_ingested` was incremented, causing the state
+   file to report 0 papers ingested. Order matters: persist after mutation.
+
+6. **Don't trust LLMs to output valid JSON — give them a format they can't
+   break** — 9/13 extractions on local Ollama models failed on first JSON
+   parse attempt. The line‑tagged format (`TYPE: category\nENTITY: name\n...`)
+   has zero syntax‑failure modes because there are no braces, commas, or
+   quotes to break. Match the output format to the model's training
+   distribution.
+
+7. **Generated output should NEVER share a path with human documentation** —
+   The first live run of `write_handoff()` defaulted to `HANDOFF.md` and
+   overwrote a 533‑line developer document with a 29‑line auto‑generated
+   summary. Always namespace machine output (`cycle_N_handoff.md`, not
+   `HANDOFF.md`). Recovered from git.
+
+8. **Write‑only state files are a code smell** — `orchestrator_state.json`
+   is written every cycle but never read on restart. State files should be
+   round‑tripped (write + read), not fire‑and‑forget.
+
+##### Phase 10 novel approaches
+
+1. **Line‑tagged extraction format for local LLMs** — Instead of fighting
+   JSON parse failures with ever‑more‑aggressive fallback parsers, we
+   changed the format the LLM outputs. Line‑tagged text maps directly to
+   LLM training data (labeled text, config files, frontmatter). A 30‑line
+   parser replaces a 50‑line JSON parser with two fallback attempts.
+
+2. **Thread‑parallel fetch + batch ingest pattern** — In a pipeline where
+   ingestion is a mutating operation that rebuilds a corpus‑wide index,
+   parallelism is only safe in the read phase. Parallelize I/O‑bound
+   fetch+parse, batch all chunks into one `ingest()` call. Generalizable
+   to any "gather → mutate" pipeline.
+
+3. **Module‑level worker functions for ThreadPoolExecutor** — `_fetch_and_parse_for_query()`
+   is defined at module scope (not a closure or instance method) so it can
+   be passed to `run_parallel()` without pickle issues. Receives all config
+   via keyword arguments; creates its own API client instances.
+
+4. **Dry‑run mode as a first‑class daemon feature** — `Orchestrator(dry_run=True)`
+   runs the full discovery→query cycle but skips all API calls beyond web
+   search. Returns `would_have_queries` in summary. Essential for safe
+   testing and pre‑flight validation.
+
+5. **Cycle‑specific handoff files for machine‑to‑machine state transfer** —
+   Rather than a single `HANDOFF.md`, the daemon writes
+   `projects/default/cycle_N_handoff.md` for each cycle. Creates an audit
+   trail and prevents the machine from overwriting human documentation.
+
+##### What NOT to change (Phase 10 additions)
+
+All prior constraints from Phase 4–9 still apply.  New from Phase 10:
+
+- Do NOT switch extraction output back to JSON — line‑tagged format eliminates
+  the 70% parse‑failure rate on local Ollama models
+- Do NOT wire `ingest()` into parallel threads — use `_ingest_chunks_batch()`
+  after accumulating all chunks to avoid redundant BM25 rebuilds
+- Do NOT remove the dry‑run flag from the orchestrator — essential for safe
+  testing and pre‑flight validation
+- Do NOT make `_fetch_and_parse_for_query()` an instance method or closure —
+  module‑level functions are compatible with ThreadPoolExecutor
+- Do NOT change `write_handoff()` default path to `HANDOFF.md` — always
+  accept explicit `output_path` from the orchestrator
+- Do NOT remove `orchestrator_state.json` or `orchestrator.pid` management
+- Do NOT remove the line‑tagged parser (`_parse_line_tagged`) or formatters
+  (`_categories_to_line_tagged`, `_entities_to_line_tagged`)
+
 #### API Strategy (updated)
 
 | API | Provides | Rate Limit | Auth | Notes |
@@ -1358,7 +1450,8 @@ Web discovery: DuckDuckGo/DDG → discovery-tagged results (never evidence)
   EPMC REST recovery.
 - **PreExtractor adds ~30s LLM cost per paper** at ingest time. For background
   daemon (Phase 10) this is acceptable. Cached extractions are loaded from disk
-  on subsequent runs (<1ms).
+  on subsequent runs (<1ms). Phase 10 switched extraction to line‑tagged format
+  (eliminated 70% JSON parse failure rate on local Ollama models).
 - **`web_search.py` requires `pip install ddgs`** for primary search path. Falls
   back to DDG Instant Answer API (weaker, returns 0 results for niche queries).
 
@@ -1647,10 +1740,10 @@ federated_rag/
 │   │   ├── base_graph.py
 │   │   └── networkx_json_storage.py
 │   ├── agents/
-│   │   ├── orchestrator.py       # Phase 10 — planned (background daemon)
-│   │   ├── subagents.py           # Phase 10 — planned (parallel workers)
-│   │   ├── handoff.py             # Phase 10 — planned (auto HANDOFF.md)
-│   │   └── scheduler.py           # Phase 10 — planned (cron/timer)
+│   │   ├── orchestrator.py       # Phase 10 — built (background daemon, 418 lines)
+│   │   ├── subagents.py           # Phase 10 — built (parallel workers, 54 lines)
+│   │   ├── handoff.py             # Phase 10 — built (cycle handoff generator)
+│   │   └── scheduler.py           # Phase 10 — built (daemon timer, 69 lines)
 │   └── anchoring/
 │       └── evidence_check.py
 ├── tests/
@@ -1664,22 +1757,31 @@ federated_rag/
 │   ├── test_extraction.py
 │   ├── test_synthesis.py
 │   ├── test_graph.py
+│   ├── test_scheduler.py        # Phase 10 — built
+│   ├── test_subagents.py        # Phase 10 — built
+│   ├── test_orchestrator.py     # Phase 10 — built
+│   ├── test_orchestrator_integration.py  # Phase 10 — built
+│   ├── test_handoff.py          # Phase 10 — built
 │   └── test_anchoring.py
 ├── projects/
 │   └── default/
 │       ├── chroma_data/
 │       ├── bm25_index/
 │       ├── project_graph.json
-│       └── ingest_progress.json
+│       ├── ingest_progress.json
+│       ├── orchestrator_state.json    # Phase 10 — daemon heartbeat + cycle counter
+│       ├── orchestrator.pid           # Phase 10 — daemon PID
+│       ├── cycle_N_handoff.md         # Phase 10 — per‑cycle machine handoff
+│       ├── spector2_cache.json        # Phase 9 — SPECTER2 DOI‑keyed cache
+│       ├── extractions/               # PreExtractor entity cache
+│       └── embeddings/                # Paper embeddings
 ├── data/
 │   └── test.pdf
 ├── docker/
 │   └── docker-compose.yml
-├── phases/                       # Phase 10+ — planned
-│   └── phase10_daemon.py
 ├── skills/                    # Phase 12 — git‑backed skill library
 ├── agent-learnings/           # Phase 12 — experiential memory
-├── HANDOFF.md                 # Phase 10 — auto‑generated orchestrator handoff
+├── HANDOFF.md                 # Phase 10−11 handoff — developer reference doc
 ├── phase1_demo.py
 ├── phase2_demo.py
 ├── phase3_demo.py
@@ -1776,7 +1878,12 @@ and publisher IP rate limits are not triggered.
   than a database. Same pattern as Phase 8's `zotero_sync_status.json`.  Extensible
   to KG updates, skill generation, and trajectory logging in Phase 10.
 
-## Phase 10: Autonomous Background Agent (Designed — Not Built)
+## Phase 10: Autonomous Background Agent (Built — Complete, 15 May 2026)
+
+> **Status:** All 4 planned core files built + 4 enhancements beyond spec.
+> See detailed breakdown, gap tracking, and lessons learned above in the
+> Phase 9 → Phase 10 handoff section (§Phase 10 core, line ~1281).
+> **307 tests pass, zero failures.**
 
 ### Architecture Decision
 
@@ -1800,16 +1907,17 @@ Switch background agent to local Ollama (Qwen3.6 35B-A3B) once the foundation
 is mature.  User agent keeps API synthesis (Drafter/Critic/Arbiter) until local
 models close the gap.  Re-evaluate with each new open-weight MoE release.
 
-### Components
+### Components (all built ✅)
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| Orchestrator | `src/agents/orchestrator.py` | Background daemon loop: gap detect → search → ingest → extract → KG → handoff |
-| Subagents | `src/agents/subagents.py` | Parallel search/extract workers via ThreadPoolExecutor |
-| Handoff protocol | `src/agents/handoff.py` | Auto-generated HANDOFF.md with completed/in_progress/next_strategy/gaps |
-| Scheduler | `src/agents/scheduler.py` | Cron/timer integration, user priority override |
-| Web search | `src/retrieval/web_search.py` | Discovery-only web client (DuckDuckGo, no API key); never evidence source |
-| Daemon entry | `phases/phase10_daemon.py` | `python phases/phase10_daemon.py --interval 3600` |
+| Component | File | Purpose | Status |
+|-----------|------|---------|--------|
+| Orchestrator | `src/agents/orchestrator.py` | Background daemon loop: web discovery → parallel EPMC fetch → batch ingest → PreExtractor → KG save → cycle handoff. Dry-run + live modes, state file + PID. | ✅ 22+4 tests |
+| Subagents | `src/agents/subagents.py` | `run_parallel()` — ThreadPoolExecutor for concurrent EPMC search/XML fetch. Batches ingest to avoid redundant BM25 rebuilds. | ✅ 7 tests |
+| Handoff protocol | `src/agents/handoff.py` | `generate_handoff()` / `write_handoff()` — cycle-specific files (`cycle_N_handoff.md`). Human HANDOFF.md never overwritten. | ✅ 13 tests |
+| Scheduler | `src/agents/scheduler.py` | Daemon-thread interval timer with stop‑event lifecycle, crash‑resilient callback, `run_once()` blocking mode. | ✅ 8 tests |
+| Gap resolver | `src/agents/gap_resolver.py` | Parse gap‑analysis text → structured EPMC queries → search → ingest → KG update. | ✅ 18 tests |
+| Web search | `src/retrieval/web_search.py` | Discovery-only web client (DuckDuckGo + DDG API fallback). All results tagged `source_type: "discovery"`. | ✅ Built |
+| Daemon entry | `Orchestrator(graph_storage=gs).start()` | `python -c "from src.agents.orchestrator import Orchestrator; Orchestrator(graph_storage=gs).start()"` | ✅ Built
 
 ### Key architectural choices
 
