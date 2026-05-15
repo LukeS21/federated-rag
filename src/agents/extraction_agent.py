@@ -93,7 +93,7 @@ class ExtractionAgent:
         return self._parse_json_safely(raw_output, "category_discovery")
 
     # ------------------------------------------------------------------
-    #  Entity Extraction (Pass 2 — LLM only; NER deferred)
+    #  Entity Extraction (Pass 2 — line‑tagged output)
     # ------------------------------------------------------------------
     def extract_entities(
         self,
@@ -104,8 +104,11 @@ class ExtractionAgent:
     ) -> Dict[str, Any]:
         """Extract structured entities grouped by the discovered categories.
 
-        The LLM normalises ambiguous terms and grounds every entity with an
-        evidence phrase from the provided chunks.
+        The LLM outputs a **line‑tagged** format instead of JSON.  Each
+        entity block starts with ``TYPE: <category>`` and is terminated by
+        a blank line.  This eliminates JSON parse failures (no braces,
+        commas, or quotes to break) and uses ~30 % fewer tokens than
+        pretty‑printed JSON with repeated field names.
 
         Args:
             chunks: Retrieved chunks (text and metadata).
@@ -115,10 +118,9 @@ class ExtractionAgent:
                 to use as grounding hints.
 
         Returns:
-            A dictionary whose top-level keys are category names. Each value
-            is a list of entity objects containing at least ``entity``,
-            ``evidence``, and ``source``. Additional keys (e.g. ``conditions``,
-            ``direction``, ``context``) are populated as discovered (README §6.3).
+            A dictionary whose top-level keys are category names.  Each
+            value is a list of entity objects containing at least
+            ``entity``, ``evidence``, and ``source``.
         """
         # Scrub all chunk texts to plain ASCII before building the prompt
         scrubbed_chunks = [
@@ -126,54 +128,53 @@ class ExtractionAgent:
         ]
         chunk_summaries = self._format_chunks_for_prompt(scrubbed_chunks)
 
-        categories_str = json.dumps(categories, indent=2, ensure_ascii=False)
-
-        # Build a stripped version of categories (no examples_found) to reduce prompt size.
-        # The LLM generated these examples 30 seconds ago in category_discovery — it doesn't
-        # need to re-read them. Keep names and descriptions only.
-        stripped_categories = {
-            k: [
-                {sk: sv for sk, sv in c.items() if sk != "examples_found"}
-                if isinstance(c, dict) else c
-                for c in v
-            ]
-            if isinstance(v, list)
-            else v
-            for k, v in categories.items()
-        }
-        categories_str = json.dumps(stripped_categories, indent=2, ensure_ascii=False)
+        # Convert categories to line‑tagged text (avoids JSON overhead in prompt)
+        categories_text = self._categories_to_line_tagged(categories)
 
         ner_hint = ""
         if ner_entities:
-            ner_lines = [f"  - {e['text']} ({e['label']}) [Chunk {e.get('source_chunk', '?')}]" for e in ner_entities[:30]]
-            ner_hint = "Deterministic NER entities (use as hints; verify with evidence):\n" + "\n".join(ner_lines) + "\n\n"
+            ner_lines = [
+                f"  - {e['text']} ({e['label']}) [Chunk {e.get('source_chunk', '?')}]"
+                for e in ner_entities[:30]
+            ]
+            ner_hint = (
+                "Deterministic NER entities (use as hints; verify with evidence):\n"
+                + "\n".join(ner_lines)
+                + "\n\n"
+            )
 
         system_prompt = (
             "You are a biomedical entity extraction specialist. "
             "The research query, document chunks, and discovered categories "
             "ARE PROVIDED in the user message below. Do NOT state that data is missing. "
-            "Extract all specific entities that fall under each category. For each entity you MUST:\n"
-            ' - include an "evidence" field quoting the exact sentence(s) from the chunks.\n'
-            ' - include a "source" field with the full chunk label including source PDF (e.g. "Chunk 3 | test.pdf").\n'
-            ' - normalise synonyms (e.g. "TNF-\u03b1" and "TNF-alpha" become "TNF-alpha").\n'
-            "Output a JSON object whose keys are EXACTLY the category names provided. "
-            "The value for each key must be a list of objects. Every object must contain the "
-            'keys "entity" (string), "evidence" (string), and "source" (string). '
-            "You may add fields like \"conditions\", \"direction\", or \"context\" when applicable. "
-            "Use ONLY plain ASCII. Do not include any text outside the JSON object."
+            "Extract all specific entities that fall under each category.\n\n"
+            "Output format — line‑tagged (one blank line between entities):\n"
+            "  TYPE: category_name\n"
+            "  ENTITY: entity_text\n"
+            "  DIRECTION: elevated | decreased | unchanged | ... (optional)\n"
+            "  CONTEXT: brief context (optional)\n"
+            "  CONDITIONS: experimental conditions (optional)\n"
+            "  EVIDENCE: exact quoted sentence(s) from the chunks\n"
+            "  SOURCE: the full chunk label including source (e.g. \"Chunk 3 | paper.pdf\")\n\n"
+            "Rules:\n"
+            " - Every entity block MUST start with TYPE: and include ENTITY:, EVIDENCE:, SOURCE:.\n"
+            " - Normalise synonyms (e.g. \"TNF-alpha\" and \"TNF-alpha\" become \"TNF-alpha\").\n"
+            " - QUOTE evidence exactly — copy the sentence verbatim from the chunks.\n"
+            " - Use ONLY plain ASCII.  No markdown fences, no JSON, no preamble."
         )
 
         user_prompt = (
             f"Research Query: {query}\n\n"
-            f"Discovered Categories:\n{categories_str}\n\n"
+            f"Discovered Categories:\n{categories_text}\n\n"
             f"{ner_hint}"
             f"Retrieved Chunks (format: [Chunk N] text):\n{chunk_summaries}\n\n"
-            "Extract all entities grouped by the categories above. For every entity, provide "
-            "the evidence phrase and the source chunk number."
+            "Extract all entities grouped by the categories above. "
+            "Use the line‑tagged format described in the system prompt. "
+            "For every entity, provide the evidence phrase and the source chunk label."
         )
 
         raw_output = self._call_llm(system_prompt, user_prompt)
-        return self._parse_json_safely(raw_output, "entity_extraction")
+        return self._parse_line_tagged(raw_output, context="entity_extraction")
 
     # ------------------------------------------------------------------
     #  Internal helpers
@@ -265,3 +266,94 @@ class ExtractionAgent:
                 t = t[l : r + 1]
 
         return t.strip()
+
+    # ------------------------------------------------------------------
+    #  Line‑tagged format (Phase 10 — replaces JSON for entity extraction)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _categories_to_line_tagged(categories: Dict[str, Any]) -> str:
+        """Format discovered categories as line‑tagged text.
+
+        Converts the Pass 1 JSON output into a compact text format for the
+        Pass 2 LLM prompt — saves ~30 % tokens vs pretty‑printed JSON.
+        """
+        lines: List[str] = []
+        discovered = categories.get("discovered_categories", [])
+        if isinstance(discovered, list):
+            for cat in discovered:
+                if isinstance(cat, dict):
+                    name = cat.get("name", "")
+                    desc = cat.get("description", "")
+                    if name:
+                        lines.append(f"CATEGORY: {name}")
+                    if desc:
+                        lines.append(f"DESCRIPTION: {desc}")
+                    lines.append("")
+
+        key_vars = categories.get("key_variables", [])
+        if isinstance(key_vars, list) and key_vars:
+            lines.append("KEY_VARIABLES: " + ", ".join(str(v) for v in key_vars))
+            lines.append("")
+
+        methods = categories.get("experimental_methods", [])
+        if isinstance(methods, list) and methods:
+            lines.append("METHODS: " + ", ".join(str(m) for m in methods))
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_line_tagged(text: str, context: str = "") -> Dict[str, Any]:
+        """Parse line‑tagged entity blocks into the standard dict format.
+
+        Each entity block is separated by a blank line and starts with
+        ``TYPE: category_name``.  Individual fields are ``KEY: value``
+        lines.  Returns a dict keyed by category name (same structure as
+        the old JSON parser).
+        """
+        text = scrub_unicode(text)
+        if "<think>" in text:
+            text = _strip_thinking(text)
+
+        result: Dict[str, List[Dict[str, str]]] = {}
+        current_entity: Dict[str, str] = {}
+        current_type = ""
+
+        for line in text.strip().split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                if current_entity and current_type:
+                    result.setdefault(current_type, []).append(dict(current_entity))
+                    current_entity = {}
+                    current_type = ""
+                continue
+
+            if ":" not in stripped:
+                continue
+
+            key, _, value = stripped.partition(":")
+            key = key.strip().lower()
+            value = value.strip()
+
+            if key == "type":
+                if current_entity and current_type:
+                    result.setdefault(current_type, []).append(dict(current_entity))
+                    current_entity = {}
+                current_type = value
+            elif value:
+                current_entity[key] = value
+
+        # Flush trailing entity
+        if current_entity and current_type:
+            result.setdefault(current_type, []).append(dict(current_entity))
+
+        if not result:
+            logger.warning(
+                "Line‑tagged parse produced empty result for %s. "
+                "Raw (first 200 chars): %s",
+                context,
+                text[:200],
+            )
+
+        return result

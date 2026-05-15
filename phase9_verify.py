@@ -516,6 +516,71 @@ def test_progress_persistence() -> Dict[str, Any]:
         return {"status": "warn", "tracked_pmcids": 0}
 
 
+# ── Test 8: Orchestrator Cycle ──────────────────────────────────────────────
+
+
+def test_orchestrator_cycle(live: bool = False) -> Dict[str, Any]:
+    mode_label = "LIVE" if live else "DRY RUN"
+    _header(f"Test 8: Orchestrator Cycle ({mode_label})")
+
+    from src.graph import create_graph_storage
+    from src.agents.orchestrator import Orchestrator
+
+    graph_storage = create_graph_storage(file_path=PROJECT_DIR / "project_graph.json")
+
+    orch = Orchestrator(
+        graph_storage=graph_storage,
+        max_papers_per_query=3,
+        dry_run=not live,
+    )
+
+    print(f"  Mode:        {mode_label}")
+    print(f"  Max papers:  {orch.max_papers_per_query} per query")
+
+    if graph_storage is not None:
+        try:
+            g = getattr(graph_storage, "_graph", None)
+            if g is not None:
+                print(f"  KG nodes:    {g.number_of_nodes()}")
+                print(f"  KG edges:    {g.number_of_edges()}")
+        except Exception:
+            pass
+
+    summary = orch.run_once()
+
+    print(f"\n  -- Cycle {summary['cycle']} Results ({summary['mode']}) --")
+    print(f"  Discovered topics:    {summary['discovered_topics']}")
+    print(f"  EPMC queries built:   {summary['epmc_queries_run']}")
+
+    if summary.get("would_have_queries"):
+        print(f"\n  Queries that WOULD be searched:")
+        for i, q in enumerate(summary["would_have_queries"]):
+            print(f"    [{i + 1}] {q[:100]}")
+
+    if not live:
+        print(f"\n  (DRY RUN -- no EPMC calls made, no papers ingested)")
+        if summary["epmc_queries_run"] > 0:
+            print(f"  To run live: python phase9_verify.py --test orchestrator --orchestrator-live")
+
+    print(f"  Papers fetched:       {summary['papers_fetched']}")
+    print(f"  Papers ingested:      {summary['papers_ingested']}")
+    errors = summary.get("errors", [])
+    if errors:
+        print(f"  Errors:               {len(errors)}")
+        for e in errors:
+            print(f"    - {e}")
+
+    if summary["discovered_topics"] > 0 or summary["epmc_queries_run"] > 0:
+        _ok(f"Orchestrator cycle complete -- {summary['discovered_topics']} topics, "
+            f"{summary['epmc_queries_run']} queries")
+        status = "pass"
+    else:
+        _warn("No topics discovered -- web search may be rate-limited")
+        status = "warn"
+
+    return {"status": status, **summary}
+
+
 # ── Runner ───────────────────────────────────────────────────────────────────
 
 
@@ -523,7 +588,7 @@ def main():
     p = argparse.ArgumentParser(description="Phase 9 Verification Demo")
     p.add_argument("--test", type=str, default="all",
                    choices=["all", "cache", "coverage", "figures", "gaps",
-                            "web", "ingest", "progress"],
+                            "web", "ingest", "progress", "orchestrator"],
                    help="Which test to run (default: all)")
     p.add_argument("--fresh", action="store_true",
                    help="Wipe caches before testing (full fresh state)")
@@ -531,6 +596,8 @@ def main():
                    help="Skip ingestion test (saves API credits)")
     p.add_argument("--skip-figures", action="store_true",
                    help="Skip figure download test (avoids network calls)")
+    p.add_argument("--orchestrator-live", action="store_true",
+                   help="Run orchestrator in LIVE mode (actually calls EPMC and ingests)")
     args = p.parse_args()
 
     if args.fresh:
@@ -554,6 +621,8 @@ def main():
         results["ingestion"] = test_ingestion_with_kg(fresh=args.fresh)
     if tests_to_run in ("all", "progress"):
         results["progress"] = test_progress_persistence()
+    if tests_to_run in ("all", "orchestrator"):
+        results["orchestrator"] = test_orchestrator_cycle(live=args.orchestrator_live)
 
     # ── Final scorecard ──
     _header("VERIFICATION SCORECARD")
@@ -576,6 +645,10 @@ def main():
             detail = f"ingested={r.get('ingested', 0)} skipped={r.get('skipped', 0)}"
         elif name == "progress":
             detail = f"tracked={r.get('tracked_pmcids', 0)}"
+        elif name == "orchestrator":
+            detail = (f"mode={r.get('mode', '?')} "
+                      f"discovered={r.get('discovered_topics', 0)} "
+                      f"queries={r.get('epmc_queries_run', 0)}")
         print(f"  {icon}  {name:<20} {detail}")
 
     # Save results
