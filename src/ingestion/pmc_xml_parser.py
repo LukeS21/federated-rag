@@ -152,7 +152,8 @@ class PMCXMLParser:
         xml_text = re.sub(r'(\s)(\w+):(\w+)(=)', r'\1\3\4', xml_text)
 
         # 3. Convert prefixed tags: <prefix:tag → <tag, </prefix:tag → </tag
-        xml_text = re.sub(r'<(\w+):(\w+)([\s>])', r'<\2\3', xml_text)
+        #    Also handles self-closing tags: <prefix:tag/> → <tag/>
+        xml_text = re.sub(r'<(\w+):(\w+)([\s/>])', r'<\2\3', xml_text)
         xml_text = re.sub(r'</\w+:(\w+)\s*>', r'</\1>', xml_text)
 
         return xml_text

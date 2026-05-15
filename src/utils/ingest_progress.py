@@ -77,3 +77,11 @@ class IngestProgress:
     def finalize(self) -> None:
         self.save()
         logger.info("Finalised progress: %d papers ingested", len(self.completed))
+
+    def completed_count(self) -> int:
+        """Return number of tracked ingested PMCIDs."""
+        return len(self.completed)
+
+    def get_completed(self) -> set:
+        """Return a copy of the completed PMCIDs set."""
+        return set(self.completed)

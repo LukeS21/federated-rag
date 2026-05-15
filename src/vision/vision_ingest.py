@@ -115,6 +115,175 @@ def describe_queued_figures(
     return result
 
 
+def vision_ingest_figure_url(
+    image_url: str,
+    caption: str,
+    source: str,
+    figure_index: int,
+    hybrid_retriever: HybridRetriever,
+    describe: bool = False,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """Download a figure image from an XML <graphic> URL and feed it into the
+    vision pipeline (filter → describe → embed).
+
+    Used by Phase 9 to process figures discovered in JATS XML <fig><graphic>
+    elements during Europe PMC full-text ingestion.
+
+    Args:
+        image_url: The raw URL of the figure image (from <graphic xlink:href>).
+        caption: The figure caption text (from <fig><caption>).
+        source: Source identifier for metadata (e.g., ``"europe_pmc_xml_PMC12345"``).
+        figure_index: Zero-based index within the paper.
+        hybrid_retriever: The HybridRetriever for ChromaDB embedding.
+        describe: If True, call the vision model to generate a description.
+                  If False, embed caption as the description (zero LLM cost).
+        timeout: Download timeout in seconds.
+
+    Returns:
+        Dict with keys: downloaded, described, embedded, error (str or None).
+    """
+    import io
+    import requests as _requests
+    from PIL import Image
+
+    result: Dict[str, Any] = {
+        "downloaded": False,
+        "described": False,
+        "embedded": False,
+        "error": None,
+    }
+
+    if not image_url:
+        result["error"] = "empty URL"
+        return result
+
+    # ── 1. Download image ──
+    try:
+        if image_url.startswith("file://"):
+            local_path = Path(image_url[7:])
+            img_bytes = local_path.read_bytes()
+        elif image_url.startswith(("http://", "https://")):
+            resp = _requests.get(image_url, timeout=timeout, stream=True)
+            resp.raise_for_status()
+            img_bytes = resp.content
+        else:
+            result["error"] = f"unsupported URL scheme: {image_url[:30]}"
+            return result
+        if len(img_bytes) < 100:
+            result["error"] = f"image too small ({len(img_bytes)} bytes)"
+            return result
+        pil_image = Image.open(io.BytesIO(img_bytes))
+        pil_image.load()
+        result["downloaded"] = True
+        w, h = pil_image.size
+    except _requests.RequestException as e:
+        result["error"] = f"download failed: {e}"
+        logger.debug("Figure URL download failed: %s → %s", image_url[:80], e)
+        return result
+    except Exception as e:
+        result["error"] = f"image decode failed: {e}"
+        logger.debug("Figure image decode failed: %s → %s", image_url[:80], e)
+        return result
+
+    if w < 50 or h < 50:
+        result["error"] = f"image too small ({w}×{h})"
+        return result
+
+    # ── 2. Describe (optional — caption is always the minimum) ──
+    description = caption if caption else ""
+    if describe:
+        try:
+            from src.vision.vision_descriptor import VisionDescriptor
+            vd = VisionDescriptor()
+            generated = vd.describe(pil_image)
+            if generated.strip():
+                description = generated.strip()
+                result["described"] = True
+        except Exception as e:
+            logger.debug("Vision description failed for figure %d (%s): %s",
+                         figure_index, source, e)
+
+    # ── 3. Embed into ChromaDB ──
+    try:
+        from src.vision.figure_embedder import FigureEmbedder
+        embedder = FigureEmbedder(hybrid_retriever)
+        figure_dict = {
+            "description": description,
+            "caption": caption,
+            "page_no": 0,
+            "bbox": {},
+            "file_path": str(image_url),
+            "width": w,
+            "height": h,
+            "figure_index": figure_index,
+        }
+        embedder.embed([figure_dict], pdf_source=source)
+        result["embedded"] = True
+        logger.debug("Vision ingest: embedded figure %d for %s", figure_index, source)
+    except Exception as e:
+        result["error"] = result["error"] or f"embed failed: {e}"
+        logger.debug("Figure embed failed for %s: %s", source, e)
+
+    return result
+
+
+def vision_ingest_xml_figures(
+    chunks: list,
+    hybrid_retriever: HybridRetriever,
+    describe: bool = False,
+) -> Dict[str, int]:
+    """Scan parsed XML chunks for figure_image_url entries and feed them
+    through the vision pipeline.
+
+    Called during Phase 9 --ingest after PMCXMLParser.parse() to process
+    figures discovered in JATS XML <fig><graphic> elements.
+
+    Args:
+        chunks: List of chunk dicts from PMCXMLParser.parse().
+        hybrid_retriever: The HybridRetriever for ChromaDB embedding.
+        describe: If True, call the vision model per figure.
+
+    Returns:
+        Dict with counts: found, downloaded, described, embedded, failed.
+    """
+    counts = {"found": 0, "downloaded": 0, "described": 0, "embedded": 0, "failed": 0}
+
+    fig_index = 0
+    for chunk in chunks:
+        meta = chunk.get("metadata", {})
+        if meta.get("chunk_type") != "figure":
+            continue
+        image_url = meta.get("figure_image_url", "")
+        if not image_url:
+            continue
+        counts["found"] += 1
+
+        caption = chunk.get("text", "")
+        source = meta.get("source", "europe_pmc_xml")
+
+        r = vision_ingest_figure_url(
+            image_url=image_url,
+            caption=caption,
+            source=source,
+            figure_index=fig_index,
+            hybrid_retriever=hybrid_retriever,
+            describe=describe,
+        )
+        fig_index += 1
+
+        if r["downloaded"]:
+            counts["downloaded"] += 1
+        if r["described"]:
+            counts["described"] += 1
+        if r["embedded"]:
+            counts["embedded"] += 1
+        if r["error"]:
+            counts["failed"] += 1
+
+    return counts
+
+
 def vision_ingest_pdf(
     pdf_path: Path,
     hybrid_retriever: HybridRetriever,

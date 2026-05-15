@@ -163,12 +163,17 @@ class EuropePMCClient:
     def full_text_xml(self, pmcid: str) -> Optional[str]:
         """Fetch full-text JATS XML for a paper by PMCID.
 
+        Tries the Europe PMC REST endpoint first.  Falls back to the
+        PubMed Central OAI‑PMH endpoint when the REST endpoint is
+        unavailable (e.g., during API outages).
+
         Args:
             pmcid: PubMed Central ID (e.g. "PMC13059311").
 
         Returns:
             XML string, or None if full text is not available.
         """
+        # Primary: Europe PMC REST endpoint
         try:
             resp = self._request(
                 "GET",
@@ -179,16 +184,40 @@ class EuropePMCClient:
                 return resp.text
             logger.debug("No full text for %s (status=%d, len=%d)",
                          pmcid, resp.status_code, len(resp.text))
-            return None
         except requests.HTTPError as e:
-            if e.response is not None and 400 <= e.response.status_code < 500:
-                logger.debug("HTTP %d fetching %s: %s", e.response.status_code, pmcid, e)
+            if e.response is not None and e.response.status_code == 404:
+                logger.debug("EPMC REST fullTextXML returned 404 for %s, trying PMC OAI fallback", pmcid)
+            else:
+                logger.warning("HTTP error fetching %s after retries: %s", pmcid, e)
                 return None
-            logger.warning("HTTP error fetching %s after retries: %s", pmcid, e)
-            return None
         except Exception as e:
             logger.warning("Error fetching %s: %s", pmcid, e)
             return None
+
+        # Fallback: PubMed Central OAI-PMH (numeric ID only, no "PMC" prefix)
+        numeric_id = pmcid.replace("PMC", "").replace("pmc", "")
+        try:
+            oai_url = (
+                "https://pmc.ncbi.nlm.nih.gov/api/oai/v1/mh/"
+                f"?verb=GetRecord"
+                f"&identifier=oai:pubmedcentral.nih.gov:{numeric_id}"
+                f"&metadataPrefix=pmc"
+            )
+            # Use raw requests.get to avoid session header merge issues on this endpoint
+            import requests as _requests
+            resp = _requests.get(oai_url, timeout=45, headers={
+                "Accept": "text/xml, application/xml, */*",
+                "User-Agent": "FederatedRAG/1.0 (mailto:researcher@example.com)",
+            })
+            resp.raise_for_status()
+            if len(resp.text) > 500 and "<article " in resp.text:
+                logger.debug("PMC OAI fallback succeeded for %s (%d chars)", pmcid, len(resp.text))
+                return resp.text
+            logger.debug("PMC OAI fallback for %s: too short or no article (%d chars)", pmcid, len(resp.text))
+        except Exception as e:
+            logger.info("PMC OAI fallback failed for %s: %s", pmcid, e)
+
+        return None
 
     def full_text_xml_batch(self, pmcids: List[str]) -> Dict[str, Optional[str]]:
         """Fetch full text for multiple PMCIDs.

@@ -11,8 +11,8 @@ Phase 6 UI, Polish & Deployment (Streamlit, GLiNER-PII, correctness benchmarking
 Phase 6.5 Gap Closure (parallelization, compression, cache versioning, security fuzzer)   ✅ Complete (May 2026)
 Phase 7 Vision Pipeline & Multi‑Turn Synthesis (figure extraction, vision model, section writing, claim ledger)   ✅ Complete (May 2026)
 Phase 8 Publication-Scale Retrieval (PDF acquisition, EZProxy/Playwright pipeline)   ✅ Deprecated — see Phase 9
-Phase 9 API-Based Literature Ingestion (Europe PMC XML, SPECTER2, retry, persistence, ChromaDB wiring)   🟡 50% Complete (May 2026)
-Phase 10 Autonomous Background Agent (orchestrator daemon, subagents, handoff)           ⬜ Designed — not built
+Phase 9 API-Based Literature Ingestion (Europe PMC XML, SPECTER2, retry, persistence, ChromaDB wiring)   ✅ Complete (15 May 2026)
+Phase 10 Autonomous Background Agent (orchestrator daemon, subagents, handoff)           🟡 Foundation built — core remaining
 Phase 11 Memory Cascade & Community Routing (hierarchical KG, relevance router)          ⬜ Designed — not built
 Phase 12 Skills & Experiential Memory (skill library, trajectory logging, agent learnings) ⬜ Designed — not built
 Phase 13 Output Tools & Structured Writing (templates, anchored writer, citation integrator) ⬜ Designed — not built
@@ -1236,106 +1236,122 @@ Goal: Scale from 6 papers to 100s-1000s with sub-minute query times.
 
 Target performance: 30-90s per query on 1000 papers (vs. current 5-8 min on 5 papers).
 
-### Phase 9 Preview: Internet & Literature Discovery Integration (May 2026 — POC built)
+### Phase 9 Status (15 May 2026 — Complete)
 
-Goal: Extend the pipeline with dynamic literature discovery — the system identifies knowledge gaps after local retrieval, queries external APIs (PubMed, Semantic Scholar) for relevant papers, ingests full‑text PDFs, integrates into ChromaDB/Zotero/KG, and re‑synthesizes with the expanded evidence base.
+**All 6 gaps closed. Three Phase 10 foundation pieces built.** The full pipeline
+ingests OA papers from Europe PMC (with NCBI PMC OAI-PMH fallback), caches
+SPECTER2 embeddings locally, downloads and embeds XML `<graphic>` figures into
+ChromaDB, runs coverage diagnostics (EPMC vs Semantic Scholar), parses research
+gaps into structured search queries, and provides discovery-only web search.
 
-#### POC Status (May 2026)
-
-**Built:**
-- `src/retrieval/pubmed.py` — thin PubMed E-utilities client (esearch, efetch, XML parsing)
-- `src/retrieval/semantic_scholar.py` — thin Semantic Scholar API client (search, paper lookup, DOI lookup)
-- `phase9_pubmed_demo.py` — Literature discovery POC: searches both APIs, compares against local corpus, reports novelty rate and keyword gaps. Results cached to `projects/default/literature_discovery.json`.
-
-**Initial POC results (May 2026, Semantic Scholar, 5 queries):**
-- 87% of papers found are novel (not in our 6-paper corpus)
-- Top novel keywords: rat (12), implant (9), surface (9), titanium (7), macrophage (5)
-- Shows clear coverage gaps in our 6-paper, single-lab corpus
-
-**What's NOT built (requires Phase 8 infrastructure):**
-- Full ingestion pipeline (auto-download PDFs → parse → embed → re-synthesize)
-- Coverage Check LLM node (assess per-theme coverage, generate targeted queries)
-- Auto-retry loops (re-search, re-fetch, re-synthesize)
-- Institutional proxy PDF access (EZProxy config exists, unused)
-
-#### Architecture
-
-#### Architecture
+#### Core pipeline
 
 ```
-Query → Decompose → Coverage Check → Local Retrieve + External Fetch → Merge → Cluster → Extract → Synthesize
+Europe PMC search (OPEN_ACCESS:Y)
+  → fullTextXML fetch (EPMC REST → PMC OAI-PMH fallback, 3-retry backoff)
+  → JATS XML parse → chunk dicts → ChromaDB + BM25 ingest → IngestProgress checkpoint
+  → Figure pipeline (XML <graphic> URLs → download → vision_ingest)
+  → PreExtractor KG update (if --graph flag)
+Semantic Scholar → DOI resolve (title fallback) → SPECTER2 embedding fetch
+  → Spector2Cache (DOI-keyed JSON, skip re-fetch on subsequent runs)
+Coverage diagnostic: EPMC ∩ S2 overlap → "X/Y papers (Z%) have PMC full text"
+Gap analyser: gap text → structured queries → EPMC search → ingest → re-synthesize
+Web discovery: DuckDuckGo/DDG → discovery-tagged results (never evidence)
 ```
 
-The new **Coverage Check** node uses an LLM to assess whether the local corpus covers each theme adequately:
+#### Phase 9 deliverables (all complete)
 
-- Analyzes per‑theme evidence summaries, extracted entities, methods, model systems
-- Identifies specific knowledge gaps (e.g., \"no osteoblast data in obese Ti models\")
-- Generates targeted PubMed queries per gap (NOT broad theme queries)
-- LLM scores returned abstracts for novelty per gap (yes/partial/no)
-- Stops when all gaps have ≥1 novel paper, OR 2 rounds, OR LLM declares sufficiency
+| Gap | Deliverable | File | Tests |
+|-----|------------|------|-------|
+| 1 | Retry logic — 3-retry exponential backoff | `src/retrieval/europe_pmc.py` `_request()` | Implicit (pipeline tests) |
+| 2 | Progress persistence — 10-paper checkpoints | `src/utils/ingest_progress.py` | Implicit (pipeline tests) |
+| 3 | Ingestion wiring — `--ingest` into ChromaDB + BM25 | `phase9_europe_pmc_test.py` | Phase 5 integration test |
+| 4 | Coverage diagnostic — EPMC vs S2 comparison | `src/retrieval/coverage.py` | 14 tests (matching, overlap) |
+| 5 | Figure pipeline — XML `<graphic>` URLs → vision_ingest | `src/vision/vision_ingest.py` | 9 integration tests, Ollama describe=True verified |
+| 6 | SPECTER2 caching — local JSON, skip re-fetch | `src/utils/spector2_cache.py` | 13 tests (get/put/persist/edge) |
 
-No hardcoded thresholds — the LLM is the gatekeeper, not a numeric K.
+#### Phase 10 foundation (all built)
 
-#### API Strategy
+| # | Item | File | Status |
+|---|------|------|--------|
+| 7 | PreExtractor + graph_storage wiring | `phase9_europe_pmc_test.py` (`--graph` flag) | ✅ Built |
+| 8 | Gap resolver — parse gaps → search → ingest | `src/agents/gap_resolver.py` | ✅ 18 tests |
+| 9 | Web search — discovery-only DuckDuckGo client | `src/retrieval/web_search.py` | ✅ Verified manually |
 
-| API | Provides | Rate Limit | Auth |
-|-----|----------|-----------|------|
-| **PubMed E‑utilities** (NCBI) | Abstracts, PMIDs, MeSH terms, PMC OA full‑text links | 3 req/s (no key), 10 req/s (with key) | Free, optional key |
-| **Semantic Scholar** | Citation graph, TLDR summaries, OA PDF links | 100 req/s | Free API key |
-| **Unpaywall** | Legal OA PDF links for paywalled papers | Basic: free | Optional for limits |
-| **PMC OA Service** | Full‑text XML/PDF for ~4M open‑access papers | REST API | Free |
+#### API Strategy (updated)
 
-#### Full-Text Acquisition
+| API | Provides | Rate Limit | Auth | Notes |
+|-----|----------|-----------|------|-------|
+| **Europe PMC REST** | Search, metadata, fullTextXML (currently 404) | 10 req/s | Free | FullTextXML endpoint down — see fallback below |
+| **PubMed Central OAI-PMH** | JATS full-text XML (fallback) | Unknown | Free | Used transparently when EPMC REST returns 404 |
+| **Semantic Scholar** | Search, paper metadata, SPECTER2 embeddings | 1 req/s (free), 100 req/s (key) | API key in `.env` | 429 backoff: 10→20→40s |
+| **DuckDuckGo (ddgs)** | Web search results (discovery only) | Unknown | Free | `pip install ddgs`; falls back to DDG API |
 
-Getting from PMID/DOI → ingested PDF uses a resolution chain:
+#### Novel approaches developed
 
-1. **PubMed search** → PMIDs + abstracts
-2. **PMC OA Service** → free full‑text XML/PDF for OA papers
-3. **Unpaywall API** → legal OA versions of paywalled papers
-4. **Zotero (`pyzotero`)** → create item, trigger \"Find Available PDF\" (checks Unpaywall, OA Button, publisher OA)
-5. **Institutional proxy** (EZProxy) → route paywalled PDF requests through institutional access (configurable via `INSTITUTIONAL_PROXY_URL` env var)
-6. **Zotero Connector** (browser extension, manual fallback) → captures paywalled papers from publisher sites via institutional SSO
+1. **PMC OAI-PMH as transparent fullTextXML fallback** — when EPMC REST returns 404,
+   `full_text_xml()` automatically fetches from NCBI's OAI endpoint. Same JATS XML
+   content, different transport. Callers are unaware of the path used.
 
-Zotero is the integration hub: already handles metadata from PMID/DOI, PDF retrieval from multiple sources, and storage. The pipeline only needs to create Zotero items and read downloaded PDFs.
+2. **Hierarchical DOI matching** — three-tier match: DOI exact → DOI clean
+   (strip `https://doi.org/` prefix) → title fuzzy (SequenceMatcher + word-set
+   Jaccard, threshold 0.6). Handles API format inconsistencies.
 
-#### Institutional Access
+3. **Word-boundary-aware gap detection with false-positive filtering** — 9 regex
+   gap patterns (`\bno\s+[\w\s-]{0,40}?\bdata\b`, etc.) with 6 exclusion patterns
+   for null findings. Scoped to first sentence of each gap block.
 
-- **EZProxy**: Most universities provide EZProxy URLs (e.g., `https://proxy.library.vcu.edu/login?url=`). Python requests can prepend this URL to publisher PDF requests, routing through institutional authentication.
-- **Zotero Connector + browser**: For publishers that block automated access (ScienceDirect, etc.), the Zotero Connector browser extension with institutional SSO is the fallback — one‑click PDF capture.
-- **Configuration**: `INSTITUTIONAL_PROXY_URL` and optional publisher credentials live in `.env`. Per‑lab configurable in production.
+4. **ChromaDB dedup-before-add** — `ChromaClient.get_existing_ids()` + 
+   `add_documents_deduped()` prevents duplicate-entry warnings on re-ingest without
+   requiring collection-level configuration.
 
-#### Prerequisites (Phase 8 deliverables needed first)
+5. **Aggregate + per-call rate limiting** — S2 client uses `_min_interval=3.0s`
+   for normal operation AND 10→20→40s exponential backoff on 429s. Both necessary.
 
-- **Neo4j graph storage**: Track provenance across local + external papers (100K+ edges)
-- **Hierarchical clustering**: Handle 1000+ paper corpora without O(n) context explosion
-- **Corpus‑level claim index (L0 cache)**: Instant coverage assessment without re‑reading all papers
-- **Multi‑tier caching L0‑L4**: Cache external searches to avoid re‑fetching the same papers
+#### Known limitations
 
-#### Immediate proof‑of‑concept (built in Phase 7b — COMPLETE)
+- **EPMC `fullTextXML` REST endpoint returns 404** as of 15 May 2026 (server-side outage).
+  Worked during initial Phase 9 testing (13 May 2026) — papers fetched successfully.
+  A transparent PMC OAI-PMH fallback is active (same JATS XML, 280KB per paper).
+  See HANDOFF.md §External API Status for diagnostic timeline and how to tell
+  a server outage from a code bug. The pipeline continues working either way.
+- **S2 returns 429 when hourly quota is exhausted** — `_min_interval=3.0s` + 10→20→40s
+  429 backoff is sufficient for normal operation but back-to-back test runs can exhaust
+  the free-tier quota. Wait 30–60s between runs. See HANDOFF.md §External API Status
+  for diagnostic guide.
+- **SPECTER2 embeddings unavailable for many papers** — only ~30% of resolved
+  S2 papers have `embedding` vectors. This is an S2 data limitation, not a code bug.
+- **Figure URLs absent from OAI XML** — the OAI endpoint provides figure captions
+  but may not include `<graphic xlink:href>` URLs in the same format as EPMC REST.
+  Figure pipeline tested with synthetic images; production validation awaits
+  EPMC REST recovery.
+- **PreExtractor adds ~30s LLM cost per paper** at ingest time. For background
+  daemon (Phase 10) this is acceptable. Cached extractions are loaded from disk
+  on subsequent runs (<1ms).
+- **`web_search.py` requires `pip install ddgs`** for primary search path. Falls
+  back to DDG Instant Answer API (weaker, returns 0 results for niche queries).
 
-- ✅ `src/retrieval/pubmed.py` — thin wrapper around NCBI E‑utilities (esearch, efetch)
-- ✅ `src/retrieval/semantic_scholar.py` — thin wrapper around Semantic Scholar API
-- ✅ Standalone script: `phase9_pubmed_demo.py` — \"given a theme query, search, show what novel info would be added\"
-- ✅ Measures coverage delta without modifying the pipeline graph
-- ✅ Results cached to `projects/default/literature_discovery.json`
+#### Tests
 
-#### Baseline Comparison (built in Phase 7b — COMPLETE)
+- **246 tests passing, 0 failures** (up from 186 at Phase 9 handoff)
+- 54 new tests: SPECTER2 cache (13), gap resolver (18), coverage (14), integration (9)
+- All pre-existing tests pass; 6 synthesis agent mock failures now resolved.
+- Verification demo: `python phase9_verify.py --fresh`
 
-`phase7_baseline_comparison.py` compares the full multi-agent pipeline against a naive single-pass RAG baseline:
+#### Original POC (May 2026)
 
-| Metric | Naive RAG | Full Pipeline |
-|--------|-----------|---------------|
-| Claims | 5 | 134 (26.8× more) |
-| Anchoring | 1.000 | 0.993 |
-| Ungrounded | 0 | 1 (0.7%) |
-| Unique citations | 3 | 6 |
-| Output | 959 chars | 28,467 chars |
-| Latency | ~30s | ~500s |
+The Phase 9 proof-of-concept demonstrated the feasibility of API-based literature
+acquisition (27× faster than Playwright/EZProxy PDF downloads). The initial POC
+included:
 
-> ⚠ **Interpretation caveats**: The naive RAG's anchoring score of 1.000 is misleading — it's easy to get perfect grounding when you only produce 5 safe, conservative claims. The full pipeline's 0.993 anchoring across 134 claims is the real achievement. At 6-paper scale, both approaches are well-grounded; the pipeline's value is in coverage breadth and cross-paper synthesis, not grounding precision. The gap will widen at Phase 8 scale (100+ papers).
+- `src/retrieval/pubmed.py` — thin PubMed E‑utilities client (deprecated by Europe PMC)
+- `src/retrieval/semantic_scholar.py` — Semantic Scholar API client (still used for SPECTER2)
+- `phase9_pubmed_demo.py` — POC script (deprecated by `phase9_europe_pmc_test.py`)
+- Initial results: 87% of external papers novel against 6-paper corpus
+- `phase7_baseline_comparison.py` — 134 claims vs 5 for naive RAG (26.8× improvement)
+- EZProxy/Playwright pipeline preserved for non-OA paper acquisition
 
 ## 11. Component Interfaces
-11.1 Hybrid Retriever
 ```python
 class HybridRetriever:
     def __init__(self, chroma: ChromaClient, bm25: BM25Index): ...

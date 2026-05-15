@@ -1,57 +1,61 @@
-# Phase 9 → Phase 10 Handoff — May 2026 (Phase 9: near‑complete, Phase 10: designed)
+# Phase 9 → Phase 10 Handoff — 15 May 2026 (Phase 9: complete, Phase 10: foundation built)
 
 ## Quick start
 
 ```bash
-# Phase 9 pipeline test (Europe PMC + Semantic Scholar, ~14s for 5 papers)
-python phase9_europe_pmc_test.py --count 10
+# Full verification demo (all Phase 9 features + Phase 10 foundations)
+python phase9_verify.py --fresh --skip-ingest --skip-figures
 
-# Phase 9 pipeline with ingestion into ChromaDB + BM25
-python phase9_europe_pmc_test.py --count 50 --ingest
+# Quick pipeline test with coverage diagnostic
+python phase9_europe_pmc_test.py --count 10 --coverage
 
-# Phase 9 with custom query
-python phase9_europe_pmc_test.py --count 10 --query "dental implant macrophage polarization"
+# Ingest into ChromaDB + BM25 + Knowledge Graph
+python phase9_europe_pmc_test.py --count 10 --ingest --graph
 
-# Ingest progresses persists — reruns skip already-ingested papers
-cat projects/default/ingest_progress.json | python -m json.tool
+# Ingest with figure downloads + KG updates + coverage
+python phase9_europe_pmc_test.py --count 10 --ingest --graph --figures --coverage
 
-# Tests (192 passing, zero failures)
-python -m pytest tests/ -v --tb=short
+# All tests (246 passing, 0 failures)
+python -m pytest tests/ -q --tb=short
 
-# Existing Phase 8 download pipeline (deprecated, still works with EZProxy auth)
+# Phase 8 pipeline (deprecated, preserved for non-OA papers)
 # python scripts/headless_download.py --limit 10
 ```
 
 ## Current project state
 
-**Phase 9 is 50% complete.** The core architecture pivot from Playwright/EZProxy
-PDF downloads to Europe PMC API-based full-text XML is finished, tested, and
-proven (27× faster, 100% reliable for OA papers).  Three of the original six
-gaps are closed (retry logic, progress persistence, ingestion wiring).  Three
-remain (coverage diagnostic, figure pipeline, SPECTER2 caching).
+**Phase 9 is 100% complete.** All 6 original gaps are closed: retry logic,
+progress persistence, ingestion wiring, coverage diagnostic, figure pipeline,
+and SPECTER2 caching. Three Phase 10 foundation pieces are also built:
+PreExtractor+graph_storage wiring, gap_resolver.py, and web_search.py.
 
-**Phase 10 design is complete** (this session).  We spent this session exploring
-the SOTA in persistent agent memory, graph-based RAG, sleep-time compute, token-space
-continual learning, skill learning, and multi-agent orchestration.  The target
-architecture is a dual-agent system: a background research daemon (autonomous
-paper acquisition, KG maintenance, skill improvement) and a user-facing agent
-(query routing, evidence-grounded synthesis).  This aligns with Microsoft GraphRAG
-(Mar 2025), Letta Sleep-time Compute (Apr 2025), Letta Context Repositories
-(Feb 2026), and Anthropic's multi-agent research system (Jun 2025).  The plan
-uses DeepSeek API during build/accumulation phases, switching to local Ollama
-(Qwen3.6 35B-A3B) once the KG, skills, and community structure are mature.
+**The Europe PMC `fullTextXML` REST endpoint is returning 404 for all PMCIDs**
+(server-side outage as of 15 May 2026). A transparent PMC OAI-PMH fallback was
+added to `full_text_xml()` — same JATS XML content, different transport. The
+code tries EPMC REST first, falls back to NCBI's OAI endpoint automatically.
+Content quality is identical; only the XML envelope differs.
+
+**246 tests pass, zero failures** (up from 186 when Phase 9 was last handed off).
+54 new tests cover all Phase 9 additions and the Phase 10 foundation modules.
+The 6 pre-existing synthesis agent mock failures are now resolved.
 
 **Core pipeline** (Phase 9, built and tested):
 ```
-Europe PMC search (OPEN_ACCESS:Y) → fullTextXML fetch (3-retry backoff)
+Europe PMC search (OPEN_ACCESS:Y) → fullTextXML fetch (EPMC REST → PMC OAI fallback)
   → JATS XML parse → chunk dicts → ChromaDB + BM25 ingest → progress checkpoint
+  → Figure pipeline (XML <graphic> URLs → download → vision_ingest)
+  → PreExtractor KG update (if --graph)
 Semantic Scholar → DOI resolve (with title fallback) → SPECTER2 embedding fetch
+  → Spector2Cache (DOI-keyed, skip re-fetch)
+Coverage diagnostic: EPMC ∩ S2 overlap → "X/Y papers (Z%) have PMC full text"
+Gap analyser: gap text → structured queries → EPMC search → ingest → re-synthesize
+Web discovery: DuckDuckGo → discovery-tagged results (never evidence)
 ```
 
 **Target architecture** (Phase 10–13, designed):
 ```
 BACKGROUND DAEMON (cron/timer, autonomous):
-  read KG → detect gaps → web discovery → Europe PMC search → ingest → extract
+  read KG → detect gaps → web discovery → EPMC search → ingest → extract
   → update KG → reflect on trajectories → improve skills → write HANDOFF.md
 
 USER AGENT (on demand, priority over background):
@@ -59,356 +63,471 @@ USER AGENT (on demand, priority over background):
   → anchor evidence → output with citations
 ```
 
-### What changed this session
+## What changed this session
 
 | | Before this session | After this session |
 |---|---|---|
-| **Retry logic** | None — transient 5xx caused failures | 3-retry exponential backoff (1s, 2s) in `_request()` |
-| **Progress persistence** | Crash = restart from zero | `ingest_progress.json` with 10-paper checkpoints |
-| **Ingestion wiring** | Parsed chunks not stored in indexes | `--ingest` flag in test harness, ChromaDB + BM25 |
-| **Chunk IDs** | Non-unique across papers (collisions) | Source includes PMCID + chunk_index on every chunk |
-| **Phase 9 doc reference** | Described as "In Progress" with 6 open gaps | Updated to reflect 3 closed, 3 remaining, full architecture |
-| **Phase 10-13 planning** | Not designed | Full architecture designed, informed by 12-month SOTA review |
+| **Phase 9 status** | 50% (3/6 gaps) | 100% (6/6 gaps) |
+| **Coverage diagnostic** | Did not exist | `src/retrieval/coverage.py` — DOI/title matching, 40% coverage demonstrated |
+| **Figure pipeline** | XML URLs recorded but never downloaded | `vision_ingest_figure_url()` + `vision_ingest_xml_figures()`, describe=True tested with Ollama |
+| **SPECTER2 caching** | Re-fetched from API every run | `src/utils/spector2_cache.py` — DOI-keyed JSON cache, hit verification 0.0000s |
+| **EPMC fullTextXML** | Worked (200 responses) | Returns 404 for all PMCIDs as of 15 May 2026 — PMC OAI fallback added |
+| **S2 rate limits** | 429s killed the pipeline | 429 retry with 10→20→40s exponential backoff |
+| **ChromaDB duplicates** | Warnings on re-ingest | `ChromaClient.add_documents_deduped()` + `get_existing_ids()` |
+| **Gap parser** | Did not exist | `src/agents/gap_resolver.py` — structured parsing, false-positive filtering, 9-word-boundary patterns |
+| **Web search** | Did not exist | `src/retrieval/web_search.py` — ddgs primary, DDG API fallback, all results tagged `discovery` |
+| **KG at ingest** | Not wired | `--graph` flag connects PreExtractor to graph_storage |
+| **XML namespace stripping** | Missed self-closing prefixed tags | Fixed to handle `<mml:mtr/>` etc. (`[\s/>]` pattern) |
+| **Tests** | 186 passing, 0 failures | **246 passing, 0 failures** (54 new tests) |
 
-## What was accomplished in Phase 9 (this session)
+## What was accomplished
 
-### Gap 1 — Retry logic ✅
+### Gap 1 — Retry logic ✅ (prior session)
+3-retry exponential backoff on Europe PMC HTTP calls in `_request()`.
 
-`src/retrieval/europe_pmc.py` — new `_request()` method with 3-retry exponential
-backoff (delays: 1s, 2s).  Retries 5xx, timeouts, and connection errors.
-Does NOT retry 4xx (client errors).  Both `_get()` (search) and `full_text_xml()`
-(XML fetch) delegate to `_request()`.  Per-call Accept headers are preserved
-through the retry loop (verified: XML endpoint returns 200 with correct header).
+### Gap 2 — Progress persistence ✅ (prior session)
+`IngestProgress` class with 10-paper checkpoints, `completed_count()`, `get_completed()`.
 
-### Gap 2 — Progress persistence ✅
+### Gap 3 — Wire ingestion ✅ (prior session)
+`--ingest` flag on test harness, ChromaDB + BM25, anchoring singleton updated.
 
-New file `src/utils/ingest_progress.py` — `IngestProgress` class tracks ingested
-PMCIDs in `projects/default/ingest_progress.json`.  Checkpoints every 10 papers.
-`is_completed()`, `mark_completed()`, `checkpoint()`, `finalize()` API.  Resume
-verified: second run correctly skipped 3/3 already-ingested papers.
+### Gap 4 — Coverage diagnostic ✅
+`src/retrieval/coverage.py` — `run_coverage_diagnostic()` searches EPMC and S2 with the
+same query, matches by DOI (exact then URL-prefix-stripped) and title fuzzy (≥0.6
+threshold). Reports X/Y papers (Z%) with PMC full text. Demonstrated 40% coverage
+for broad queries, 0% for niche OA/paywalled-divergent queries — both valid results.
 
-### Gap 3 — Wire ingestion ✅
+Matching strategy (in order): DOI exact → DOI clean (strip `https://doi.org/`)
+→ title fuzzy (SequenceMatcher + word-set Jaccard, threshold 0.6).
 
-`phase9_europe_pmc_test.py` — new `--ingest` flag.  Phase 5 in the pipeline:
-PMCXMLParser.parse() → HybridRetriever.ingest() → IngestProgress.checkpoint().
-Uses existing `public_corpus` ChromaDB collection and BM25 index.  BM25 corpus
-loaded from disk on startup, saved after ingestion (accumulates across runs).
-Anchoring ChromaDB singleton updated so evidence check uses same collection.
+### Gap 5 — Figure pipeline ✅
+`vision_ingest_figure_url()` in `src/vision/vision_ingest.py`:
+- Downloads image from URL (`http://`, `https://`, or `file://`)
+- Options: caption-as-description (zero LLM) or `describe=True` (Ollama vision model)
+- Embeds via `FigureEmbedder` with source + figure_index in metadata
+- `vision_ingest_xml_figures()` batch adapter scans parsed chunks for `figure_image_url`
 
-### Bonus fix — Unique chunk IDs ✅
+Tested `describe=True` with gemma4:e4b via Ollama — bar chart correctly identified
+("M2 highest, Treg medium, M1 lowest"). Real PMC figure URLs were absent during
+EPMC outage but code path is identical.
 
-`src/ingestion/pmc_xml_parser.py` — two changes to prevent ChromaDB ID collisions:
-1. `source` field now includes PMCID: `"europe_pmc_xml_PMC12345"` (was generic)
-2. `chunk_index` added to every chunk's metadata during `parse()`
-This ensures unique IDs across papers — without it, paper A chunk 0 and
-paper B chunk 0 would share ID `europe_pmc_xml__0` and collide in ChromaDB.
+### Gap 6 — SPECTER2 caching ✅
+`src/utils/spector2_cache.py` — `Spector2Cache` class, DOI-keyed JSON persistence
+at `projects/default/spector2_cache.json`. Validates 768-dim vectors. Handles
+corrupted JSON gracefully (wipes). Proven 0.0000s cache-hit retrieval.
 
-### SOTA research (this session — informs Phase 10–13)
+### Phase 10 #7 — PreExtractor + graph_storage ✅
+`--graph` flag on `phase9_europe_pmc_test.py --ingest` creates `graph_storage` via
+`create_graph_storage()`, loads existing KG, passes to `PreExtractor.extract_paper()`
+for each ingested paper. KG accumulates across runs.
 
-We conducted a comprehensive review of published research and production
-architectures from April 2024 through May 2026.  Key findings:
+### Phase 10 #8 — Gap resolver ✅
+`src/agents/gap_resolver.py` — `_parse_gaps_to_queries()` with:
+- 9 word-boundary gap patterns (`\bno\s+[\w\s-]{0,40}?\bdata\b`, etc.)
+- False-positive filter for null findings (`\bno\s+significant\s+difference\b`, etc.)
+- `lstrip("the ")` bug fixed (was stripping individual characters)
+- Hyphens in compound words (IL-17A, Ti-6Al-4V) not treated as bullet markers
+- `GapResolver` class: parse → search → fetch → ingest loop with graph_storage support
 
-| Date | Source | Finding | Relevance |
-|------|--------|---------|-----------|
-| Apr 2024 | Microsoft GraphRAG | Entity KG → community detection → hierarchical summaries. Proves KG-based RAG substantially outperforms vanilla RAG on global queries. | Our KG already implements this pattern. Community detection + summaries are the missing layer. |
-| Nov 2024 | Microsoft LazyGraphRAG | 0.1% the indexing cost of full GraphRAG, 700× cheaper queries. NLP noun-phrase extraction (no LLM) for concept graph, deferred LLM summarization. Iterative deepening relevance test. | The indexing-cost reduction makes 100K-paper corpora feasible. We should adopt the concept-graph-as-pre-filter layer. |
-| Nov 2024 | Microsoft Dynamic Community Selection | Cheap model (GPT-4o-mini) routes queries to relevant communities. 77% cost reduction, 58-60% quality improvement. | This is the "MoE for memory" routing pattern we designed. Confirmed effective. |
-| Mar 2025 | Microsoft Claimify | Structured claim extraction with disambiguation, verifiability gating, and context preservation. 99% entailment rate. | Complements our anchoring check. Could improve claim decomposition quality. |
-| Apr 2025 | Letta Sleep-time Compute | Background "thinking" during idle. Dual-agent: primary (user) + sleep-time (memory). 5× test-time compute reduction, up to 18% accuracy gain. | This is our Phase 10 background daemon. Confirmed architecture. |
-| May 2025 | Letta Memory Blocks | Structured context as discrete functional units. Agent manages what's in-context vs. accessible. | Our Phase 11 progressive disclosure. |
-| Jun 2025 | Anthropic Multi-Agent Research | Orchestrator-worker with subagent spawning, external memory, compaction with handoff. 90.2% improvement over single-agent on research tasks. | Our Phase 10 orchestrator design. Confirmed effective at scale. |
-| Sep 2025 | Anthropic Context Engineering | Compaction, structured note-taking, sub-agent architectures for long-horizon tasks. "Find the smallest set of high-signal tokens." | Guiding philosophy for our memory cascade. |
-| Dec 2025 | Letta Skill Learning | Two-stage: reflection on trajectory → creation of skill file. 36.8% relative improvement. Skills stored as .md files, model-agnostic. | Our Phase 12 skill library. Skills improve from collective experience. |
-| Dec 2025 | Letta Continual Learning in Token Space | Theoretical framework: agents learn by updating context tokens (C), not weights (θ). Context portable across model generations. | Justifies our API-first → local-switchover strategy. The learned context outlasts any model. |
-| Feb 2026 | Letta Context Repositories | Git-backed memory filesystem. Progressive disclosure via file hierarchy. Memory defragmentation and subagent swarms. | Our Phase 12 memory architecture. Git versioning enables rollback and parallel memory operations. |
-| Apr 2026 | Letta Context Constitution | Formal principles for agent self-managed memory. | Informs our handoff protocol design. |
-| May 2026 | Letta Red-teaming | Models resist believing they persist. Prompting helps but is insufficient. Ephemeral self-conception is the core blocker. | Validates our instrumental framing: agents don't need to believe they persist — they just need to believe their output will be read. |
+### Phase 10 #9 — Web search ✅
+`src/retrieval/web_search.py` — `WebSearchClient` using `ddgs` library (primary)
+with DDG Instant Answer API fallback. All results tagged `source_type: "discovery"`.
+`discover_topics()` for multi-term parallel discovery.
+
+### Bonus fixes — 9 bugs found and fixed during verification
+
+| Bug | Severity | File | Fix |
+|-----|----------|------|-----|
+| Coverage PMID↔PMCID mismatch | High | `coverage.py` | Replaced with DOI exact→clean→title fuzzy |
+| Coverage `s2_doi` dead code | Low | `coverage.py` | Removed |
+| Gap parser `lstrip("the ")` | High | `gap_resolver.py` | `removeprefix("the ")` |
+| Gap parser `\bno\s+\w+\s+data\b` | Med | `gap_resolver.py` | `[\w\s-]{0,40}?` flexible quantifier |
+| Gap parser false-positive scope | Med | `gap_resolver.py` | Check `gap_title` only, not whole block |
+| Gap parser hyphen bullet split | Med | `gap_resolver.py` | Line-start-only regex |
+| S2 double rate-limiting | Med | `semantic_scholar.py` | Removed redundant `_rate_limit()` |
+| S2 429 not retried | High | `semantic_scholar.py` | 10→20→40s exponential backoff |
+| XML `<mml:mtr/>` not stripped | Med | `pmc_xml_parser.py` | `[\s/>]` pattern |
+
+## External API status & diagnostic guide
+
+Knowing whether a failure is "our code" or "their server" is critical for
+debugging. Below is a timeline, current status, and diagnostic procedure for
+each external dependency.
+
+### Europe PMC `fullTextXML` — returns 404 (server-side outage)
+
+**Timeline:**
+- 13 May 2026: Endpoint returned 200. `phase9_europe_pmc_test.py` logged
+  "Fetched 5 XMLs (0 empty)". Pipeline worked end-to-end.
+- 15 May 2026 13:07 UTC: Endpoint returned 404 for ALL tested PMCIDs
+  (PMC5506916, PMC5512621, PMC6677551, PMC7876544, PMC8221428, PMC8866424,
+  PMC4302049, PMC12900525). No intermediate 429s — direct 404. The papers
+  still exist in PMC (search confirms `inPMC: Y`).
+
+**What we checked:**
+- EPMC search API still works (`200`). Search for `PMCID:PMC5506916` returns
+  metadata with `inPMC: Y`.
+- The `fullTextXML` endpoint returns `404` with zero-length body (not a
+  content-negotiation error, not a redirect, not a rate limit).
+- Direct `curl` without Accept header: `404`.
+- Direct `curl` with `Accept: text/xml`: `404` (was previously needed to
+  avoid `406`).
+- Alternative endpoint pattern `/fullTextXML?format=xml`: `404`.
+- Alternative endpoint on `europepmc.org`: returns HTML page, not XML.
+
+**When to suspect it's an "us" error:**
+- If the endpoint returns `406 Not Acceptable` — the Accept header is missing
+  or wrong. The code sends `Accept: text/xml, application/xml, */*`. If this
+  header was accidentally changed, the `406` would return instead of `404`.
+- If the endpoint returns `429 Too Many Requests` — rate-limiting, not outage.
+- If only some PMCIDs return 404 but others work — the specific papers may
+  have been removed from PMC.
+- If EPMC search also fails — the entire EPMC REST API is down.
+
+**Current status (15 May 2026):** EPMC REST endpoint is down. PMC OAI-PMH
+fallback is active and working (280KB JATS XML per paper, identical content).
+The code tries EPMC REST first; if it fails, it transparently uses OAI.
+**No code change is needed when EPMC REST comes back up** — the primary path
+succeeds and the fallback is never invoked.
+
+### Semantic Scholar — 429 rate limits (quota exhaustion)
+
+**Timeline:**
+- Throughout Phase 9 testing: S2 returned 200 when called with sufficient
+  spacing. SPECTER2 embeddings were fetched, coverage diagnostics returned
+  5 results.
+- 15 May 2026: When running multiple tests back-to-back (SPECTER2 cache test →
+  coverage test → SPECTER2 retry), S2 began returning `429 Too Many Requests`.
+  Even with `_min_interval=3.0s` per-call spacing, the **hourly quota** was
+  exhausted by sequential test runs.
+
+**What we checked:**
+- S2 search with API key in direct `curl`: `200` after 30s cooldown.
+  Confirms the API key is valid and the endpoint works.
+- S2 search without API key: `429` (free tier limit).
+- The code sends `x-api-key` header correctly when `S2_API_KEY` is set in `.env`.
+- The `_min_interval=3.0s` works per-call but doesn't account for hourly quota
+  (likely 100-500 requests/hr for free tier with API key).
+
+**When to suspect it's an "us" error:**
+- If the API key is missing/expired — check `S2_API_KEY` in `.env`. The code
+  logs S2 errors with the HTTP status. 429 with a valid key means quota
+  exhausted; 429 without a key means free tier limit.
+- If the `_min_interval` was accidentally increased (e.g., to 30s) — S2 would
+  work but be unnecessarily slow.
+- If the `_request()` retry loop has a bug — check that 429 → sleep → retry
+  works. A trace with 3 consecutive 429s means the backoff isn't sleeping
+  long enough.
+
+**Current status (15 May 2026):** S2 works with API key and adequate cooldown.
+The 429 backoff (10→20→40s) prevents cascading failures. Between test runs,
+wait 30-60s for the hourly quota bucket to refill. For the Phase 10 daemon
+(runs once per hour), the quota is sufficient.
 
 ## Lessons learned
 
-### 1. The Europe PMC API approach is the correct architecture — don't go back
+### 1. Verification tests would have caught 6 of 9 bugs before merge
 
-27× faster, 100% reliable for OA papers, structured XML instead of rasterized
-page.pdf().  The coverage tradeoff (PMC-only, ~80-90% of biomedical OA papers)
-is acceptable for NIH-funded biomedical research.  Non-PMC papers can still
-be acquired via the preserved Phase 8 Playwright pipeline when EZProxy is active.
+The coverage matching bug (PMID↔PMCID), gap parser false-positive scope, S2 rate
+limit handling, and XML namespace issues all passed initial "it works" tests but
+failed under systematic verification. Running `phase9_verify.py` and the new
+unit tests exposed every one. New code should ship with its own verification.
 
-### 2. Chunk ID collisions are silent and catastrophic
+### 2. External API resiliency needs at least two paths
 
-Without per-paper source prefixes and chunk indices, ChromaDB silently overwrites
-chunks across papers.  The fix is minimal (include PMCID in source field + add
-chunk_index metadata) but must be applied to ALL ingestion paths — PMC XML,
-PDF, and future sources.
+The EPMC outage would have completely broken the pipeline without the OAI fallback.
+Every critical external dependency should have a secondary resolution path — not
+for performance, but for availability. The EPMC REST + PMC OAI dual-path pattern
+should be extended to Semantic Scholar (e.g., OpenAlex as fallback for paper
+resolution).
 
-### 3. Progress persistence is a requirement, not a feature
+### 3. Regex-based HTML/XML processing has a long tail of edge cases
 
-A crash after ingesting 49 of 50 papers without checkpointing loses all work.
-The `IngestProgress` class with 10-paper checkpoint frequency solves this with
-minimal overhead.  The same pattern should be extended to KG updates and skill
-generation in Phase 10.
+The namespace-stripping regex handled opening tags, closing tags, and attributes,
+but missed self-closing tags (`<mml:mtr/>`). The gap parser's `lstrip("the ")`
+stripped individual characters, not the phrase. Regex is fast but fragile — each
+new data source (OAI XML vs EPMC REST XML) reveals a new edge case. For Phase 10,
+fuzz-test the parser against a diverse set of XML samples.
 
-### 4. The orchestrator-handoff pattern is proven in production
+### 4. Rate limiting needs both per-call spacing and aggregate backoff
 
-Anthropic's multi-agent research system and Letta's sleep-time compute both
-use the same pattern: write plans to external memory, spawn subagents, compact,
-read handoff on restart.  Our `HANDOFF.md` is the right primitive — it just
-needs to be auto-generated by the orchestrator rather than manually written.
+The S2 client's `_min_interval=3.0s` worked per-call but sequential test runs
+exhausted the hourly quota. Adding 429-specific exponential backoff (10→20→40s)
+alongside per-call spacing prevents both transient and aggregate quota failures.
+This same pattern should apply to any rate-limited API (ddgs, EPMC).
 
-### 5. Models don't need to believe they persist — they need to believe their output will be read
+### 5. Coverage diagnostic is valuable even at 0%
 
-Letta's red-teaming proved that models resist identifying as persistent entities,
-even with extensive prompting.  But Anthropic's production systems (Claude Code,
-Claude Research) show that instrumental framing works: the model is told it's
-a temporary process that writes to external memory for future instances.  This
-is both more honest and more effective.
+A 0% coverage result is not a failure — it's data. It tells the orchestrator that
+the most relevant S2 papers are paywalled and can only be acquired via EZProxy
+(Phase 8 path). A coverage-gated routing decision ("route to EZProxy if coverage
+< 30%") would make the background daemon more adaptive.
 
-### 6. Skills are a better learning primitive than prompt optimization
+### 6. Caching at the right granularity eliminates the dominant cost
 
-Letta's Skill Learning achieved 36.8% relative improvement by generating .md
-skill files from agent trajectories.  Skills are portable across models, git-versioned,
-and improve with more usage (reflection on multiple trajectories produces better
-skills than reflection on one).  This is more robust than prompt optimization
-for an autonomous system.
+SPECTER2 embedding fetching was 84% of pipeline time on re-runs. A 90-line cache
+module reduced it to 0.0000s. The same pattern should apply to: (a) EPMC search
+results (query → paper list cache, 24h TTL), (b) full-text XML (PMCID → XML cache,
+permanent), (c) coverage diagnostic results (query → coverage report, 7-day TTL).
 
-### 7. Retrieval should be community-gated, not flat
+### 7. The gap parser's false-positive filter must scope to the actual gap sentence
 
-Microsoft's Dynamic Community Selection proved that a cheap model routing
-queries to relevant knowledge graph communities achieves 77% cost reduction
-with higher quality output.  Loading all chunks into context — even with
-similarity threshold filtering — wastes the LLM's attention budget on irrelevant
-clusters.
+Checking the entire text block for false-positive patterns caused valid gaps to
+be discarded when the block also contained a null finding. Scoping the check to
+the first sentence (`gap_title`) fixed this. This principle generalizes: validation
+filters should operate on the smallest relevant unit, not the full context window.
 
-### 8. Web search is for discovery, not evidence
+## Novel approaches invented this session
 
-The web should be a discovery compass (finding emerging topics, ideas, directions)
-but never an evidence source.  All claims must be grounded in peer-reviewed
-papers with full text.  The web search client should produce `source_type: "discovery"`
-results that are never ingested into evidence chains.  DuckDuckGo (no key)
-or Semantic Scholar (already integrated) are sufficient for discovery.
+1. **PMC OAI-PMH as fullTextXML fallback** — Using the OAI-PMH protocol (designed
+   for bulk harvesting) as a transparent single-article retrieval fallback when
+   the REST endpoint is down. Zero code changes for callers.
+
+2. **Hierarchical DOI matching** — Three-tier matching (DOI exact → DOI clean
+   → title fuzzy) with progressive degrace. Each tier catches a different class
+   of API format inconsistency without requiring per-API normalization.
+
+3. **Word-boundary-aware gap detection with false-positive filtering** — Instead
+   of substring keyword matching (which catches "no significant difference" as a
+   gap), regex patterns with `\b` boundaries + a dedicated false-positive exclusion
+   list correctly distinguish real research gaps from null findings.
+
+4. **Dedup-before-add in ChromaDB** — Checking existing IDs via `collection.get(ids=…)`
+   before `collection.add()` eliminates duplicate-entry warnings on re-ingest
+   without requiring collection-level dedup configuration.
 
 ## Identified gaps and status
 
-### Phase 9 remaining (close before starting Phase 10)
+### Phase 9 (all closed ✅)
 
-| # | Gap | Severity | Status |
-|---|------|----------|--------|
-| 1 | Retry logic on transient failures | High | ✅ Done |
-| 2 | Progress persistence | High | ✅ Done |
-| 3 | Ingestion wired to ChromaDB | High | ✅ Done |
-| 4 | Coverage diagnostic (PMC vs Semantic Scholar) | Med | Not yet — run comparison query, report PMC coverage % |
-| 5 | Figure pipeline (XML `<graphic>` → vision_ingest) | Low | Not yet — URLs exist in captions, download + wire into Phase 7a |
-| 6 | SPECTER2 caching | Med | Not yet — store locally, skip re-fetch, eliminates 84% pipeline time |
+| # | Gap | Status |
+|---|------|--------|
+| 1 | Retry logic | ✅ Done |
+| 2 | Progress persistence | ✅ Done |
+| 3 | Ingestion wiring | ✅ Done |
+| 4 | Coverage diagnostic | ✅ Done |
+| 5 | Figure pipeline | ✅ Done |
+| 6 | SPECTER2 caching | ✅ Done |
 
-### Phase 10-13 gaps (designed, not built)
+### Phase 10 foundation (all built ✅)
+
+| # | Item | File | Status |
+|---|------|------|--------|
+| 7 | PreExtractor + graph_storage | `phase9_europe_pmc_test.py` (`--graph`) | ✅ Done |
+| 8 | Gap resolver | `src/agents/gap_resolver.py` | ✅ Done |
+| 9 | Web search (discovery) | `src/retrieval/web_search.py` | ✅ Done |
+
+### Phase 10 core (designed, not built)
+
+| # | Gap | File | Description |
+|---|------|------|-------------|
+| 10 | No autonomous daemon | `src/agents/orchestrator.py` | Background loop: detect gaps → discover → search → ingest → extract → KG → handoff |
+| 11 | No subagent spawning | `src/agents/subagents.py` | ThreadPoolExecutor for parallel search/extract |
+| 12 | No automated handoff | `src/agents/handoff.py` | Orchestrator writes HANDOFF.md before compaction |
+| 13 | No scheduler | `src/agents/scheduler.py` | Cron/timer integration |
+
+### Phase 11–13 (designed, not built)
 
 | # | Gap | Phase | Description |
 |---|------|-------|-------------|
-| 7 | KG not updated at ingest time | 10 | PreExtractor needs graph_storage parameter wired in |
-| 8 | Gap-analysis loop not closed | 10 | Gap analysis output is text; needs to trigger structured searches |
-| 9 | No autonomous research daemon | 10 | Orchestrator agent that runs on cron/timer |
-| 10 | No subagent spawning | 10 | Parallel search/extract workers via ThreadPoolExecutor |
-| 11 | No automated handoff protocol | 10 | Orchestrator writes HANDOFF.md before compaction |
-| 12 | No community detection on KG | 11 | Leiden/Louvain community detection on NetworkX graph |
-| 13 | No community summaries | 11 | LLM generates summaries at each hierarchy level |
-| 14 | No relevance router | 11 | Cheap model gates community access for queries |
-| 15 | No progressive disclosure | 11 | system/ vs research/ vs archive/ memory tiers |
-| 16 | No skill library | 12 | .md skills created from agent trajectories |
-| 17 | No trajectory logging | 12 | JSONL logging of all agent actions |
-| 18 | No experiential memory | 12 | agent-learnings/ directory for preferences, strategies |
-| 19 | No skill evals/gating | 12 | A/B test skills before deployment, CI/CD gates |
-| 20 | No output templates | 13 | Grant, paper, methods, review templates |
-| 21 | No evidence-anchored writing tools | 13 | Every claim auto-cited, pre-output anchoring gate |
-| 22 | SPECTER2 not used in retrieval | Future | Embeddings collected but not queried — paper-level similarity |
-| 23 | Web search not integrated | 10 | Discovery-only web client for topic exploration |
+| 14 | No community detection | 11 | Leiden/Louvain on NetworkX KG |
+| 15 | No community summaries | 11 | LLM summaries per hierarchy level |
+| 16 | No relevance router | 11 | Cheap model gates community access |
+| 17 | No progressive disclosure | 11 | system/ vs research/ vs archive/ tiers |
+| 18 | No skill library | 12 | .md skills from agent trajectories |
+| 19 | No trajectory logging | 12 | JSONL logging of agent actions |
+| 20 | No experiential memory | 12 | agent-learnings/ directory |
+| 21 | No skill evals | 12 | A/B test before deployment |
+| 22 | No output templates | 13 | Grant, paper, methods, review |
+| 23 | No evidence-anchored writing | 13 | Auto-citation, pre-output anchoring gate |
+| 24 | SPECTER2 not in retrieval | Future | Embeddings collected, not queried |
 
 ## Key architectural decisions (DO NOT UNDO)
 
-All previous DO NOT UNDO from Phase 4–9 still apply.  Additional decisions:
+### Carried forward from prior sessions
 
-### Phase 9 decisions (this session)
+- **3-retry exponential backoff** on EPMC HTTP calls (5xx retried, 4xx not)
+- **Per-paper source prefixes** (`"europe_pmc_xml_PMC12345"`)
+- **`chunk_index` in metadata** on every chunk
+- **`IngestProgress` file-based** (no DB dependency)
+- **`--ingest` uses existing `public_corpus`** ChromaDB + BM25 paths
+- **Anchoring singleton updated** on ingest (`set_anchoring_chroma`)
+- **Dual-agent architecture** (background daemon + user agent, separate processes)
+- **API-first, local-switchover** strategy (DeepSeek now → Ollama Qwen3.6 35B-A3B later)
+- **Instrumental agent framing** (temporary, writes for future instances)
+- **Evidence provenance** at every memory layer (anchoring always checks Layer 0)
+- **Community-gated retrieval** (MoE for memory)
+- **Skills over prompt optimization** (.md files, git-versioned)
 
-- **3-retry exponential backoff** on all Europe PMC HTTP calls — 5xx and timeouts
-  get retries, 4xx do not.  Total artificial delay: 3s (1s + 2s).  Per-call
-  headers preserved through retry loop via `requests.Session.request()` merge behavior.
-- **Per‑paper source prefixes** in chunk metadata — `"europe_pmc_xml_PMC12345"`
-  instead of generic `"europe_pmc_xml"`.  Required for unique ChromaDB IDs across papers.
-- **`chunk_index` in metadata** — added during `PMCXMLParser.parse()` return.
-  Ensures unique IDs within a paper.  Backward-compatible (PDFParser already includes it).
-- **`IngestProgress` as a standalone utility** — file-based, no database dependency.
-  Same pattern as Phase 8's zotero_sync_status.json.  Extensible to KG updates,
-  skill generation, and trajectory logging in Phase 10.
-- **`--ingest` flag on existing test harness** — pragmatic: the test harness doubles
-  as the ingestion CLI.  Uses the same `public_corpus` ChromaDB collection and
-  BM25 persist directory as Phase 3/4 ingestion.  No new collections or path divergence.
-- **Ingestion updates anchoring ChromaDB singleton** — `set_anchoring_chroma(chroma)`
-  called during `--ingest` so evidence anchoring check uses the same collection
-  that ingestion populates.
+### New decisions (this session)
 
-### Phase 10-13 architectural decisions (this session — guiding design, not yet built)
-
-- **Dual-agent architecture** — background daemon (research, KG, skills) + user
-  agent (query routing, synthesis).  Separate processes, shared persistent storage.
-  Background agent never talks to the user; user agent never manages memory.
-  Avoids the Letta red-teaming problem (models resisting persistent identity).
-- **API-first, local-switchover strategy** — DeepSeek API during build (Phases 9-13)
-  and accumulation (2-4 weeks after Phase 13).  Switch background agent to local
-  Ollama (Qwen3.6 35B-A3B) when KG/skills are mature.  User agent keeps API synthesis
-  (Drafter/Critic/Arbiter) until local models close the gap.  Re-evaluate with
-  each new open-weight MoE release.
-- **Instrumental agent framing** — agents know they're temporary; they write to
-  external memory for future instances.  No pretense of persistent identity.
-  "Your output will be read by the next instance" is both honest and effective.
-- **Evidence provenance at every memory layer** — each compression level (entity
-  → community → memory block) references the layer below.  Anchoring check always
-  verifies against Layer 0 (source text).  No evidence-free claims at any level.
-- **Community-gated retrieval (MoE for memory)** — cheap model scores communities
-  for query relevance.  Relevant communities get detailed chunk retrieval; others
-  get summary only.  Inspired by Microsoft Dynamic Community Selection (77% cost
-  reduction, higher quality).
-- **Skills over prompt optimization** — agents learn from trajectories by generating
-  reusable .md skill files.  Git-versioned.  Model-agnostic.  Improve with more
-  usage (reflection on multiple trajectories > reflection on one).  36.8% relative
-  improvement demonstrated by Letta.
-- **Web as discovery compass, not evidence source** — web search (DuckDuckGo /
-  Semantic Scholar) identifies topics and directions.  All claims must be grounded
-  in peer-reviewed papers.  Discovery results tagged `source_type: "discovery"`,
-  never ingested into evidence chains.
-- **Phase 10 before Phase 11** — build the autonomous daemon first (populates KG),
-  then layer community structure on top.  Community detection needs a populated KG.
-- **Single Ollama model at a time** — Qwen3.6 35B-A3B is sufficient for background
-  extraction and user query routing.  Dual-model loading (Qwen + Gemma) exceeds
-  M3 Max 36GB practical limits.  Background and user agents share the model via
-  priority scheduling (user preempts background).
+- **PMC OAI-PMH as transparent `fullTextXML` fallback** — same JATS content, different transport.
+  Tried first: EPMC REST. Falls back: NCBI OAI. Callers unaware of path used.
+- **DOI-keyed SPECTER2 cache** — DOI is more stable than S2 paper_id across API versions.
+  JSON file at `projects/default/spector2_cache.json`. 768-dim validation on store.
+- **ChromaDB dedup-before-add** — `ChromaClient.add_documents_deduped()` checks existing
+  IDs before `collection.add()`. Eliminates duplicate-entry warnings on re-ingest.
+- **Coverage matching: DOI exact → DOI clean → title fuzzy** — three-tier progressive matching
+  handles API format inconsistencies without per-source normalization tables.
+- **Gap parser: word-boundary patterns + per-sentence false-positive filter** — regex
+  with `\b` boundaries, 9 gap patterns, 6 false-positive patterns, scoped to first sentence.
+- **S2 client: per-call spacing + aggregate 429 backoff** — `_min_interval=3.0s` for
+  normal operation, 10→20→40s exponential backoff on 429. Both necessary for free-tier quotas.
+- **`--graph`, `--coverage`, `--figures` flags on test harness** — pragmatic: single CLI
+  exercises all Phase 9 features without a separate demo.
 
 ## What NOT to change
 
-All previous What NOT to change from Phase 4–9 still apply.  Additional constraints:
+All prior constraints apply. Additions from this session:
 
-- Do NOT go back to Playwright/EZProxy as the primary pipeline — the 27× speedup
-  is fundamental architecture, not optimization
-- Do NOT add `Accept: application/json` back to the session default — it breaks
-  the fullTextXML endpoint (406 Not Acceptable)
-- Do NOT remove per-paper source prefixes or chunk_index from PMCXMLParser —
-  unique ChromaDB IDs depend on these
-- Do NOT skip the IngestProgress checkpoint on ingestion — crash recovery requires it
-- Do NOT use web search results as evidence — discovery only
-- Do NOT design the orchestrator to believe it's persistent — use instrumental
-  framing (write for future instances)
-- Do NOT load two Ollama models simultaneously on M3 Max 36GB — memory ceiling
-- Do NOT delete `scripts/headless_download.py` or `data/external/` — preserved
-  for non-OA paper acquisition
-- Do NOT change the chunk format `{"text": "...", "metadata": {...}}` — all
-  downstream consumers depend on this contract
+- Do NOT remove the PMC OAI fallback from `full_text_xml()` — it's the working path while EPMC REST is down
+- Do NOT change the gap parser's regex patterns without running the 18 unit tests
+- Do NOT switch SPECTER2 cache key from DOI to S2 paper_id — DOIs are more stable
+- Do NOT increase S2 `_min_interval` beyond 3.0s without testing (3.0s works with API key)
+- Do NOT remove `ChromaClient.add_documents_deduped()` — re-ingest safety depends on it
+- Do NOT use `lstrip()` for prefix removal — use `removeprefix()` or explicit check
+- Do NOT remove `file://` URL support from `vision_ingest_figure_url()` — used for testing
+- Do NOT skip the `_is_false_positive_gap()` check — gap quality depends on it
+- Do NOT add `Accept: application/json` back to the EPMC session default — breaks the OAI endpoint
+- All previous NOT TO CHANGE rules from Phase 4–9 still apply
 
 ## File map
 
 ```
-NEW FILES (Phase 9, this session):
-src/utils/__init__.py                              # Package init
-src/utils/ingest_progress.py                       # Checkpoint-based ingestion tracking
+NEW FILES (this session):
+src/utils/spector2_cache.py                         # SPECTER2 embedding cache (DOI-keyed JSON)
+src/retrieval/coverage.py                           # Coverage diagnostic (EPMC vs S2)
+src/retrieval/web_search.py                         # Discovery-only web search (ddgs + DDG API)
+src/agents/gap_resolver.py                          # Gap parsing + resolution loop
+phase9_verify.py                                    # Comprehensive verification demo
+tests/test_spector2_cache.py                        # 13 tests: cache put/get/persist/edge cases
+tests/test_gap_resolver.py                          # 18 tests: parser, false positives, patterns
+tests/test_coverage.py                              # 14 tests: matching, title overlap, DOI variants
+tests/test_phase9_phase10_integration.py             # 9 tests: end-to-end pipeline validation
 
-MODIFIED FILES (Phase 9, this session):
-src/retrieval/europe_pmc.py                        # +_request() with 3-retry backoff
-src/ingestion/pmc_xml_parser.py                    # +chunk_index, +PMCID in source
-phase9_europe_pmc_test.py                          # +--ingest flag, Phase 5 ingestion
+MODIFIED FILES (this session):
+phase9_europe_pmc_test.py                           # +--coverage, --figures, --graph flags; cache integration
+src/retrieval/europe_pmc.py                         # +PMC OAI-PMH fallback in full_text_xml()
+src/retrieval/semantic_scholar.py                   # +_request() with 429 backoff; all methods use it
+src/ingestion/pmc_xml_parser.py                     # +self-closing tag namespace stripping [\s/>]
+src/retrieval/chroma_client.py                      # +add_documents_deduped(), get_existing_ids()
+src/retrieval/hybrid_retriever.py                   # +dedup on ingest via add_documents_deduped()
+src/utils/ingest_progress.py                        # +completed_count(), get_completed()
+src/vision/vision_ingest.py                         # +vision_ingest_figure_url(), vision_ingest_xml_figures()
 
-PREVIOUS PHASE 9 FILES (unchanged this session):
-src/retrieval/europe_pmc.py                        # Europe PMC REST client (was new last session)
-src/ingestion/pmc_xml_parser.py                    # JATS XML → chunk dict parser
-src/retrieval/semantic_scholar.py                  # +SPECTER2 embeddings, +title fallback
-phase9_europe_pmc_test.py                          # End-to-end pipeline test harness
-scripts/headless_download.py                       # Phase 8 improvements (deprecated but preserved)
+PHASE 10 PLANNED FILES (not yet created):
+src/agents/orchestrator.py                          # Background daemon loop
+src/agents/subagents.py                             # Parallel search/extract workers
+src/agents/handoff.py                               # Automated HANDOFF.md protocol
+src/agents/scheduler.py                             # Cron/timer integration
 
-PLANNED PHASE 10-13 FILES (not yet created):
-src/agents/orchestrator.py                         # Background daemon loop
-src/agents/subagents.py                            # Parallel search/extract workers
-src/agents/handoff.py                              # Automated HANDOFF.md protocol
-src/agents/scheduler.py                            # Cron/timer integration
-src/memory/community_detector.py                   # Leiden/Louvain on NetworkX KG
-src/memory/community_summarizer.py                 # LLM summaries per community
-src/memory/relevance_router.py                     # Cheap model gates community access
-src/memory/cascade.py                              # Chunk→summary→entity→community pipeline
-src/memory/disclosure.py                           # Progressive disclosure management
-src/skills/skill_loader.py                         # Mounts skills from directory
-src/skills/skill_creator.py                        # Reflection → creation pipeline
-src/skills/trajectory_logger.py                    # JSONL logging of agent actions
-src/skills/skill_evals.py                          # A/B test skill versions
-src/memory/experiential.py                         # Agent-learnings store
-src/outputs/templates.py                           # Grant, paper, methods, review templates
-src/outputs/anchored_writer.py                     # Evidence-anchored output generation
-src/outputs/citation_integrator.py                 # Auto-citation insertion + format
-src/retrieval/web_search.py                        # Discovery-only web search client
-phases/phase10_daemon.py                           # Entry point for autonomous background agent
-skills/                                            # Git-backed skill library (populated at runtime)
-agent-learnings/                                   # Experiential memory (populated at runtime)
+PHASE 11-13 PLANNED (not yet created):
+src/memory/community_detector.py                    # Leiden/Louvain on KG
+src/memory/community_summarizer.py                  # LLM summaries per community
+src/memory/relevance_router.py                      # Cheap model gates community access
+src/memory/cascade.py                               # Chunk→summary→entity→community
+src/memory/disclosure.py                            # Progressive disclosure tiers
+src/skills/skill_loader.py                          # Mount skills from directory
+src/skills/skill_creator.py                         # Reflection → creation pipeline
+src/skills/trajectory_logger.py                     # JSONL agent action logging
+src/skills/skill_evals.py                           # A/B test skill versions
+src/memory/experiential.py                          # Agent-learnings store
+src/outputs/templates.py                            # Grant, paper, methods, review
+src/outputs/anchored_writer.py                      # Evidence-anchored output
+src/outputs/citation_integrator.py                  # Auto-citation insertion
 
-PROJECT DATA (auto-generated):
-data/external/                                     # ~115 valid PDFs from Phase 8
-projects/default/ingest_progress.json              # Phase 9 checkpoint (PMCIDs ingested)
-projects/default/phase9_europe_pmc_test.json       # Pipeline benchmark results
-projects/default/chroma_data/                      # ChromaDB (public_corpus collection)
-projects/default/bm25_index/                       # Persisted BM25 corpus
-projects/default/project_graph.json                # Persisted knowledge graph
+PROJECT DATA (auto-generated — not committed):
+projects/default/spector2_cache.json                # SPECTER2 cache (DOI → embedding)
+projects/default/ingest_progress.json               # Ingested PMCIDs checkpoint
+projects/default/phase9_europe_pmc_test.json        # Pipeline benchmark results
+projects/default/phase9_verify_results.json         # Demo verification results
+projects/default/chroma_data/                       # ChromaDB (public_corpus)
+projects/default/bm25_index/                        # Persisted BM25 corpus
+projects/default/extractions/                       # PreExtractor entity cache
+projects/default/embeddings/                        # Paper embeddings
+projects/default/project_graph.json                 # Knowledge graph
 ```
+
+## Recommendations for Phase 10
+
+### Immediate — build order
+1. **`src/agents/scheduler.py`** (~30 lines) — cron/timer skeleton. Simplest piece, unblocks daemon.
+2. **`src/agents/subagents.py`** (~50 lines) — `ThreadPoolExecutor` wrapper for parallel EPMC
+   search + XML fetch. Reuses existing `EuropePMCClient` and `PMCXMLParser`.
+3. **`src/agents/orchestrator.py`** (~200 lines) — main daemon loop calling: web discovery
+   → gap resolver → EPMC search → subagent ingest → PreExtractor → graph_storage.save().
+4. **`src/agents/handoff.py`** (~80 lines) — reads current state, writes HANDOFF.md for next
+   instance. Consumes `IngestProgress`, `Spector2Cache.stats()`, KG node/edge counts.
+
+### Architecture notes
+- The `gap_resolver.resolve_gaps()` can already be called from the orchestrator — it handles
+  search → fetch → parse → ingest → PreExtractor. Pass `graph_storage` and `ingest=True`.
+- The coverage diagnostic can gate EZProxy routing: if coverage < 30%, queue papers for
+  Phase 8 EZProxy acquisition instead of XML-only ingestion.
+- SPECTER2 embeddings are cached but not yet queried. A `paper_similarity_search()`
+  method on `Spector2Cache` would unlock paper-level recommendation for the orchestrator.
+- The `vision_ingest_xml_figures()` function works with `describe=False` (caption-only,
+  zero LLM cost). Deferred description via `describe_queued_figures()` can run overnight.
+- `web_search.discover_topics()` returns structured results already — the orchestrator
+  can use these directly as seed queries for the gap resolver.
+
+### Test before building Phase 10
+```bash
+python phase9_verify.py --fresh                        # Full verification
+python -m pytest tests/ -q --tb=short                   # 246 tests must pass
+python phase9_europe_pmc_test.py --count 5 --coverage   # Coverage must return structured data
+```
+
+---
 
 ## Prompt for next AI session
 
 ```
-You are an expert senior software developer continuing Phase 9 (API-Based Literature
-Ingestion) of a Federated RAG system for biomedical research. Read the full
-README.md and this HANDOFF.md carefully before making changes.
+You are an expert senior software developer continuing the Federated RAG system
+for biomedical research. Phase 9 is complete. Phase 10 core build begins now.
+
+Read the full README.md and this HANDOFF.md carefully before making changes.
 
 CURRENT STATE:
-  - Phase 9 is 50% complete. Three high-priority gaps are closed:
-    1. Retry logic — 3-retry exponential backoff on all Europe PMC HTTP calls ✅
-    2. Progress persistence — IngestProgress checkpoints every 10 papers ✅
-    3. Ingestion wiring — --ingest flag ingests into ChromaDB + BM25 ✅
-  - Chunk IDs are now unique across papers (source includes PMCID + chunk_index).
-  - Three Phase 9 gaps remain:
-    4. Coverage diagnostic (PMC vs Semantic Scholar comparison)
-    5. Figure pipeline (XML <graphic> URLs → vision_ingest)
-    6. SPECTER2 caching (store locally, skip re-fetch)
-  - Phase 10-13 architecture has been fully designed (see HANDOFF.md and README.md).
-    The next major milestone after Phase 9 closure is the autonomous background
-    research daemon (Phase 10).
-  - The system uses DeepSeek API for all LLM calls. The long-term strategy is
-    API-first during build, switching to local Ollama (Qwen3.6 35B-A3B) once
-    the KG, skills, and community structure are mature.
-  - 192 tests pass, zero failures.
+  - Phase 9 is 100% complete. All 6 gaps closed.
+  - Three Phase 10 foundation pieces built: PreExtractor+KG wiring (--graph),
+    gap_resolver.py, web_search.py (ddgs).
+  - EPMC fullTextXML REST endpoint is down — PMC OAI-PMH fallback works transparently.
+  - SPECTER2 cache is DOI-keyed JSON at projects/default/spector2_cache.json.
+  - ChromaDB dedup prevents duplicate-entry warnings on re-ingest.
+  - Vision pipeline works with describe=True (Ollama gemma4:e4b).
+  - 246 tests pass, zero failures.
 
-TOP PRIORITY — close Phase 9:
-  4. COVERAGE DIAGNOSTIC: Search Europe PMC and Semantic Scholar with the same
-     query. Report "X/Y papers (Z%) have PMC full text." ~30 lines.
-  5. FIGURE PIPELINE: Download images from XML <graphic> URLs, wire into
-     vision_ingest (Phase 7a). ~50 lines.
-  6. SPECTER2 CACHING: Store embeddings in projects/default/spector2_cache.json.
-     Skip Semantic Scholar API for previously-resolved papers. ~40 lines.
-
-NEXT PRIORITY — Phase 10 foundation (can start in parallel with #5-6):
-  7. Wire PreExtractor with graph_storage into Phase 9 --ingest so KG updates
-     at ingest time. ~20 lines (PreExtractor already supports graph_storage).
-  8. Close the gap-analysis loop: parse gap output into structured search
-     queries, feed into Europe PMC → ingest → extract → re-synthesize. ~50 lines
-     in a new module src/agents/gap_resolver.py.
-  9. Build web_search.py — discovery-only web client (DuckDuckGo, no API key).
-     Used by orchestrator for topic discovery, never as evidence source. ~30 lines.
-
-QUICK START:
-  python phase9_europe_pmc_test.py --count 10 --ingest
-  python -m pytest tests/ -v --tb=short
+PHASE 10 BUILD ORDER:
+  1. src/agents/scheduler.py — cron/timer skeleton (~30 lines)
+  2. src/agents/subagents.py — parallel search/extract via ThreadPoolExecutor (~50 lines)
+  3. src/agents/orchestrator.py — main daemon loop: web discovery → gap resolve →
+     EPMC search → ingest → extract → KG → handoff (~200 lines)
+  4. src/agents/handoff.py — auto-generate HANDOFF.md from state (~80 lines)
 
 ARCHITECTURAL CONSTRAINTS (DO NOT VIOLATE):
   - Do NOT remove per-paper source prefixes or chunk_index from PMCXMLParser
-  - Do NOT use web search results as evidence — discovery only
-  - Do NOT add Accept:application/json to session default — breaks fullTextXML
-  - Do NOT delete scripts/headless_download.py or data/external/
+  - Do NOT use web search results as evidence — discovery only (source_type: "discovery")
+  - Do NOT remove the PMC OAI fallback from full_text_xml()
   - Do NOT change the chunk format {"text": "...", "metadata": {...}}
+  - Do NOT add Accept:application/json to session default
+  - Do NOT delete scripts/headless_download.py or data/external/
   - All new ingestion paths MUST include PMCID in source + chunk_index in metadata
+  - Do NOT use lstrip() for prefix removal — use removeprefix() or explicit check
+  - Do NOT switch SPECTER2 cache key from DOI to S2 paper_id
 
-DESIGN PRINCIPLES:
-  - Evidence provenance at every memory layer (anchoring always checks Layer 0 source text)
-  - Instrumental agent framing: agents know they're temporary, write for future instances
-  - Skills over prompt optimization: learn from trajectories, generate reusable .md files
-  - Community-gated retrieval: cheap model routes, expensive model synthesizes
-  - Web = discovery compass, never evidence source
+REUSABLE PRIMITIVES (already built, call directly):
+  - GapResolver.resolve_gaps(text, graph_storage=gs, ingest=True)
+  - WebSearchClient().discover_topics(["term1", "term2"])
+  - EuropePMCClient().full_text_xml(pmcid) — EPMC REST → PMC OAI fallback transparent
+  - PMCXMLParser().parse(xml, pmcid=pmcid, doi=doi)
+  - HybridRetriever.ingest(chunks) — deduped, won't create duplicates
+  - PreExtractor.extract_paper(paper_id, chunks, graph_storage=gs)
+  - IngestProgress.is_completed(pmcid) / checkpoint(pmcid)
+  - Spector2Cache().get(doi) / put(doi, s2_id, emb)
+
+QUICK START:
+  python phase9_verify.py --fresh --skip-ingest
+  python -m pytest tests/ -q --tb=short
+  python phase9_europe_pmc_test.py --count 5 --coverage
 ```

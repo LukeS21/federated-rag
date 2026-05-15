@@ -33,8 +33,8 @@ class SemanticScholarClient:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("S2_API_KEY", "")
         self._last_request = 0.0
-        # Free tier: 1 req/s. Use 2.0s margin to avoid 429 rate-limit errors.
-        self._min_interval = 2.0
+        # Free tier: 1 req/s (May 2026). Use 3.0s margin to avoid 429 errors.
+        self._min_interval = 3.0
 
     def _headers(self) -> Dict[str, str]:
         h = {"Accept": "application/json"}
@@ -47,6 +47,34 @@ class SemanticScholarClient:
         if elapsed < self._min_interval:
             time.sleep(self._min_interval - elapsed)
         self._last_request = time.monotonic()
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Make an HTTP request with rate limiting and 429 retry handling."""
+        max_retries = 3
+        backoff_base = 10.0  # base backoff for 429s (seconds)
+        for attempt in range(max_retries):
+            self._rate_limit()
+            try:
+                resp = requests.request(method, url, **kwargs)
+                if resp.status_code == 429 and attempt < max_retries - 1:
+                    retry_after = resp.headers.get("Retry-After", str(backoff_base * (2 ** attempt)))
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = backoff_base * (2 ** attempt)
+                    wait = max(wait, backoff_base * (2 ** attempt))
+                    logger.debug("S2 429 rate-limit, waiting %.1fs (attempt %d/%d)",
+                                 wait, attempt + 1, max_retries)
+                    time.sleep(wait)
+                    self._last_request = time.monotonic()  # reset rate timer
+                    continue
+                resp.raise_for_status()
+                return resp
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
 
     def search(
         self,
@@ -74,7 +102,6 @@ class SemanticScholarClient:
                 "publicationTypes,openAccessPdf,journal,citationCount"
             )
 
-        self._rate_limit()
         params: Dict[str, Any] = {
             "query": query,
             "limit": min(limit, 100),
@@ -84,12 +111,8 @@ class SemanticScholarClient:
             params["year"] = year
 
         try:
-            resp = requests.get(
-                f"{S2_BASE}/paper/search",
-                params=params,
-                headers=self._headers(),
-                timeout=30,
-            )
+            resp = self._request("GET", f"{S2_BASE}/paper/search",
+                                 params=params, headers=self._headers(), timeout=30)
             resp.raise_for_status()
             data = resp.json()
             papers = data.get("data", [])
@@ -109,17 +132,13 @@ class SemanticScholarClient:
         if fields is None:
             fields = "title,paperId,url,abstract,tldr,year,authors,externalIds,openAccessPdf,journal,citationCount,references,citations"
 
-        self._rate_limit()
         try:
-            resp = requests.get(
+            resp = self._request("GET",
                 f"{S2_BASE}/paper/{paper_id}",
-                params={"fields": fields},
-                headers=self._headers(),
-                timeout=30,
+                params={"fields": fields}, headers=self._headers(), timeout=30,
             )
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
             return self._normalize_paper(resp.json())
         except Exception as e:
             logger.error("Semantic Scholar paper fetch failed: %s", e)
@@ -127,17 +146,14 @@ class SemanticScholarClient:
 
     def search_by_doi(self, doi: str) -> Dict[str, Any] | None:
         """Look up a paper by DOI."""
-        self._rate_limit()
         try:
-            resp = requests.get(
+            resp = self._request("GET",
                 f"{S2_BASE}/paper/DOI:{doi}",
                 params={"fields": "title,paperId,url,abstract,tldr,year,authors,externalIds,openAccessPdf,journal,citationCount,embedding"},
-                headers=self._headers(),
-                timeout=30,
+                headers=self._headers(), timeout=30,
             )
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
             data = resp.json()
             if not data or not isinstance(data, dict):
                 return None
@@ -228,9 +244,8 @@ class SemanticScholarClient:
         if not s2_paper_ids:
             return {}
 
-        self._rate_limit()
         try:
-            resp = requests.post(
+            resp = self._request("POST",
                 f"{S2_BASE}/paper/batch",
                 params={"fields": "paperId,embedding"},
                 headers=self._headers(),

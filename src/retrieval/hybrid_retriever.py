@@ -36,15 +36,19 @@ class HybridRetriever:
         self.bm25 = bm25_index
 
     def ingest(self, chunks: List[Dict]):
-        """Add documents to both indexes. chunk must have 'text' and 'metadata'."""
+        """Add documents to both indexes. chunk must have 'text' and 'metadata'.
+
+        Skips chunks that already exist in ChromaDB (by ID) to avoid
+        duplicate-entry warnings on re-ingest.
+        """
         texts = [c["text"] for c in chunks]
         ids = [f"{c['metadata']['source']}_{c['metadata'].get('chunk_index', '')}_{i}" for i, c in enumerate(chunks)]
         metadatas = [c["metadata"] for c in chunks]
 
-        # ChromaDB
-        self.chroma.add_documents(ids=ids, documents=texts, metadatas=metadatas)
+        # ChromaDB — deduped to prevent "Add of existing embedding ID" warnings
+        self.chroma.add_documents_deduped(ids=ids, documents=texts, metadatas=metadatas)
 
-        # BM25 (only needs texts)
+        # BM25 — always add (BM25 corpus is intentionally cumulative)
         self.bm25.add_documents(texts)
 
     def query(
