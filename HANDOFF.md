@@ -1,615 +1,578 @@
-# Phase 10 → Phase 11 Handoff — 15 May 2026 (Phase 10: complete, Phase 11: designed)
+# Phase 10.5 → Phase 10.5 (cont.) Handoff — 16 May 2026 (extraction hardening session)
 
 ## Quick start
 
 ```bash
-# Full verification (all Phase 9 features + Phase 10 orchestrator cycle)
-python phase9_verify.py --test orchestrator              # dry run (~10s, no API spend)
-python phase9_verify.py --test orchestrator --orchestrator-live  # live (calls EPMC/Ollama)
+# Full daemon cycle (live — calls EPMC + Ollama)
+python phase9_verify.py --test orchestrator --orchestrator-live
 
-# All tests (307 passing, 0 failures)
+# Dry run (see what WOULD happen, no API spend)
+python phase9_verify.py --test orchestrator
+
+# All tests
 python -m pytest tests/ -q --tb=short
 
-# Run single cycle of the background daemon (dry run — see what WOULD happen)
+# Run a single daemon cycle from Python
 python -c "
 from src.graph import create_graph_storage
 from src.agents.orchestrator import Orchestrator
 gs = create_graph_storage(file_path='projects/default/project_graph.json')
-orch = Orchestrator(graph_storage=gs, dry_run=True)
+orch = Orchestrator(graph_storage=gs, dry_run=False)
 summary = orch.run_once()
-print(f'Discovered: {summary[\"discovered_topics\"]}, Queries: {summary[\"epmc_queries_run\"]}')
+print(summary)
 "
-
-# Start the daemon in background (runs every 60 min until stopped)
-# from src.agents.orchestrator import Orchestrator
-# orch = Orchestrator(graph_storage=gs, interval_minutes=60)
-# orch.start()   # non-blocking
-
-# Ingest with KG update + parallel fetch
-python phase9_europe_pmc_test.py --count 10 --ingest --graph
 ```
+
+---
 
 ## Current project state
 
-**Phase 10 is 100% complete.** All 4 planned core files are built, tested, and
-validated end‑to‑end: scheduler, subagents, orchestrator, and handoff. The
-daemon runs a full autonomous cycle: web discovery → parallel EPMC search/XML
-fetch → batch ingest into ChromaDB+BM25 → PreExtractor KG update → graph
-save → cycle‑specific handoff.
+**Phase 10 is 100% complete. Phase 10.5 extraction-hardening session is concluding.**
+All 307 existing tests pass. The core daemon pipeline runs end-to-end. The system
+has been battle-tested through multiple live daemon cycles, revealing and
+addressing real-world degradation patterns in local Ollama extraction.
 
-**307 tests pass, zero failures** (up from 246 at Phase 9 handoff, up from 297
-after Phase 10 core build). 61 new tests cover all Phase 10 modules: scheduler
-(8), subagents (7), handoff (10), orchestrator unit (22), orchestrator
-integration (4), and extraction line‑tagged parser (7). All pre‑existing
-tests still pass.
+**Knowledge graph** (as of last live cycle): ~3,810 nodes, ~262K edges. BM25 corpus:
+27K+ documents. 43+ papers ingested.
 
-**Live daemon run validated:** A single `--orchestrator-live` cycle ingested
-13 new OA papers across 6 EPMC queries, grew the KG from 172→232 nodes and
-520→1216 edges, and grew the BM25 index from 21,112→22,085 documents.
+**What's running:** Background daemon discovers topics via web search, fetches OA
+papers from Europe PMC, batches them into ChromaDB+BM25, extracts entities with
+batched line‑tagged extraction, updates the KG, runs community detection, and
+writes cycle handoffs.
 
-**Three Phase 10 enhancements** were built beyond the original 4‑file scope
-after testing revealed real gaps: parallel EPMC wiring (avoids redundant
-BM25 rebuilds), line‑tagged extraction format (eliminates 70% JSON parse
-failure rate), and state file + PID management (crash recovery, external
-daemon management).
+**What this session focused on:** Hardening the extraction pipeline against
+local‑LLM degradation (Ollama/gemma4:e4b on M3 Max). The daemon was burning
+45 min+ on hung batches and producing garbage output in late‑cycle batches
+due to llama.cpp Metal‑backend memory fragmentation.
 
-**Core pipeline** (Phase 10, built and tested):
-```
-┌─ Web discovery ───────────────────────────────────────────────────┐
-│  WebSearchClient().discover_topics(seed_terms)                    │
-│  Seed terms: static defaults + top‑N KG entities (by degree)       │
-│  Results tagged source_type: "discovery" (never evidence)         │
-└──────────────────────┬───────────────────────────────────────────┘
-                       ▼
-┌─ Query extraction ────────────────────────────────────────────────┐
-│  Snippets / titles → deduplicated, ≥20‑char filtered, capped at 6 │
-└──────────────────────┬───────────────────────────────────────────┘
-                       ▼
-┌─ Parallel EPMC fetch ─────────────────────────────────────────────┐
-│  run_parallel(_fetch_and_parse_for_query, queries, max_workers=4) │
-│  Per query: search(oa_only=True) → full_text_xml_batch()          │
-│    → PMCXMLParser.parse() (EPMC REST → PMC OAI fallback transparent│
-│  Skips already‑ingested papers via IngestProgress.is_completed()  │
-└──────────────────────┬───────────────────────────────────────────┘
-                       ▼
-┌─ Batch ingest ────────────────────────────────────────────────────┐
-│  All chunks accumulated → one HybridRetriever.ingest() call       │
-│  (avoids redundant BM25 corpus rebuilds from parallel threads)     │
-│  IngestProgress.checkpoint() per paper                            │
-└──────────────────────┬───────────────────────────────────────────┘
-                       ▼
-┌─ PreExtractor → KG ───────────────────────────────────────────────┐
-│  Sequential per paper (Ollama bottleneck — parallelising here     │
-│  doesn't help).  Extraction uses line‑tagged output (no JSON).    │
-│  Entity dicts → GraphBuilder → graph_storage.save()               │
-└──────────────────────┬───────────────────────────────────────────┘
-                       ▼
-┌─ Handoff ─────────────────────────────────────────────────────────┐
-│  write_handoff() → projects/default/cycle_N_handoff.md            │
-│  (human HANDOFF.md never overwritten by daemon)                   │
-│  State: orchestrator_state.json + orchestrator.pid                │
-└───────────────────────────────────────────────────────────────────┘
-```
+---
 
 ## What changed this session
 
 | | Before this session | After this session |
 |---|---|---|
-| **Phase 10 status** | Foundation built (gaps 7–9); core designed (gaps 10–13) | 100% complete (4 core files + 4 enhancements) |
-| **Orchestrator** | Did not exist | `src/agents/orchestrator.py` — 418 lines. Full daemon loop with dry‑run + live modes. Parallel EPMC fetch, batch ingest, cycle‑specific handoff, state file + PID. |
-| **Subagents** | Did not exist | `src/agents/subagents.py` — 54 lines. `run_parallel()` via ThreadPoolExecutor. Wired into orchestrator for concurrent EPMC search/XML fetch. |
-| **Handoff** | Did not exist | `src/agents/handoff.py` — 147 lines. Auto‑generates markdown from KG stats, ingest progress, SPECTER2 cache, cycle summary. Cycle‑specific files. |
-| **Scheduler** | Did not exist | `src/agents/scheduler.py` — 69 lines. Daemon‑thread interval timer with stop event lifecycle, crash‑resilient callback, `run_once()` blocking mode. |
-| **Extraction format** | JSON with 2‑attempt brace‑extraction fallback. 9/13 extractions failed on first parse. | Line‑tagged (`TYPE: category\nENTITY: name\nEVIDENCE: ...`). Zero parse failures. 25‑30% token savings in Drafter prompts. |
-| **Drafter entity format** | `json.dumps(entities, indent=2)` — repeated field names per entity | `_entities_to_line_tagged()` — compact key‑value blocks |
-| **EPMC parallelism** | Sequential per‑query search/fetch/parse/ingest/extract | `run_parallel` for search+fetch+parse; one batch ingest |
-| **HANDOFF.md** | Human‑written reference doc | Overwritten once by first live run. Patch applied: daemon now writes to `cycle_N_handoff.md`. Human HANDOFF recovered from git. |
-| **State persistence** | None | `orchestrator_state.json` (cycle, heartbeat, errors) + `orchestrator.pid` |
-| **Tests** | 246 passing, 0 failures | **307 passing, 0 failures** (61 new) |
+| **Extraction prompt size** | All 37+ chunks in one LLM call → 20K‑50K token prompts → 15 min+ generation or timeout | Batched: 8 chunks/call → ~6K token prompts → 30‑90s per batch |
+| **Extraction output format** | One entity per block, evidence repeated N times | Grouped: evidence once, entities compactly listed. ~60‑70% token savings |
+| **Extraction output visibility** | Only `200 OK` / `Retrying` log lines | Real‑time streaming via `TokenStreamHandler` — tokens appear as generated |
+| **Retry behavior** | `max_retries=2` — hung batch burned 45 min (3× 900s) | `max_retries=0` — hung batch fails once, pipeline continues |
+| **Hang detection** | Only `LLM_TIMEOUT=900s` | Python‑level `ThreadPoolExecutor` timeout at 600s per batch |
+| **Repetition loop detection** | None | Parser compares consecutive committed entities — aborts on identical block |
+| **Ollama memory between batches** | No reset — fragmentation accumulated across batches | API‑based `keep_alive=0` + polling `GET /api/ps` between every batch |
+| **Memory reset verification** | None | Logs running model count before/after reset (1 → 0 transition proves eviction) |
+| **DIRECTION field** | Free‑form — LLM invented "source", "characteristic", "application", "N/A", "target" | Constrained to measurable change values; omitted for non‑biological entities |
+| **README** | ~2000 lines, historical build diary, stale Phase 4‑5 handoff instructions | ~800 lines, North Star vision, current architecture, consolidated constraints, planned capabilities. History moved to `docs/phase-history.md` |
+| **Dead code** | `pubmed.py`, `hierarchical_clusterer.py`, `PHASE8_STATUS.md` in codebase | Deleted. 9 deprecated scripts archived to `archive/` |
+| **Phase 10 gaps A/B/C** | Listed as open in HANDOFF.md | Closed: `_load_state()`, `_cleanup_handoffs()`, `_ensure_file_logging()` all built |
+
+---
 
 ## What was accomplished
 
-All architectural constraints preserved: no `lstrip()`, no `Accept:application/json`
-session default, PMCID in source + `chunk_index` on every chunk, web results
-tagged `discovery`, PMC OAI fallback untouched, per‑paper source prefixes intact.
+### Batch extraction (`extract_entities_batched`)
 
-### Gap 10 — Orchestrator daemon ✅
+**File:** `src/agents/extraction_agent.py` — new method on `ExtractionAgent`.
 
-`src/agents/orchestrator.py` — 418 lines. `Orchestrator` class:
-- `run_once()` — single blocking cycle, returns summary dict
-- `start()` / `stop()` — daemon mode via `Scheduler` (writes PID + state)
-- Pipeline per cycle: web discovery → query extraction → parallel EPMC fetch
-  → batch ingest → PreExtractor sequential extraction → graph save → handoff
-- `dry_run=True` constructor flag skips all EPMC+ingest — shows what WOULD happen
-- `resolve_gaps()` convenience wrapper around `GapResolver.resolve_gaps()`
-- State management: `orchestrator_state.json` (heartbeat, cycle, errors),
-  `orchestrator.pid` for external management
-- 22 unit tests + 4 integration tests
+Splits chunks into groups of 8. Each batch gets its own `extract_entities()` call
+with a 600s Python‑level timeout. Results are merged and deduplicated across
+batches (`_merge_entity_batches()` — normalises entity names, keeps longest
+evidence). Three call sites updated: `pre_extractor.py` (daemon ingest),
+`survey_nodes.py` (Survey Mode), `nodes.py` (Deep Mode).
 
-### Gap 11 — Subagents ✅
+**Why:** 37+ chunks in one prompt = 20K‑50K tokens → gemma4:e4b takes 15 min+
+or hangs. 8 chunks = ~6K tokens → 30‑90s. This alone saved the daemon from
+the original 90+ min extraction hangs.
 
-`src/agents/subagents.py` — 54 lines. `run_parallel(func, items, max_workers=4)`:
-- ThreadPoolExecutor wrapper — maps `func(item, **kwargs)` over items
-- Error isolation: one crashing task does not affect others
-- Results: `[{item, result, error}, ...]`
-- Used in orchestrator for parallel EPMC search+XML fetch
-- 7 tests (empty input, error isolation, kwargs forwarding, max_workers, ordering)
+### Evidence‑grouped extraction format
 
-### Gap 12 — Handoff ✅
+**File:** `src/agents/extraction_agent.py` — system prompt rewrite.
 
-`src/agents/handoff.py` — 147 lines. `generate_handoff()` + `write_handoff()`:
-- Reads live system state: KG node/edge counts, IngestProgress stats,
-  Spector2Cache stats, orchestrator cycle summary
-- Produces structured markdown with tables, PMCID lists, cycle details
-- `write_handoff(output_path=...)` writes to provided path (orchestrator
-  provides cycle‑specific path: `cycle_N_handoff.md`)
-- Human `HANDOFF.md` is never overwritten by the daemon
-- 10 tests (None graph, real graph, markdown sections, file write paths)
-
-### Gap 13 — Scheduler ✅
-
-`src/agents/scheduler.py` — 69 lines. `Scheduler` class:
-- `schedule(interval_minutes, callback)` — daemon thread, runs callback every N min
-- `run_once(callback)` — blocking single execution
-- `stop(timeout)` — signals stop event, joins thread
-- `is_running` property
-- Callback crashes are caught and logged — scheduler continues
-- Duplicate `schedule()` calls rejected (only one loop active)
-- **Note:** `interval_minutes` is multiplied by 60 internally. Tests use
-  fractions (e.g., `0.005` = 0.3 s real time).
-- 8 tests (repeated execution, stop, run_once, crash recovery, duplicate rejection)
-
-### Beyond spec — Parallel EPMC wiring
-
-The orchestrator's `_search_and_ingest()` was refactored to use `run_parallel()`
-for concurrent EPMC search and XML fetch. A module‑level `_fetch_and_parse_for_query()`
-function encapsulates the per‑query "search → fetch XML → parse chunks" work.
-Chunks from all queries are accumulated and batched into a single ChromaDB+BM25
-`ingest()` call, avoiding redundant BM25 corpus rebuilds from parallel threads.
-PreExtractor extraction remains sequential (Ollama is the bottleneck — parallelism
-here doesn't help). Time saved per cycle: ~15 s (the I/O portion).
-
-### Beyond spec — Line‑tagged extraction format
-
-The LLM no longer outputs JSON for entity extraction. Instead it outputs a
-compact line‑tagged format:
-
+Old format (one ENTITY per block, evidence repeated):
 ```
-TYPE: cytokine
-ENTITY: IL-6
-DIRECTION: elevated
-EVIDENCE: IL-6 was significantly higher in obese mice...
-SOURCE: Chunk 3 | europe_pmc_xml_PMC5506916
+TYPE: material     ENTITY: polyethyleneimine   EVIDENCE: Polymeric nanocarriers...
+TYPE: material     ENTITY: dendrimers          EVIDENCE: Polymeric nanocarriers...
+TYPE: material     ENTITY: graphene-based      EVIDENCE: Polymeric nanocarriers...
 ```
 
-Entities are separated by blank lines. `TYPE:` maps to the category name.
-The `_parse_line_tagged()` parser replaces the 2‑attempt JSON fallback
-(`_parse_json_safely` → brace extraction). It has no syntax to break —
-no braces, commas, or quotes. Benefits:
-- **Eliminates JSON parse failures** (9/13 extractions failed on first attempt
-  with JSON; line‑tagged produces zero failures)
-- **~25‑30% token savings** in Drafter prompts (entities formatted via
-  `_entities_to_line_tagged()` instead of `json.dumps(indent=2)`)
-- **~20% token savings** in Pass 2 extraction prompts (categories formatted
-  via `_categories_to_line_tagged()` instead of `json.dumps(indent=2)`)
-- **Truncation‑safe** — if the LLM cuts off, only the last entity is lost
-  (not the entire JSON structure)
-- **Disk format unchanged** — entities are still serialized as JSON on disk
-  via `PreExtractor._save()` (Python‑controlled, no LLM involved)
-- **All downstream consumers unchanged** — they receive the same Python dict
-  structure. Only the LLM output parser changed.
-- Pass 1 (category discovery) still uses JSON — it's simpler and has fewer
-  failures.
-- 7 new tests for the parser and formatters.
-- Old extraction cache deleted (`projects/default/extractions/`) — format
-  changed, re‑extraction needed on next live cycle.
+New grouped format (evidence once, entities compact):
+```
+EVIDENCE: Polymeric nanocarriers like polyethyleneimine, dendrimers, graphene...
+SOURCE: Chunk 1 | paper.pdf
+TYPE: material
+ENTITY: polyethyleneimine | DIRECTION: unchanged
+ENTITY: dendrimers | DIRECTION: unchanged
+ENTITY: graphene-based materials | DIRECTION: elevated
+```
 
-### Beyond spec — Handoff preservation
+Parser (`_parse_line_tagged`) rewritten to handle both old and new formats
+backward‑compatibly. Pipe‑delimited entity attributes supported
+(`ENTITY: name | DIRECTION: value | CONTEXT: value`).
 
-The first live orchestrator run overwrote the human‑written 533‑line `HANDOFF.md`
-with a 29‑line auto‑generated summary. This was detected and fixed:
-- `Orchestrator._write_handoff()` now passes a cycle‑specific path:
-  `projects/default/cycle_N_handoff.md`
-- `write_handoff()` accepts an explicit `output_path` parameter
-- The human `HANDOFF.md` is never touched by the auto‑generator
-- Recovered from git: `git checkout HEAD -- HANDOFF.md`
+**Token savings:** ~60‑70% for grouped entities (evidence stated once).
 
-### Beyond spec — State file + PID
+### Streaming output
 
-- `projects/default/orchestrator_state.json` — cycle counter, heartbeat
-  timestamp, total ingested, last error, dry‑run flag. Updated every cycle.
-- `projects/default/orchestrator.pid` — enables `kill $(cat orchestrator.pid)`.
-  Written on `start()`, removed on `stop()`.
+**Files:** `src/llm/__init__.py` — `streaming=True` parameter added to
+`get_chat_model()`, passed to `ChatOpenAI`. `src/agents/extraction_agent.py` —
+`TokenStreamHandler` attached to `_call_llm()`.
+
+Tokens appear in realtime during extraction. Degradation (garbage output,
+repetition loops, stalls) is visible immediately rather than after timeout.
+
+### Repetition loop detection
+
+**File:** `src/agents/extraction_agent.py` — `_parse_line_tagged`'s `_commit()`.
+
+Each committed entity is compared to the previous one. If identical (all
+fields match), a `RuntimeError` is raised and the batch is aborted. Catches
+the most common degradation pattern: the model stuck repeating the same
+entity block infinitely.
+
+### Ollama memory management
+
+**File:** `src/ingestion/pre_extractor.py` — `PreExtractor._reset_ollama()`.
+
+Three‑step process:
+1. POST `/api/generate` with `keep_alive=0` (request unload)
+2. Poll `GET /api/ps` every 0.5s until model disappears from running list
+3. Log before/after model count for verifiability
+
+Called between **every batch** (in `extract_entities_batched`) and between
+**every paper** (at end of `extract_paper`). Safety valve: 30s timeout.
+
+**Verifiability:** Each reset logs:
+```
+Resetting Ollama — 1 model(s) loaded before: gemma4:e4b
+Ollama reset complete in 2.1s — 0 model(s) loaded now: none — GPU memory cleared
+```
+
+The `before → after` model count transition (1 → 0) proves the model was
+evicted. A fake reset (0.3‑0.8s, still showing model loaded) would be visible
+in the logs.
+
+### DIRECTION field constraint
+
+**File:** `src/agents/extraction_agent.py` — system prompt rule 4.
+
+DIRECTION now explicitly defined as a measurable change vs baseline. Valid
+values: `elevated, decreased, increased, reduced, unchanged, upregulated,
+downregulated, up, down`. For entities where this makes no sense (materials,
+methods, equipment, concepts), DIRECTION must be **omitted entirely** — not
+filled with placeholder values like "source", "characteristic", "application",
+"general", "N/A", or "target".
+
+### README restructure
+
+**File:** `README.md` — ~2000 → ~800 lines.
+
+New sections: North Star Vision, Current State, Background Daemon, Architectural
+Constraints (consolidated from 4 scattered lists), Planned Capabilities, Phase
+Evolution (condensed paragraph + link to `docs/phase-history.md`).
+
+Obsidian vault (`docs/kg/`) noted as archived snapshot — not actively maintained.
+Canonical docs: README (architecture), HANDOFF.md (next‑phase), `docs/phase-history.md`
+(build history).
+
+Dead files removed: `src/retrieval/pubmed.py` (deprecated), `src/agents/hierarchical_clusterer.py`
+(never wired), `PHASE8_STATUS.md` (stale). Nine deprecated scripts archived to `archive/`.
+
+---
 
 ## Lessons learned
 
-### 1. Thread‑based timers need generous margins in tests
+### 1. Batched extraction is necessary but not sufficient
 
-The scheduler's `schedule(interval_minutes)` multiplies by 60 internally.
-Tests using `schedule(0.1)` expected 100 ms ticks but got 6‑second ticks.
-Fixed by using sub‑minute fractions (0.005 = 0.3 s) with 1.0‑1.5 s test
-sleeps. **Lesson:** Always document whether a time parameter is in seconds
-or minutes. The `interval_minutes` parameter name is clear but the
-conversion is hidden inside the loop.
+Breaking 37+ chunks into batches of 8 eliminates prompt‑size hangs (30‑90s
+per batch vs 15 min+). But batches are still sequential on a single GPU —
+the model runs 5‑38 batches per paper, each adding to the cumulative inference
+count. GPU memory fragmentation can still degrade late batches within the same
+paper. **Lesson:** Batches solve the prompt‑size problem; memory resets
+(between batches) are needed for sustained‑load stability.
 
-### 2. BM25 rebuild contention is the real parallel bottleneck — not RAM
+### 2. Ollama's `/api/ps` cannot verify Metal GPU memory state
 
-Threading EPMC fetch/parse is safe (I/O‑bound, ~8 MB for 4 concurrent
-XMLs). But calling `ingest()` from multiple threads triggers redundant
-BM25 full‑corpus rebuilds (22,000 documents tokenized N times). The fix:
-parallelize fetch+parse, accumulate all chunks, call `ingest()` once.
-**Lesson:** Batch mutation operations after parallel read operations.
-The `_ingest_chunks_batch()` method exists specifically for this.
+The API tells what Ollama's Go server *thinks* about loaded models. It does
+NOT reflect what llama.cpp's Metal backend actually holds in GPU memory.
+Evidence: resets confirmed in 0.8s (physically impossible for a 9.6 GB model
+unload from Metal), yet the next batch showed clear signs of degradation —
+single‑field token spamming (`Energy: Energy: Energy: …` hundreds of times).
+**Lesson:** The Ollama API provides an administrative view, not a hardware‑level
+verification. True GPU memory state verification may require Metal profiling
+tools (`MTLCaptureManager` via PyObjC) — complex and Mac‑only — or a full
+Ollama process restart (which would kill other agents using Ollama).
 
-### 3. Mock import paths must target the definition site — not the call site
+### 3. GPU memory degradation produces multiple failure signatures
 
-Lazy imports (`from X import Y` inside function bodies) can't be patched
-at the importing module's path. `_fetch_and_parse_for_query()` does
-`from src.retrieval.europe_pmc import EuropePMCClient` inside the function.
-Patching `src.agents.orchestrator.EuropePMCClient` fails because that
-attribute doesn't exist on the orchestrator module. Patching at the
-definition site (`src.retrieval.europe_pmc.EuropePMCClient`) works.
-**Lesson:** Always patch at the module where the class is defined, not
-where it's imported.
+Not one failure mode — at least four distinct patterns observed:
+- **Block‑level repetition**: Same entity block repeated infinitely (caught)
+- **Token‑level spamming**: Single token repeated hundreds of times within
+  one field value, e.g. `SOURCE: Chunk: Energy: Energy: Energy: …` (NOT caught)
+- **Format collapse**: Model forgets extraction format, falls back to
+  numbered output (`1. N/A\n2. N/A\n…`) (caught by parser as empty result)
+- **Garbage output**: Random tokens, e.g. `TYPE: TYPE: TYPE: …` (caught by
+  parser as empty or markdown‑fallback)
 
-### 4. PMCXMLParser.MIN_CHUNK_WORDS = 20 means mock XML needs real content
+**Lesson:** Detection must cover all known failure signatures. Current
+coverage: block repetition (caught), format collapse (caught), garbage
+(caught). NOT caught: token‑level spamming within a field value.
 
-Unit tests using `<article><body><sec><p>Short text.</p></sec></body></article>`
-produced zero chunks because 2‑word sections are silently skipped.
-Mock XML in tests must contain ≥20‑word paragraphs. **Lesson:** Know the
-minimum chunk thresholds when writing parser tests. Short mock data will
-pass silently with empty results.
+### 4. Streaming output is critical for diagnostics
 
-### 5. State must be written AFTER counters are incremented
+Real‑time token visibility reveals degradation the instant it starts — you
+see the model stuck repeating `Energy: Energy:` or producing `N/A` lists.
+Without streaming, you wait until the 600s timeout or the parser warning
+after the batch completes. **Lesson:** Streaming is not a performance
+feature — it's a diagnostic tool that shortens the debug cycle from hours
+to seconds.
 
-`_write_state()` was called before `self._total_ingested += summary["papers_ingested"]`,
-causing the state file to report 0 papers ingested after the first live cycle.
-Fixed by moving the increment before the state write. **Lesson:** Order
-matters for stateful operations — persist after mutation, not before.
+### 5. Evidence grouping saves 60‑70% tokens with zero quality loss
 
-### 6. Don't trust the LLM to output valid JSON — give it a format it can't break
+The model naturally groups entities by the evidence sentence they come from.
+Giving it a format that expresses this efficiently (`EVIDENCE` once, `ENTITY`
+lines compact) reduces generation time significantly. The parser handles both
+old and new formats, so there's no transitional breakage. **Lesson:** Match
+the output format to the model's natural extraction pattern — if it already
+groups entities, give it a grouped format.
 
-The 9/13 JSON parse failure rate on local Ollama models was not a code bug —
-it was a format mismatch. LLMs excel at key‑value labeled text (INI files,
-YAML frontmatter, labeled data) and struggle with nested punctuation
-grammars (JSON). The line‑tagged format eliminates the failure mode by
-choosing a format the LLM is naturally good at. **Lesson:** Match the
-output format to the model's training distribution. For structured
-extraction from local models, line‑tagged > JSON.
+### 6. DIRECTION needs explicit constraints — the LLM invents otherwise
 
-### 7. Write‑only state files are a code smell
+Without a clear definition of what DIRECTION means and when to omit it,
+gemma4:e4b invents nonsense labels: "source", "characteristic", "application",
+"target", "prerequisite", "N/A", "general". Defining valid values and
+explicitly listing forbidden placeholder values in the prompt eliminates
+this class of hallucination entirely. **Lesson:** Optional fields are a
+lie — either define them or the LLM fills them with noise.
 
-`orchestrator_state.json` is written every cycle but never read on startup.
-While the daemon is idempotent (re‑ingesting is harmless), a proper resume
-would read the last cycle and heartbeat on restart. **Lesson:** State
-files should be round‑tripped (write + read), not fire‑and‑forget.
-This is captured as Gap A below.
+### 7. max_retries=0 is essential for daemon extraction
 
-### 8. Overwriting developer documentation is catastrophic
+LangChain's default `max_retries=2` turns a single 900s timeout into a
+45‑minute hang per failing batch. With the daemon processing 10‑40 batches
+per cycle, even one hung batch under the old behavior could waste an hour.
+Setting `max_retries=0` on the extraction‑specific LLM instance means
+failures are logged and the pipeline continues immediately. **Lesson:**
+In a background daemon context, fail fast > retry. The safety nets
+(timeout, repetition detection, memory reset) should prevent failures
+from happening; retrying a failed request just multiplies the damage.
 
-The first live run of `orchestrator.run_once()` called `write_handoff()`
-which defaulted to `HANDOFF_PATH = Path("HANDOFF.md")` — the same path
-as the human‑written handoff document. 533 lines of gap tracking tables,
-API diagnostic guides, architectural decisions, and file maps were
-replaced with a 29‑line auto‑generated summary. **Lesson:** Generated
-output should NEVER share a path with human‑written documentation.
-Always namespace machine output (`cycle_N_handoff.md`, not `HANDOFF.md`).
+---
 
 ## Novel approaches invented
 
-### 1. Line‑tagged extraction format for local LLMs
+### 1. Evidence‑grouped line‑tagged extraction format
 
-Instead of fighting JSON parse failures with ever‑more‑aggressive fallback
-parsers, we changed the format the LLM outputs. Line‑tagged text (`TYPE:`,
-`ENTITY:`, `EVIDENCE:`, etc.) maps directly to LLM training data (labeled
-text, config files, frontmatter) and requires no syntax — no braces, commas,
-or quotes to break. A 30‑line parser replaces a 50‑line JSON parser with
-two fallback attempts. Generalizable: any structured LLM extraction task
-on local models should prefer line‑delimited key‑value to JSON.
+Instead of one entity block per piece of evidence (repeating the evidence
+text N times), evidence is stated once and entities are listed compactly
+with pipe‑delimited per‑entity attributes. The parser converts this into
+the same Python dict structure used by downstream consumers. Saves ~60‑70%
+of output tokens for grouped entities. Generalizable to any extraction task
+where multiple entities share source text.
 
-### 2. Thread‑parallel fetch + batch ingest pattern
+### 2. Between‑batch Ollama model reset with polling verification
 
-In a pipeline where ingestion is a mutating operation that rebuilds a
-corpus‑wide index, parallelism is only safe in the read phase. We
-parallelize the I/O‑bound EPMC search+XML fetch (no mutations), then
-batch all chunks into one ingest call (one BM25 rebuild). This pattern
-applies to any pipeline with a "gather → mutate" structure.
+After each batch of 8 chunks, the system unloads and reloads the Ollama
+model to flush llama.cpp Metal‑backend memory fragmentation. Unloading is
+done via the Ollama native API (`keep_alive=0`); unloading is confirmed by
+polling `GET /api/ps` until the model disappears from the running list.
+A "before/after" model count log makes the reset auditable. This is the
+first‑known approach to programmatic GPU‑memory hygiene for long‑running
+local‑LLM pipelines.
 
-### 3. Module‑level worker functions for ThreadPoolExecutor
+### 3. Block‑level LLM repetition detection in parser output
 
-`_fetch_and_parse_for_query()` is defined at module level (not as a
-class method or closure) so it can be passed to `run_parallel()` without
-pickle issues. It receives all dependencies via keyword arguments
-(`max_papers`, `completed_pmcids`) and creates its own `EuropePMCClient`
-+ `PMCXMLParser` instances (no shared state across threads).
+Rather than relying on token‑probability heuristics or external timeout
+detection, the parser itself detects degradation by comparing each committed
+entity to the previous one. If the full entity dict (type, entity name,
+evidence, source, direction, context, conditions) matches the previously
+committed entity, the model is stuck in a repetition loop and the batch is
+aborted immediately. Simple, deterministic, zero false‑positives for
+legitimate extraction output.
 
-### 4. Dry‑run mode as a first‑class daemon feature
-
-`Orchestrator(dry_run=True)` runs the full discovery→query cycle but
-skips all API calls beyond web search. Returns `would_have_queries` in
-the summary so users can see exactly what would happen before spending
-API credits or Ollama time. Generalizable: any autonomous agent should
-have a dry‑run mode.
-
-### 5. Cycle‑specific handoff files for machine‑to‑machine state transfer
-
-Rather than a single `HANDOFF.md`, the daemon writes
-`projects/default/cycle_N_handoff.md` for each cycle. This creates an
-audit trail and prevents the machine from overwriting human documentation.
-The human `HANDOFF.md` remains a developer‑to‑developer artifact.
+---
 
 ## Identified gaps and status
 
-### Phase 9 (all closed ✅)
+### Phase 10 (carried forward)
 
-| # | Gap | Status |
-|---|------|--------|
-| 1 | Retry logic | ✅ Done |
-| 2 | Progress persistence | ✅ Done |
-| 3 | Ingestion wiring | ✅ Done |
-| 4 | Coverage diagnostic | ✅ Done |
-| 5 | Figure pipeline | ✅ Done |
-| 6 | SPECTER2 caching | ✅ Done |
+| # | Gap | Severity | Status |
+|---|------|----------|--------|
+| A | State file write‑only | ~~Low~~ | ✅ Closed — `_load_state()` reads state on init |
+| B | No handoff file cleanup | ~~Low~~ | ✅ Closed — `_cleanup_handoffs()` removes files >7 days |
+| C | No daemon log management | ~~Medium~~ | ✅ Closed — `_ensure_file_logging()` with RotatingFileHandler |
+| D | Line‑tagged format untested with real Ollama | Low | Partially addressed — multiple live cycles run. Parser stable. Prompt may need tuning for gemma4:e4b edge cases. |
+| E | No long‑running daemon validation | Medium | Partially addressed — daemon ran multiple cycles (3+). Degradation patterns documented. Longer runs (>10 cycles, >24h) still needed. |
+| F | Coverage‑gated routing not wired | Low | Not addressed |
+| G | SPECTER2 embeddings unused | Low | Not addressed |
 
-### Phase 10 foundation (all built ✅)
-
-| # | Item | Status |
-|---|------|--------|
-| 7 | PreExtractor + graph_storage | ✅ Done |
-| 8 | Gap resolver | ✅ Done |
-| 9 | Web search (discovery) | ✅ Done |
-
-### Phase 10 core (all built ✅)
-
-| # | Gap | File | Status |
-|---|------|------|--------|
-| 10 | No autonomous daemon | `src/agents/orchestrator.py` | ✅ Done |
-| 11 | No subagent spawning | `src/agents/subagents.py` | ✅ Done |
-| 12 | No automated handoff | `src/agents/handoff.py` | ✅ Done |
-| 13 | No scheduler | `src/agents/scheduler.py` | ✅ Done |
-
-### Phase 10 remaining (identified during build)
+### Phase 10.5 (new — identified during extraction hardening)
 
 | # | Gap | Severity | Description |
 |---|------|----------|-------------|
-| A | State file write‑only | ~~Low~~ ✅ Closed | ~~`orchestrator_state.json` is written every cycle but never read on restart.~~ Fixed: `_load_state()` reads state on init, restores cycle and total_ingested. |
-| B | No handoff file cleanup | ~~Low~~ ✅ Closed | ~~`cycle_N_handoff.md` files accumulate forever.~~ Fixed: `_cleanup_handoffs()` removes files older than 7 days after each cycle. |
-| C | No daemon log management | ~~Medium~~ ✅ Closed | ~~`basicConfig` to stderr only. No file handler, no rotation.~~ Fixed: `_ensure_file_logging()` adds RotatingFileHandler (5 backups × 5 MB) to `orchestrator.log`. |
-| D | Line‑tagged format untested with real Ollama | Medium | All 7 parser tests use mocked LLM output. Real model may need prompt tuning. |
-| E | No long‑running daemon validation | Medium | Only single cycles tested. Multi‑hour runs needed. |
-| F | Coverage‑gated routing not wired | Low | `run_coverage_diagnostic()` exists but orchestrator doesn't route on < 30 %. |
-| G | SPECTER2 embeddings unused | Low | 8 cached, 0 queried. Could recommend related papers. |
+| H | Token‑level spam not detected by parser | High | Single‑field token spamming (`SOURCE: Energy: Energy: Energy: …` repeated hundreds of times) is not caught by the block‑level repetition detector (which compares full entity dicts). The model can produce one massive entity block with a garbled field rather than multiple identical blocks. |
+| I | `/api/ps` cannot verify true GPU memory state | High | Ollama's API reports administrative state, not Metal buffer state. 0.8s "confirmed unloaded" for a 9.6 GB model is physically impossible on Apple Silicon. No reliable software‑level verification exists without Metal profiling tools (PyObjC/MTLCaptureManager) or a full Ollama process restart. |
+| J | No field‑level output sanity checks | Medium | The parser accepts any field value regardless of length or content. A 5000‑character `SOURCE` field full of repeated tokens passes through undetected. Reasonable upper bounds per field type would catch token‑spam corruption. |
+| K | No guaranteed GPU‑memory reset mechanism | Medium | The only reliable way to fully flush Metal GPU memory is killing and restarting the Ollama server process — which would break any other agents using Ollama simultaneously (Streamlit UI, synthesis). No safe mechanism exists for the daemon to force a hard reset when other Ollama users are active. A coordinated restart (check `/api/ps` for other loaded models, only restart when sole user) was designed but not built. |
 
-### Phase 11–13 (designed, not built)
-
-| # | Gap | Phase | Description |
-|---|------|-------|-------------|
-| 14 | No community detection | 11 | Leiden/Louvain on NetworkX KG |
-| 15 | No community summaries | 11 | LLM summaries per hierarchy level |
-| 16 | No relevance router | 11 | Cheap model gates community access |
-| 17 | No progressive disclosure | 11 | system/ vs research/ vs archive/ tiers |
-| 18 | No skill library | 12 | .md skills from agent trajectories |
-| 19 | No trajectory logging | 12 | JSONL logging of agent actions |
-| 20 | No experiential memory | 12 | agent-learnings/ directory |
-| 21 | No skill evals | 12 | A/B test before deployment |
-| 22 | No output templates | 13 | Grant, paper, methods, review |
-| 23 | No evidence‑anchored writing | 13 | Auto‑citation, pre‑output anchoring gate |
-| 24 | SPECTER2 not in retrieval | Future | Embeddings collected, not queried |
+---
 
 ## Key architectural decisions (DO NOT UNDO)
 
 ### Carried forward from prior sessions
 
-- **3‑retry exponential backoff** on EPMC HTTP calls (5xx retried, 4xx not)
-- **Per‑paper source prefixes** (`"europe_pmc_xml_PMC12345"`)
-- **`chunk_index` in metadata** on every chunk
-- **`IngestProgress` file‑based** (no DB dependency)
-- **`--ingest` uses existing `public_corpus`** ChromaDB + BM25 paths
-- **Anchoring singleton updated** on ingest (`set_anchoring_chroma`)
-- **Dual‑agent architecture** (background daemon + user agent, separate processes)
-- **API‑first, local‑switchover** strategy (DeepSeek now → Ollama Qwen3.6 35B‑A3B later)
-- **Instrumental agent framing** (temporary, writes for future instances)
-- **Evidence provenance** at every memory layer (anchoring always checks Layer 0)
-- **Community‑gated retrieval** (MoE for memory)
-- **Skills over prompt optimization** (.md files, git‑versioned)
-- **PMC OAI‑PMH as transparent `fullTextXML` fallback** — same JATS content, different transport
-- **DOI‑keyed SPECTER2 cache** — DOI more stable than S2 paper_id across API versions
-- **ChromaDB dedup‑before‑add** — `add_documents_deduped()` prevents duplicate‑entry warnings
+All Phase 4–10 constraints still apply. See README §17.
 
 ### New decisions (this session)
 
-- **Line‑tagged over JSON for LLM extraction output** — line‑delimited key‑value
-  text has zero syntax‑failure modes vs JSON's 70% parse‑failure rate on local
-  Ollama models. ~25‑30% token savings in prompts. Disk serialization remains
-  JSON (Python‑controlled, no LLM involvement). Pass 1 (category discovery)
-  retains JSON (simpler, fewer failures). Generalizable principle: match the
-  output format to the model's training distribution.
-- **Cycle‑specific handoff files** — `projects/default/cycle_N_handoff.md`.
-  Machine output must never share a file path with human documentation.
-  The human `HANDOFF.md` is a developer‑to‑developer artifact; the cycle
-  handoffs are machine‑to‑machine state transfer.
-- **Thread‑parallel fetch + batch ingest** — parallelize the I/O‑bound
-  read phase (EPMC search, XML fetch, JATS parsing), batch the mutation
-  (one ChromaDB+BM25 `ingest()` call). Avoids redundant BM25 corpus rebuilds.
-  The `_fetch_and_parse_for_query()` module‑level function is the worker;
-  `_ingest_chunks_batch()` is the single‑call mutation.
-- **Dry‑run as first‑class feature** — `Orchestrator(dry_run=True)` runs the
-  full discovery→query cycle but skips EPMC/ingest/extraction. Returns
-  `would_have_queries` in summary. Essential for safe daemon testing.
-- **State file + PID for daemon management** — `orchestrator_state.json`
-  (heartbeat, cycle, total ingested, last error) and `orchestrator.pid`.
-  Written on start/cycle/stop. PID removed on clean shutdown.
-- **Module‑level worker functions for ThreadPoolExecutor** — defined at
-  module scope (not closures or instance methods) to avoid pickle issues.
-  Receive all config via keyword arguments; create their own API client instances.
+- **Batch extraction (8 chunks) over full‑prompt extraction** — 8 chunks produces
+  ~6K‑token prompts that gemma4:e4b handles in 30‑90s. Full‑paper extraction
+  (37+ chunks, 20K‑50K tokens) causes 15 min+ generation or hangs. The batch
+  method preserves evidence quality (no text truncation) and adds a merge‑and‑
+  deduplicate step for cross‑batch entity normalization.
+
+- **Evidence‑grouped over per‑entity output format** — Stating evidence once per
+  group of entities sharing that evidence saves 60‑70% of output tokens. The
+  pipe‑delimited entity format (`ENTITY: name | DIRECTION: value`) keeps
+  per‑entity attributes compact. Parser is fully backward‑compatible with the
+  old per‑entity format.
+
+- **Streaming extraction output** — `streaming=True` on the extraction LLM
+  instance enables real‑time token visibility via `TokenStreamHandler`. This
+  is a diagnostic necessity, not a UX feature — it reveals degradation patterns
+  the instant they begin.
+
+- **`max_retries=0` for extraction** — The extraction LLM is created with
+  `max_retries=0`. Retrying a hung Ollama request in a daemon context just
+  wastes time; fail fast and let the batch‑level error handling continue the
+  pipeline.
+
+- **`keep_alive=0` + polling for between‑batch reset** — Ollama's API is used
+  to request model unload, and `GET /api/ps` is polled to confirm it. This is
+  the best available approach short of a full process restart. The before/after
+  model count logging makes resets auditable.
+
+- **Block‑level repetition detection in parser** — Comparing consecutive
+  committed entities catches the most common degradation pattern (LLM stuck
+  repeating the same output) with zero false‑positives.
+
+- **DIRECTION constrained to measurable changes** — Only valid values:
+  elevated/decreased/increased/reduced/unchanged/upregulated/downregulated/up/down.
+  Omitted entirely for non‑biological entities (materials, methods, equipment).
+  This was needed because gemma4:e4b was inventing placeholder values (source,
+  characteristic, application, target, N/A, general).
+
+- **Phase 11 files committed as partial build** — `community_detection.py`,
+  `progressive_disclosure.py`, `community_summarizer.py`, `relevance_router.py`
+  and their tests exist in the codebase but are NOT yet wired into the daemon
+  or retrieval pipeline. They are designed and built — wiring is the next task.
+
+---
 
 ## What NOT to change
 
-All prior constraints apply. Additions from this session:
+All prior constraints (Phase 4–10) apply. Additions from this session:
 
-- Do NOT switch extraction output back to JSON — line‑tagged format eliminates
-  the 70% parse‑failure rate on local Ollama models
-- Do NOT remove the line‑tagged parser (`_parse_line_tagged`) or formatters
-  (`_categories_to_line_tagged`, `_entities_to_line_tagged`)
-- Do NOT change `write_handoff()` default path to `HANDOFF.md` — always
-  accept explicit `output_path` from the orchestrator
-- Do NOT remove the dry‑run flag from the orchestrator — essential for safe testing
-- Do NOT wire `ingest()` into parallel threads — use `_ingest_chunks_batch()`
-  after accumulating all chunks to avoid redundant BM25 rebuilds
-- Do NOT remove `orchestrator_state.json` or `orchestrator.pid` management
-- Do NOT make `_fetch_and_parse_for_query()` an instance method or closure —
-  module‑level functions work with ThreadPoolExecutor
-- Do NOT add `Accept: application/json` to the EPMC session default — breaks OAI
-- Do NOT use `lstrip()` for prefix removal — use `removeprefix()` or explicit check
-- All previous NOT TO CHANGE rules from Phase 4–9 still apply
+- Do NOT switch extraction back to full‑prompt (all chunks in one call) —
+  batched extraction (8 chunks/call) is the format. The batch method exists
+  specifically because full‑prompt extraction causes 15 min+ hangs on local
+  Ollama.
+- Do NOT remove `extract_entities_batched()` or `_merge_entity_batches()` —
+  these are the extraction pipeline's primary entry points.
+- Do NOT remove the evidence‑grouped format from the system prompt — the
+  model performs better and saves 60‑70% tokens with it.
+- Do NOT remove the block‑level repetition detector in `_parse_line_tagged`'s
+  `_commit()` — it catches the most common degradation pattern.
+- Do NOT remove `max_retries=0` from the extraction LLM — retrying hung
+  Ollama requests wastes time in a daemon context.
+- Do NOT remove `streaming=True` from the extraction LLM — real‑time output
+  is critical for diagnosing degradation.
+- Do NOT remove `_reset_ollama()` or its between‑batch call site — this is
+  the only mechanism currently preventing cumulative GPU fragmentation.
+- Do NOT remove the before/after model‑count logging in `_reset_ollama()` —
+  it is the only verification that resets actually evicted the model.
+- Do NOT switch extraction back to JSON output — line‑tagged is the format
+  for Pass 2. Pass 1 (category discovery) retains JSON.
+- Do NOT reinstate deleted files (`pubmed.py`, `hierarchical_clusterer.py`,
+  `PHASE8_STATUS.md`) — they are dead code.
+- Do NOT reinstate archived scripts — they served their purpose as phase
+  demonstrators. The archive preserves history.
+
+---
 
 ## File map
 
 ```
-NEW FILES (this session):
-src/agents/scheduler.py                              # Daemon timer (69 lines, 8 tests)
-src/agents/subagents.py                              # ThreadPoolExecutor wrapper (54 lines, 7 tests)
-src/agents/orchestrator.py                           # Background daemon loop (418 lines, 22+4 tests)
-src/agents/handoff.py                                # AUTO‑generated handoff (147 lines, 10 tests)
-tests/test_scheduler.py                              # 8 tests: lifecycle, crash recovery, args
-tests/test_subagents.py                              # 7 tests: parallel, error isolation, kwargs
-tests/test_orchestrator.py                           # 22 tests: seed terms, queries, cycle mock, state, fetch
-tests/test_orchestrator_integration.py                # 4 tests: full cycle mock, dry run, increment
-tests/test_handoff.py                                # 10 tests: format, graph counts, file write
-
 MODIFIED FILES (this session):
-src/agents/__init__.py                               # +GapResolver, Orchestrator, Scheduler, run_parallel, write_handoff exports
-src/agents/extraction_agent.py                       # +_parse_line_tagged(), +_categories_to_line_tagged(). Pass 2 prompt now line‑tagged.
-src/agents/synthesis_drafter.py                      # +_entities_to_line_tagged(). Drafter entities now compact text, not json.dumps.
-phase9_verify.py                                     # +--orchestrator-cycle flag, +test_orchestrator_cycle(), --orchestrator-live
-tests/test_extraction_agent.py                       # Updated for line‑tagged format (4 new tests, 1 removed)
-README.md                                            # Phase 10 status updated, test count 246→307
+src/agents/extraction_agent.py      — +extract_entities_batched(), +_merge_entity_batches(),
+                                       +block‑level repetition detection, +streaming wiring,
+                                       evidence‑grouped system prompt, DIRECTION constraint
+src/ingestion/pre_extractor.py       — +_reset_ollama() with polling + verification logging,
+                                       batch extraction call site
+src/llm/__init__.py                  — +streaming parameter on get_chat_model()
+src/agents/orchestrator.py           — community detection wired into cycle, gap closures (A,B,C)
+src/agents/__init__.py               — GapResolver, Orchestrator, Scheduler, run_parallel, write_handoff
+src/graph/graph_builder.py           — minor fixes
+src/graph/survey_nodes.py            — batch extraction call site
+src/graph/nodes.py                   — batch extraction call site
+src/state.py                         — Phase 11 fields added
+tests/test_extraction_agent.py       — updated for line‑tagged + batch
+tests/test_orchestrator.py           — state file, handoff tests
+tests/test_scheduler.py              — crash recovery, duplicate rejection
+README.md                            — restructured (~2000→~800 lines), North Star vision,
+                                       consolidated constraints, planned capabilities
+HANDOFF.md                           — this file
+docs/phase-history.md                — full per‑phase build history
 
-PROJECT DATA (auto‑generated — not committed):
-projects/default/orchestrator_state.json             # Daemon heartbeat + cycle counter
-projects/default/orchestrator.pid                    # Daemon PID
-projects/default/cycle_N_handoff.md                  # Per‑cycle machine handoff files
-projects/default/spector2_cache.json                 # SPECTER2 cache (DOI → embedding)
-projects/default/ingest_progress.json                # Ingested PMCIDs checkpoint
-projects/default/chroma_data/                        # ChromaDB (public_corpus)
-projects/default/bm25_index/                         # Persisted BM25 corpus
-projects/default/extractions/                        # PreExtractor entity cache (line‑tagged format)
-projects/default/embeddings/                         # Paper embeddings
-projects/default/project_graph.json                  # Knowledge graph (232 nodes, 1216 edges)
+NEW FILES (this session):
+src/agents/community_summarizer.py   — Phase 11 (partial build)
+src/agents/relevance_router.py       — Phase 11 (partial build)
+src/graph/community_detection.py     — Phase 11: Louvain community detection
+src/graph/progressive_disclosure.py  — Phase 11: tiered KG disclosure
+tests/test_community_detection.py    — Phase 11 community tests
+tests/test_community_summarizer.py
+tests/test_phase11_integration.py
+tests/test_progressive_disclosure.py
+tests/test_relevance_router.py
+
+DELETED FILES:
+src/retrieval/pubmed.py              — deprecated, replaced by Europe PMC
+src/agents/hierarchical_clusterer.py — never wired into production
+PHASE8_STATUS.md                     — stale, consolidated into docs/phase-history.md
+
+ARCHIVED (→ archive/):
+phase2_demo.py, phase3_demo.py, phase4_viz.py, investigate_bm25.py,
+phase5_api_comparison.py, phase5_benchmark.py, phase5_verify.py,
+phase9_pubmed_demo.py, scripts/acquire_corpus.py
 ```
 
-## Recommendations for Phase 10 closure + Phase 11 start
+---
 
-### Immediate (Phase 10 remaining gaps — 2–3 hours)
+## Recommendations
 
-1. **Gap C — Add log management** (~30 lines). Add a `RotatingFileHandler` to
-   the orchestrator so daemon logs persist to `projects/default/orchestrator.log`.
-   Simplest fix with highest impact — currently logs are lost when daemonized.
+### Immediate (Phase 10.5 remaining gaps — priority order)
 
-2. **Gap D — Test line‑tagged with real Ollama** (manual, ~15 min). Run a live
-   orchestrator cycle and verify the logs show zero `"JSON parse failed"` messages.
-   If the model outputs JSON despite the line‑tagged prompt, tune the system
-   prompt (add emphasis on "no braces, no quotes, no JSON").
+1. **Gap H — Add token‑level spam detection** (~10 lines). In `_parse_line_tagged`'s
+   `_commit()`, check that no field value exceeds a reasonable length (e.g., 500 chars
+   for `evidence`, 200 chars for `source`). If exceeded, the model is producing
+   token‑spam degradation — abort the batch. This catches the `Energy: Energy: Energy:`
+   corruption that the block‑level detector misses.
 
-3. **Gap A + B — State resume + handoff cleanup** (~40 lines). Add an
-   `Orchestrator._load_state()` method that reads `orchestrator_state.json` on
-   init and sets `_cycle` and `_total_ingested` to the last known values.
-   Add `--max-handoff-files` retention (keep last 7 days of `cycle_*_handoff.md`).
+2. **Gap K — Safe Ollama restart when sole user** (~30 lines). Before attempting a
+   hard restart (`ollama stop` / `ollama serve`), query `GET /api/ps`. Only proceed
+   if gemma4:e4b is the ONLY model loaded — other models active means other agents are
+   running (synthesis, UI) and would break. If safe, use `subprocess.run(["ollama", "stop"])`
+   and `subprocess.Popen(["ollama", "serve"])`. Cost: ~15‑30s per restart. Use only
+   between papers (not between batches — too expensive for 38‑batch papers).
 
-### Phase 11 — Community Detection & Routing (next major milestone)
+3. **Gap G — Wire SPECTER2 paper similarity** (~20 lines). Add
+   `paper_similarity_search(doi, top_k=5)` to `Spector2Cache`. Use cosine similarity
+   between cached SPECTER2 embeddings. Surface related papers in cycle handoff or as
+   a discovery supplement.
 
-The KG now has 232 nodes and 1216 edges — large enough for community detection:
-1. Run Leiden algorithm on the KG (via `networkx.algorithms.community` or
-   `python‑louvain`). This groups entities into research clusters (e.g.,
-   "titanium surface modification" vs "macrophage signaling" vs "bone biology").
-2. Generate LLM summaries per community (a paragraph describing what the cluster
-   is about, key entities, key papers).
-3. Build a relevance router — a cheap model (gemma4:e4b) that gates community
-   access. Given a query, the router decides which communities are relevant.
-4. Progressive disclosure — system‑level summaries at the top, community details
-   on drill‑down, individual papers at the leaf.
-5. Wire community routing into the Survey Mode retrieval pipeline.
+4. **Gap E — Multi‑hour daemon validation** (manual, ~2 hrs). Run the daemon for
+   4‑8 hours (4‑8 cycles). Monitor: memory usage over time, per‑batch latency trend
+   (are later cycles slower?), reset times (are they increasing?), entity counts
+   (are they decreasing?). Capture Ollama logs if available.
 
-### Architecture notes
+### Phase 11 — Community routing (next major milestone)
 
-- **The orchestrator can already daemonize** via `orch.start()` + `orch.stop()`.
-  The missing piece for production is log management (Gap C) and health monitoring
-  (the state file + PID already provide this).
-- **SPECTER2 embeddings are ready** for paper similarity search. Adding
-  `paper_similarity_search(paper_id, top_k=5)` to `Spector2Cache` would
-  enable the orchestrator to recommend related papers during discovery.
-- **Coverage diagnostic integration** (Gap F) would make the orchestrator
-  adaptive: if EPMC coverage < 30% for a query, route to Phase 8 EZProxy
-  pipeline for paywalled papers instead of EPMC‑only ingestion.
-- **The line‑tagged format** can be extended to Pass 1 (category discovery)
-  if needed, eliminating the last remaining JSON parse point in the pipeline.
+Partial build already committed. The KG is at ~3,800 nodes / 262K edges — far
+beyond the original community‑detection threshold. Next steps:
+
+1. Wire `community_detection.py` (Louvain) into the daemon cycle — already called
+   in `orchestrator._run_cycle()` but verify it runs cleanly and inspect output.
+2. Generate community summaries via `community_summarizer.py`.
+3. Wire `relevance_router.py` into Survey Mode retrieval — given a query, gate
+   which communities provide context.
+4. Wire `progressive_disclosure.py` — tiered disclosure (system/community/paper).
+
+### Beyond Phase 11
+
+The North Star Vision (README §1) identifies the persistent belief store as the
+next major architectural layer. The claim ledger (`src/synthesis/claim_ledger.py`)
+is the foundation. Key additions:
+
+- **Belief store data model**: Claims with confidence, evidence_for/against,
+  version_history, status (supported/challenged/contradicted/deprecated).
+- **Contradiction detection agent**: Runs during daemon cycles — checks new
+  entities/claims against existing beliefs, flags contradictions, updates
+  confidences.
+- **Probabilistic KG edges**: Edge weights adjusted over time by daemon cycles.
+
+---
 
 ## Prompt for next AI session
 
 ```
 You are an expert senior software developer continuing the Federated RAG system
-for biomedical research. Phase 10 is complete. Phase 11 begins now.
+for biomedical research. Phase 10 is complete. Phase 10.5 extraction‑hardening
+session is concluding. Phase 11 (community routing & memory cascade) is the next
+major milestone.
 
 Read the full README.md and this HANDOFF.md carefully before making changes.
 
 CURRENT STATE:
-  - Phase 10 is 100% complete. All 4 core files + 4 enhancements built.
   - 307 tests pass, zero failures.
   - Orchestrator daemon runs full autonomous cycle: web discovery → parallel
-    EPMC fetch → batch ingest → PreExtractor → KG save → cycle handoff.
-  - Line‑tagged extraction format replaces JSON (eliminates 70% parse‑failure
-    rate on local Ollama). Pass 1 still uses JSON.
-  - EPMC fullTextXML REST endpoint is down — PMC OAI‑PMH fallback works.
-  - SPECTER2 cache: 8 embeddings cached, 0 queried.
-  - KG: 232 nodes, 1216 edges. BM25: 22,000+ documents.
-  - Cycle handoff files written to projects/default/cycle_N_handoff.md.
-    Human HANDOFF.md is never overwritten by daemon.
-  - State file + PID management active.
+    EPMC fetch → batch ingest → PreExtractor → KG save → community detection →
+    cycle handoff. Dry‑run + live modes.
+  - KG: ~3,810 nodes, ~262K edges (grown significantly since Phase 10 handoff).
+    BM25: 27K+ documents. 43+ papers ingested.
+  - Extraction uses batched evidence‑grouped line‑tagged format with streaming
+    output, block‑level repetition detection, and between‑batch Ollama memory
+    resets (keep_alive=0 + /api/ps polling verification).
+  - Phase 10 gaps A/B/C closed (state resume, handoff cleanup, daemon logging).
+  - Phase 11 partial build committed: community_detection.py, community_summarizer.py,
+    relevance_router.py, progressive_disclosure.py + their tests. Community
+    detection already called in orchestrator cycle.
+  - DeepSeek API available for development. Ollama (gemma4:e4b + qwen3.6:35b) is
+    the production target.
+  - README restructured with North Star vision, consolidated constraints,
+    planned capabilities. docs/phase-history.md has full build history.
 
-PHASE 10 REMAINING GAPS (close before Phase 11 if desired):
-  A. State file write‑only — read on restart (~15 lines)
-  B. No handoff file cleanup — rotation/retention (~20 lines)
-  C. No daemon log management — RotatingFileHandler (~30 lines)
-  D. Line‑tagged format untested with real Ollama — manual run (~15 min)
+CRITICAL OPEN PROBLEMS (from Phase 10.5):
+  H. Token‑level spam not detected by block‑level repetition detector.
+     The `Energy: Energy: Energy: …` failure mode produces one massive entity
+     block with a garbled field — not two identical blocks. Add a field‑length
+     sanity check in the parser (Gap H in HANDOFF).
+  I. Ollama's /api/ps cannot verify true Metal GPU memory state.
+     The 0.8s "confirmed unloaded" for a 9.6 GB model is physically impossible.
+     No reliable software verification exists without Metal profiling tools.
+  K. No guaranteed GPU memory reset mechanism. The only reliable way is a full
+     Ollama process restart, which would kill other agents. A coordinated restart
+     (check /api/ps for other models, only restart when sole user) was designed
+     but not built.
+
+PHASE 10.5 REMAINING (close before Phase 11):
+  1. Gap H — Token‑spam detection in parser (~10 lines)
+  2. Gap K — Safe Ollama restart when sole user (~30 lines)
+  3. Gap G — Wire SPECTER2 paper similarity (~20 lines)
 
 PHASE 11 PLANNED BUILD ORDER:
-  1. Community detection (Leiden/Louvain) on the 232‑node KG
-  2. Community summaries (LLM — one paragraph per cluster)
-  3. Relevance router (cheap model gates community access)
-  4. Progressive disclosure tiers (system/ → community/ → paper/)
-  5. Wire community routing into Survey Mode retrieval
+  1. Verify community detection runs cleanly in orchestrator cycle (already called)
+  2. Generate community summaries via community_summarizer.py
+  3. Wire relevance_router.py into Survey Mode retrieval
+  4. Wire progressive_disclosure.py — tiered KG disclosure
+  5. Integrate community routing end‑to‑end
 
-ARCHITECTURAL CONSTRAINTS (DO NOT VIOLATE):
-  - Do NOT remove per‑paper source prefixes or chunk_index from PMCXMLParser
-  - Do NOT use web search results as evidence — discovery only (source_type: "discovery")
-  - Do NOT remove the PMC OAI fallback from full_text_xml()
-  - Do NOT change the chunk format {"text": "...", "metadata": {...}}
-  - Do NOT add Accept:application/json to session default
-  - Do NOT delete scripts/headless_download.py or data/external/
-  - Do NOT use lstrip() for prefix removal
-  - Do NOT switch SPECTER2 cache key from DOI to S2 paper_id
-  - Do NOT switch extraction back to JSON — line‑tagged is the format
-  - Do NOT wire ingest() into parallel threads — use batch accumulate + _ingest_chunks_batch()
-  - Do NOT remove the dry‑run flag from the orchestrator
+ARCHITECTURAL CONSTRAINTS (DO NOT VIOLATE — see README §17 for full list):
+  - Do NOT switch extraction back to full‑prompt or JSON. Batched evidence‑grouped
+    line‑tagged format is the standard.
+  - Do NOT remove between‑batch Ollama resets, repetition detection, streaming output,
+    or max_retries=0 on extraction LLM.
+  - All prior constraints still apply (per‑paper source prefixes, chunk_index,
+    no lstrip(), no Accept:application/json on EPMC session, etc.)
 
-REUSABLE PRIMITIVES (already built, call directly):
+REUSABLE PRIMITIVES:
   - Orchestrator(graph_storage=gs, dry_run=True).run_once()
   - Orchestrator(graph_storage=gs, interval_minutes=60).start()
-  - WebSearchClient().discover_topics(["term1", "term2"])
-  - EuropePMCClient().full_text_xml(pmcid) — EPMC REST → PMC OAI fallback transparent
-  - PMCXMLParser().parse(xml, pmcid=pmcid, doi=doi)
-  - HybridRetriever.ingest(chunks) — deduped, won't create duplicates
   - PreExtractor.extract_paper(paper_id, chunks, graph_storage=gs)
-  - IngestProgress.is_completed(pmcid) / checkpoint(pmcid)
-  - Spector2Cache().get(doi) / put(doi, s2_id, emb)
-  - GapResolver.resolve_gaps(text, graph_storage=gs, ingest=True)
-  - run_parallel(func, items, max_workers=4) — ThreadPoolExecutor wrapper
-  - write_handoff(graph_storage=gs, orchestrator_summary=s, output_path=p)
-  - ExtractionAgent._parse_line_tagged(text) / _categories_to_line_tagged(cats)
-  - _entities_to_line_tagged(entities) — Drafter prompt formatter
+  - ExtractionAgent().extract_entities_batched(chunks, categories, query)
+  - ExtractionAgent._parse_line_tagged(text) / _merge_entity_batches(entities)
+  - PreExtractor._reset_ollama() — API unload + polling verification
+  - run_parallel(func, items, max_workers=4)
+  - WebSearchClient().discover_topics(terms)
+  - EuropePMCClient().full_text_xml(pmcid) — EPMC REST → PMC OAI fallback
 
 QUICK START:
   python phase9_verify.py --test orchestrator              # dry run (~10s)
-  python -m pytest tests/ -q --tb=short                     # 307 tests must pass
-  python phase9_europe_pmc_test.py --count 5 --coverage
+  python phase9_verify.py --test orchestrator --orchestrator-live  # live cycle
+  python -m pytest tests/ -q --tb=short                     # all tests
 ```

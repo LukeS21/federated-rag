@@ -10,6 +10,7 @@ the dominant query cost in Survey Mode (~60% of LLM calls).
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -101,7 +102,7 @@ class PreExtractor:
             summary_chunks.append({"text": s, "metadata": meta})
 
         categories = self.agent.discover_categories(summary_chunks, query)
-        entities = self.agent.extract_entities(chunks, categories, query)
+        entities = self.agent.extract_entities_batched(chunks, categories, query)
 
         logger.info("  %s: %d entity groups extracted", paper_id, len(entities))
 
@@ -126,6 +127,12 @@ class PreExtractor:
                 logger.debug("  embedding cached for %s", paper_id)
             except Exception as e:
                 logger.debug("  embedding cache skipped for %s: %s", paper_id, e)
+
+        # Force Ollama to unload and reload the model between papers.
+        # Prevents Metal backend memory fragmentation that accumulates across
+        # 100+ sequential inference requests, causing late-cycle hangs and
+        # garbage output ("TYPE: TYPE: TYPE:").
+        PreExtractor._reset_ollama()
 
         return entities
 
@@ -197,3 +204,96 @@ class PreExtractor:
             except (OSError, ValueError) as e:
                 logger.warning("Failed to load embedding for %s: %s", paper_id, e)
         return result
+
+    @staticmethod
+    def _reset_ollama(
+        model_name: str = "gemma4:e4b",
+        ollama_host: str = "http://localhost:11434",
+        timeout: float = 30.0,
+    ) -> None:
+        """Unload *model_name* from Ollama and poll until confirmed gone.
+
+        Step 1: POST ``/api/generate`` with ``keep_alive=0`` to request unload.
+        Step 2: Poll ``GET /api/ps`` (0.5 s interval) until *model_name*
+           disappears from the running‑models list — confirming GPU memory
+           is fully reclaimed by Metal.
+
+        This prevents Memory-Allocation-Fragmentation (MAF) in llama.cpp's
+        Metal backend that accumulates across 100+ sequential inference
+        requests during long daemon cycles.  Fragmented GPU buffers cause
+        indefinite hangs, garbage output, and progressive slowdown.
+
+        A fresh model load gives every batch / paper a clean slate.
+        Typical latency: 1–5 s.  Worst‑case safety valve: *timeout* seconds.
+        """
+        try:
+            import time as _time
+            import urllib.request
+
+            def _running_models() -> list[str]:
+                """Return the list of model names currently loaded in Ollama."""
+                try:
+                    r = urllib.request.Request(
+                        f"{ollama_host}/api/ps", method="GET",
+                    )
+                    data = json.loads(urllib.request.urlopen(r, timeout=5).read())
+                    return [m.get("name", "") for m in data.get("models", [])]
+                except Exception:
+                    return []
+
+            before = _running_models()
+            logger.info(
+                "Resetting Ollama — %d model(s) loaded before: %s",
+                len(before), ", ".join(before) if before else "(none)",
+            )
+            t0 = _time.monotonic()
+
+            # Step 1 — request unload
+            body = json.dumps({
+                "model": model_name,
+                "prompt": ".",
+                "keep_alive": 0,
+                "options": {"num_predict": 1},
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                f"{ollama_host}/api/generate",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=10)
+
+            # Step 2 — poll until confirmed gone
+            while _time.monotonic() - t0 < timeout:
+                _time.sleep(0.5)
+                try:
+                    ps_req = urllib.request.Request(
+                        f"{ollama_host}/api/ps",
+                        method="GET",
+                    )
+                    resp_data = json.loads(
+                        urllib.request.urlopen(ps_req, timeout=5).read()
+                    )
+                    running = [
+                        m.get("name", "")
+                        for m in resp_data.get("models", [])
+                    ]
+                    if model_name not in running:
+                        after = _running_models()
+                        logger.info(
+                            "Ollama reset complete in %.1fs — %d model(s) loaded now: %s",
+                            _time.monotonic() - t0, len(after),
+                            ", ".join(after) if after else "none — GPU memory cleared",
+                        )
+                        return
+                except Exception:
+                    continue  # transient ps failure, keep polling
+
+            after = _running_models()
+            logger.warning(
+                "Ollama reset timed out after %.0fs — %d model(s) still loaded: %s",
+                timeout, len(after), ", ".join(after) if after else "(none)",
+            )
+        except Exception:
+            logger.debug("Ollama reset failed (non-fatal)")
+            pass

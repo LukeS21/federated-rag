@@ -418,7 +418,7 @@ def _extract_one_paper(
         s = meta.get("chunk_summary", ch.get("text", "")[:200])
         summary_chunks.append({"text": s, "metadata": meta})
     categories = agent.discover_categories(summary_chunks, query)
-    entities = agent.extract_entities(chunks, categories, query)
+    entities = agent.extract_entities_batched(chunks, categories, query)
     return entities
 
 

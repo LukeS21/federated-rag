@@ -134,6 +134,7 @@ def get_chat_model(
     max_tokens: int | None = None,
     timeout: int | None = None,
     max_retries: int = 2,
+    streaming: bool = False,
     **kwargs: Any,
 ) -> ChatOpenAI:
     """Create a configured LangChain ChatOpenAI instance.
@@ -143,6 +144,9 @@ def get_chat_model(
 
     *timeout* defaults to the ``LLM_TIMEOUT`` env var (seconds), or 300
     if unset.  Local Ollama may need higher values when requests queue.
+
+    *streaming* enables SSE token‑by‑token delivery via callbacks.  Useful
+    for real‑time visibility during long‑running extraction calls.
     """
     if max_tokens is None:
         max_tokens = int(os.getenv("LLM_MAX_TOKENS", "4096"))
@@ -159,6 +163,7 @@ def get_chat_model(
             max_tokens=max_tokens,
             timeout=timeout,
             max_retries=max_retries,
+            streaming=streaming,
         )
 
     # DeepSeek provider — log privacy warning
@@ -175,6 +180,7 @@ def get_chat_model(
         max_tokens=max_tokens,
         timeout=timeout,
         max_retries=max_retries,
+        streaming=streaming,
         default_headers={
             "User-Agent": "federated-rag",
             "Accept": "application/json",

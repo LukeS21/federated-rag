@@ -17,6 +17,7 @@ Phase   Status
  8      Publication‑Scale Retrieval                                            ⬜ Deprecated → Phase 9
  9      API‑Based Literature Ingestion (Europe PMC, SPECTER2)                  ✅ Complete
 10      Autonomous Background Agent (orchestrator daemon)                      ✅ Complete
+10.5    Extraction Hardening (batched extraction, memory mgmt, streaming)        ✅ Complete
 11      Memory Cascade & Community Routing                                     ⬜ Designed, partial build
 12      Skills & Experiential Memory                                           ⬜ Designed
 13      Output Tools & Structured Writing                                      ⬜ Designed
@@ -79,24 +80,30 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 ## 2. Current State
 
-**As of 15 May 2026 — Phase 10 complete, Phase 11 underway.**
+**As of 16 May 2026 — Phase 10.5 complete, Phase 11 partial build.**
 
 | Metric | Value |
 |--------|-------|
 | Tests passing | **307** (zero failures) |
-| Knowledge graph | 232 nodes, 1,216 edges |
-| BM25 corpus | 22,000+ indexed documents |
-| Papers ingested | ~40 local PDFs + 33 external OA papers |
-| Daemon | Orchestrator runs full cycle every 60 min (web discovery → EPMC → ingest → KG → handoff) |
+| Knowledge graph | ~3,810 nodes, ~262K edges |
+| BM25 corpus | 27K+ indexed documents |
+| Papers ingested | ~43+ OA papers (multiple daemon cycles) |
+| Daemon | Orchestrator runs full cycle every 60 min (web discovery → EPMC → ingest → batched extraction → KG → community detection → handoff) |
 | LLM provider (dev) | DeepSeek API (fast iteration) |
 | LLM provider (target) | Local Ollama (gemma4:e4b + qwen3.6:35b) |
 | UI | Streamlit (`streamlit run app.py`) |
 
 ### What's Running
 
-- **Background daemon**: Autonomous cycle every 60 min — discovers new topics via web search, fetches OA papers from Europe PMC, ingests into ChromaDB + BM25, extracts entities, updates the knowledge graph, runs community detection, writes cycle handoff
+- **Background daemon**: Autonomous cycle every 60 min — discovers new topics via web search, fetches OA papers from Europe PMC, ingests into ChromaDB + BM25, extracts entities with batched evidence‑grouped line‑tagged format, updates the knowledge graph, runs community detection, writes cycle handoff. Between‑batch Ollama memory resets prevent Metal‑backend GPU fragmentation.
 - **Web UI**: Query interface with 4 modes (Survey, Deep, Quick, Sectioned), benchmark dashboard, session history, export
 - **Vision pipeline**: Extracts, filters, describes, and embeds figures from ingested PDFs
+- **Streaming extraction**: Real‑time token‑level visibility into LLM generation during entity extraction
+
+### Open Problems
+
+- **Ollama GPU memory degradation**: Despite API‑based model resets with polling verification, the llama.cpp Metal backend accumulates memory fragmentation over 100+ sequential inference requests. The `/api/ps` endpoint reports administrative state, not true Metal buffer state. Block‑level repetition detection catches the most common failure mode; token‑level spamming within individual field values is not yet caught. A safe Ollama process restart (only when the daemon is the sole Ollama user) was designed but not built.
+- **No guaranteed GPU memory verification**: No reliable software‑level verification of Metal GPU memory state exists without Metal profiling tools (PyObjC/MTLCaptureManager — complex, Mac‑only) or a full Ollama process restart (which kills other agents).
 
 ### What's Next
 
@@ -346,23 +353,41 @@ The LLM reads all retrieved chunks and identifies recurring themes, variables, e
 
 A LangGraph interrupt at a human checkpoint allows the researcher to accept, remove, or add categories.
 
-### 7.3 Two-Pass Extraction (Pass 2)
+### 7.3 Batched Entity Extraction (Pass 2b)
 
-**Pass 2a — Deterministic NER (SciSpaCy)**: Extracts genes, chemicals, diseases, cell lines, organisms. Produces ~155 candidate entity spans with types.
+**Problem (Phase 10.5):** Full-paper extraction (37+ chunks in one LLM call) produced 20K‑50K token prompts that caused gemma4:e4b to take 15 min+ per call or hang indefinitely. Two hung papers wasted 90+ minutes per daemon cycle.
 
-**Pass 2b — LLM Structuring**: The LLM normalizes ambiguous entities ("TNF-α" → "TNF-alpha"), adds missing entities not caught by NER, and structures everything into discovered categories using **line-tagged format**:
+**Solution — batched extraction:** Chunks are split into groups of 8. Each batch gets its own LLM call (~6K tokens, 30‑90s on gemma4:e4b). Results merged and deduplicated across batches (`_merge_entity_batches()` — normalizes names, keeps longest evidence). Three call sites: daemon ingest (`PreExtractor`), Survey Mode, Deep Mode.
+
+### 7.4 Evidence-Grouped Output Format (Pass 2b)
+
+**Problem:** The original line-tagged format stated evidence, source, and type per entity, causing the same evidence text to be repeated N times for N entities from the same sentence — wasting 60‑70% of output tokens.
+
+**Solution — grouped format:** Evidence, source, and type are stated once per group. Entities are listed compactly with pipe-delimited per-entity attributes:
 
 ```
-TYPE: cytokine
-ENTITY: IL-6
-DIRECTION: elevated
-EVIDENCE: IL-6 ... significantly higher in obese mice
-SOURCE: Chunk 3 | europe_pmc_xml_PMC5506916
+EVIDENCE: Polymeric nanocarriers like polyethyleneimine, dendrimers, and graphene-based materials offer efficient, non-viral alternatives...
+SOURCE: Chunk 1 | europe_pmc_xml_PMC11918598
+TYPE: material
+ENTITY: polyethyleneimine | DIRECTION: unchanged
+ENTITY: dendrimers | DIRECTION: unchanged
+ENTITY: graphene-based materials | DIRECTION: elevated
 ```
 
-This line-tagged format replaced JSON output for entity extraction in Phase 10. It eliminates the ~70% JSON parse-failure rate on local Ollama models (no braces, commas, or quotes to break) and saves ~25-30% tokens in downstream prompts. Disk serialization remains JSON (Python-controlled, no LLM involvement).
+The parser (`_parse_line_tagged`) is fully backward-compatible with the old per-entity format. Groups are separated by blank lines.
 
-### 7.4 Evidence Grounding
+### 7.5 DIRECTION Field
+
+DIRECTION is constrained to measurable changes vs baseline. Valid values: `elevated`, `decreased`, `increased`, `reduced`, `unchanged`, `upregulated`, `downregulated`, `up`, `down`. For entities where direction makes no sense (materials, methods, equipment, anatomical structures, concepts), DIRECTION is **omitted entirely** — not filled with placeholder values like "source", "characteristic", "application", "general", "N/A", or "target".
+
+### 7.6 Streaming & Repetition Detection
+
+- **Streaming output**: Extraction uses `streaming=True` on the LLM instance with `TokenStreamHandler` — tokens appear in realtime during generation. Degradation (garbage, loops, stalls) is visible immediately.
+- **Repetition detection**: The parser compares each committed entity to the previous one. Identical blocks (same entity, evidence, source, type, direction) trigger `RuntimeError` → batch aborted. Catches the most common degradation pattern (LLM stuck repeating output).
+- **Per‑batch timeout**: Each batch is wrapped in `ThreadPoolExecutor` with a 600s Python‑level timeout.
+- **No retries**: Extraction LLM created with `max_retries=0` — hung batch fails once, pipeline continues.
+
+### 7.7 Evidence Grounding
 
 For each extracted entity, the system verifies:
 - An evidence phrase exists in the source chunks
@@ -517,9 +542,12 @@ The Phase 10 orchestrator runs as an autonomous background daemon, continuousl
 └──────────────────────┬───────────────────────────────────────────┘
                        ▼
 ┌─ PreExtractor → KG ───────────────────────────────────────────────┐
-│  Sequential per paper (Ollama bottleneck).                         │
-│  Extraction uses line‑tagged output (no JSON).                    │
-│  Entity dicts → GraphBuilder → graph_storage.save()               │
+│  Sequential per paper.  Batched extraction (8 chunks/call) with     │
+│  evidence‑grouped line‑tagged format.  600s Python timeout,         │
+│  max_retries=0, block‑level repetition detection.                  │
+│  Between‑batch Ollama model resets (keep_alive=0 + /api/ps poll)    │
+│  prevent Metal‑backend GPU memory fragmentation.                    │
+│  Entity dicts → GraphBuilder → graph_storage.save()                │
 └──────────────────────┬───────────────────────────────────────────┘
                        ▼
 ┌─ Community detection ─────────────────────────────────────────────┐
@@ -558,6 +586,8 @@ orch.stop()    # clean shutdown
 
 - **Dry-run mode**: `Orchestrator(dry_run=True)` runs the full discovery→query cycle but skips all API calls beyond web search. Returns `would_have_queries` in summary.
 - **Parallel fetch + batch ingest**: Parallelizes I/O-bound EPMC search/XML fetch, batches all chunks into one ingest call (avoids redundant BM25 rebuilds).
+- **Batched extraction (8 chunks/call)**: Prevents prompt‑size hangs on large papers. Evidence‑grouped format saves 60‑70% output tokens. Streaming output provides real‑time visibility. Block‑level repetition detection aborts degraded batches. `max_retries=0` + 600s Python timeout prevent retry spirals.
+- **Between‑batch Ollama model resets**: After each extraction batch, the model is unloaded (native Ollama API `keep_alive=0`) and reloaded — confirmed by polling `GET /api/ps` until the model disappears. Prevents llama.cpp Metal‑backend memory fragmentation across 100+ sequential inferences. Auditable via before/after model‑count logging.
 - **State persistence**: `orchestrator_state.json` (cycle counter, heartbeat, total ingested, last error) read on restart for crash recovery.
 - **PID management**: `orchestrator.pid` written on start, removed on clean shutdown.
 - **Cycle handoffs**: `cycle_N_handoff.md` files with KG stats, ingest progress, cycle summary. Human `HANDOFF.md` never overwritten.
@@ -779,6 +809,11 @@ These rules preserve the system's design integrity. **Do not violate them.**
 
 ### Extraction & Output
 - Do NOT switch extraction output back to JSON — line-tagged format eliminates the 70% parse-failure rate on local models
+- Do NOT switch extraction back to full‑prompt (all chunks in one call) — batched extraction (8 chunks/call) prevents 15 min+ hangs
+- Do NOT remove the evidence‑grouped output format from the system prompt — saves 60‑70% tokens
+- Do NOT remove `max_retries=0` from the extraction LLM instance — retrying hung Ollama requests wastes time in daemon context
+- Do NOT remove streaming output (`streaming=True` + `TokenStreamHandler`) from extraction — real‑time visibility is critical for diagnosing degradation
+- Do NOT remove the block‑level repetition detector in `_parse_line_tagged`'s `_commit()` — catches the most common degradation pattern
 - Do NOT remove the line-tagged parser (`_parse_line_tagged`) or formatters (`_categories_to_line_tagged`, `_entities_to_line_tagged`)
 - Plain ASCII output only — Unicode-to-ASCII substitution enforced at extraction, synthesis, and final scrub
 
@@ -801,6 +836,8 @@ These rules preserve the system's design integrity. **Do not violate them.**
 - Do NOT make `_fetch_and_parse_for_query()` an instance method or closure — module-level functions are compatible with ThreadPoolExecutor
 - Do NOT change `write_handoff()` default path to `HANDOFF.md` — always accept explicit `output_path`
 - Do NOT remove `orchestrator_state.json` or `orchestrator.pid` management
+- Do NOT remove `_reset_ollama()` or its between‑batch call site — this is the only mechanism preventing cumulative GPU fragmentation
+- Do NOT remove the before/after model‑count logging in `_reset_ollama()` — only audit trail for memory reset effectiveness
 
 ### Security
 - Do NOT route secure-scope queries to DeepSeek API
