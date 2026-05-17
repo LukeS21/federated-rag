@@ -13,6 +13,12 @@ def mock_llm_invoke():
         yield m
 
 
+@pytest.fixture
+def mock_extraction_llm():
+    with patch.object(ExtractionAgent, "_call_llm_with_detection") as m:
+        yield m
+
+
 def test_discover_categories_parses_json(mock_llm_invoke):
     mock_llm_invoke.return_value = (
         '{"discovered_categories": [], "key_variables": [], "experimental_methods": []}'
@@ -33,9 +39,9 @@ def test_parse_json_with_markdown_fence(mock_llm_invoke):
     assert out["discovered_categories"][0]["name"] == "x"
 
 
-def test_parse_line_tagged_extraction(mock_llm_invoke):
+def test_parse_line_tagged_extraction(mock_extraction_llm):
     """extract_entities now uses line‑tagged format (Phase 10)."""
-    mock_llm_invoke.return_value = (
+    mock_extraction_llm.return_value = (
         "TYPE: animal_models\n"
         "ENTITY: C57BL/6J mice\n"
         "EVIDENCE: 20-week-old male C57BL/6J mice were fed a diet containing 45 kcal% fat\n"
@@ -64,9 +70,9 @@ def test_parse_line_tagged_extraction(mock_llm_invoke):
     assert out["animal_models"][1]["entity"] == "Sprague-Dawley rats"
 
 
-def test_parse_line_tagged_empty_result_logs_warning(mock_llm_invoke):
+def test_parse_line_tagged_empty_result_logs_warning(mock_extraction_llm):
     """Empty line‑tagged output should return an empty dict with a warning."""
-    mock_llm_invoke.return_value = "Some irrelevant text without entity blocks."
+    mock_extraction_llm.return_value = "Some irrelevant text without entity blocks."
     agent = ExtractionAgent()
     out = agent.extract_entities(
         [{"text": "text"}],
@@ -109,9 +115,9 @@ def test_categories_to_line_tagged():
     assert "IL-6" not in text
 
 
-def test_parse_line_tagged_ignores_markdown_fence(mock_llm_invoke):
+def test_parse_line_tagged_ignores_markdown_fence(mock_extraction_llm):
     """Markdown fences in output should be stripped before parsing."""
-    mock_llm_invoke.return_value = (
+    mock_extraction_llm.return_value = (
         "```\n"
         "TYPE: cytokine\n"
         "ENTITY: IL-6\n"
@@ -130,9 +136,9 @@ def test_parse_line_tagged_ignores_markdown_fence(mock_llm_invoke):
     assert out["cytokine"][0]["entity"] == "IL-6"
 
 
-def test_parse_line_tagged_handles_thinking_block(mock_llm_invoke):
+def test_parse_line_tagged_handles_thinking_block(mock_extraction_llm):
     """<think> blocks should be stripped from output."""
-    mock_llm_invoke.return_value = (
+    mock_extraction_llm.return_value = (
         "<think>Hmm, let me think about cytokines...</think>\n"
         "TYPE: cytokine\n"
         "ENTITY: TNF-alpha\n"
@@ -192,9 +198,9 @@ def test_parse_markdown_fallback_empty():
     assert result == {}
 
 
-def test_extract_entities_falls_back_to_markdown(mock_llm_invoke):
+def test_extract_entities_falls_back_to_markdown(mock_extraction_llm):
     """When line‑tagged parsing fails, the fallback should try markdown parsing."""
-    mock_llm_invoke.return_value = (
+    mock_extraction_llm.return_value = (
         "**Materials**\n\n"
         "* **Titanium:** Ti-6Al-4V alloy for implants\n"
         "* **Hydroxyapatite:** HA coatings for bone\n"

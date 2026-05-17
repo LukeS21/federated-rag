@@ -107,7 +107,7 @@ class PreExtractor:
             summary_chunks.append({"text": s, "metadata": meta})
 
         categories = self.agent.discover_categories(summary_chunks, query)
-        entities = self.agent.extract_entities_batched(chunks, categories, query)
+        entities = self.agent.extract_paper_recursive(chunks, categories, query)
 
         logger.info("  %s: %d entity groups extracted", paper_id, len(entities))
 
@@ -583,6 +583,14 @@ class PreExtractor:
         logger.info(
             "Ollama stopped in %.1fs — server confirmed dead", _wait_death,
         )
+
+        # ── GPU cooldown — give Metal / IOKit time to deallocate pages ──
+        cooldown = float(os.getenv("OLLAMA_RESTART_COOLDOWN_SECONDS", "5"))
+        if cooldown > 0:
+            logger.info(
+                "GPU cooldown: waiting %.1fs for Metal to release GPU memory", cooldown,
+            )
+            _time.sleep(cooldown)
 
         # ── Step 3: start the server ─────────────────────────────────────
         try:

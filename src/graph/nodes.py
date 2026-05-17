@@ -173,7 +173,7 @@ def extraction_node(state: AgentState) -> Dict[str, Any]:
         client_kwargs=state.get("client_kwargs"),
         callback=callback,
     )
-    entities = agent.extract_entities_batched(chunks, categories, state["user_query"], ner_entities=ner_entities)
+    entities = agent.extract_paper_recursive(chunks, categories, state["user_query"], ner_entities=ner_entities)
     return {"extracted_entities": entities}
 
 

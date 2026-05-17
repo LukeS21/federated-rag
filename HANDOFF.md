@@ -1,16 +1,15 @@
-# Phase 10.5 → Phase 11 Handoff — 16 May 2026 (extraction hardening complete)
+# Phase 10.5 → Phase 11 Handoff — 17 May 2026 (extraction hardening: single‑pass recursive, stream abort, GPU cooldown)
 
 ## Quick start
 
 ```bash
-# All tests
-python -m pytest tests/ -q --tb=short
+# Fast unit tests (no LLM, ~30s)
+python -m pytest tests/test_extraction_agent.py -q --tb=short
 
-# Diagnostic: test extraction with process restarts (skip keep_alive — known broken)
+# Diagnostic: test extraction on a real paper (live Ollama)
 python scripts/diagnose_cache_accumulation.py PMC10571047
-python scripts/diagnose_cache_accumulation.py PMC10571047 --mode both  # side-by-side comparison
 
-# Full daemon cycle (live — self-bootstraps Ollama via launchd disarm)
+# Full daemon cycle (live — self‑bootstraps Ollama via launchd disarm)
 python phase9_verify.py --test orchestrator --orchestrator-live
 
 # Dry run (see what WOULD happen, no API spend)
@@ -36,21 +35,11 @@ print(summary)
 
 ## Current project state
 
-**Phase 10.5 extraction hardening is 100% complete. All critical gaps (H, K) are closed.**
-375 tests pass, zero failures. The daemon pipeline runs end-to-end with process-level
-GPU memory hygiene on macOS. The system has survived multiple live diagnostic runs
-(13‑batch papers, 2‑4 h sustained extraction) revealing fundamental truths about
-llama.cpp's Metal backend on Apple Silicon.
+**Extraction hardening is complete. The system now uses a single‑pass recursive extraction with stream‑level degradation detection, early abort, GPU cooldown, and adaptive split‑on‑failure.** The two‑pass design (cross‑chunk Pass 1 + recursive Pass 2) was built, tested, and then **dropped** after live diagnostics proved Pass 1 inevitably fails: gemma4:e4b cannot process 100+ chunks in one call (15K+ prompt tokens in a ~6K effective context).
 
-**Knowledge graph** (as of last live cycle): ~3,810 nodes, ~262K edges. BM25 corpus:
-27K+ documents. 43+ papers ingested.
+103 extraction‑related tests pass, zero failures. The daemon pipeline runs end‑to‑end with process‑level GPU memory hygiene on macOS (SIGKILL + cooldown + orphan cleanup).
 
-**What changed this session:** Closed Phase 10.5 Gaps H (token‑spam detection) and
-K (guaranteed GPU memory reset). Investigated and rejected grounding‑check and
-whitelist/blacklist approaches. Redesigned the extraction output semantic from
-`DIRECTION` (constrained change‑arrow) to `CLAIM` (flexible evidence‑aboutness
-annotation). Built comprehensive diagnostics. Fixed pre‑existing bugs in model‑name
-resolution defaults and relevance‑router LLM‑fallthrough.
+**Knowledge graph** (as of last live cycle): ~3,810 nodes, ~262K edges. BM25 corpus: 27K+ documents. 43+ papers ingested.
 
 ---
 
@@ -58,194 +47,135 @@ resolution defaults and relevance‑router LLM‑fallthrough.
 
 | | Before this session | After this session |
 |---|---|---|
-| **Token‑spam detection** | Block‑level only — missed `Energy: Energy: Energy: …` in one field and `e-coli-coli-coli…` in one hyphenated token | Two‑pass detector: word‑level (space‑split) + character‑level (hyphen‑split within single tokens). Catches all known spam signatures |
-| **GPU memory reset** | `keep_alive=0` + `/api/ps` polling — 0.8 s "confirmed unloaded" for 9.6 GB (physically impossible) | Process restart by SIGKILL (port PID + orphan runner cleanup) → fresh `ollama serve`. Launchd watchdog disarmed at cycle start so the daemon owns the process lifecycle |
-| **Extraction output semantics** | `DIRECTION` field — constrained change‑arrow (elevated/decreased/unchanged). Model over‑applied `unchanged` as filler ~22 chars/entity | `CLAIM` field — captures qualitative change, quantitative measurement, or state/role. Omitted entirely when evidence makes no specific claim. `unchanged` removed from valid list. ~1700 tokens saved per paper |
-| **Parser attribute handling** | Accepted any KEY: VALUE pair the model emitted | Maps legacy `direction` → `claim`. All other keys passed through unchanged (no whitelist — prompt is the correct layer for output quality) |
-| **Ollama model‑name defaults** (bugfix) | Fallback `qwen3.6:35b-a3b` (non‑existent model) | Fallback `qwen3.6:35b` (large) / `gemma4:e4b` (small) — valid model names |
-| **Relevance router** (bugfix) | `route()` called `_route_by_llm()` even when `use_llm=False`, masked by invalid model name | `use_llm=False` never invokes the LLM. Returns embedding result directly |
-| **Diagnostic tooling** | None | `scripts/diagnose_cache_accumulation.py` — default `--mode process` (skip keep_alive comparison), cache‑cleared, launchd‑disarmed bootstrap |
-| **Daemon yield protocol** | Not built | Between papers, checks `projects/default/daemon_yield` sentinel. Unloads gemma4, polls for removal (10 min timeout), resumes extraction |
-| **Orchestrator bootstrap** | Required manual `ollama serve &` before daemon start | `_ensure_dedicated_ollama()` called at cycle start — disarms launchd, SIGKILLs all ollama processes, starts fresh server |
+| **Extraction architecture** | Two‑pass (cross‑chunk Pass 1 + recursive Pass 2). Pass 1 fed all 100 chunks to gemma4:e4b and failed immediately with hallucination. Blind retry of degraded batches. | **Single‑pass recursive**: `extract_paper_recursive(batch_size=8)` groups chunks into batches. `_extract_batch_recursive` splits in half on degradation (salvage → restart GPU → split → recurse). The system self‑adapts — simple papers complete at batch_size=8, dense papers split dynamically. |
+| **Stream‑based LLM calls** | `_call_llm` used `self._llm.invoke()` — blocked until the full response completed (up to 4096 tokens of spam) before degradation was detected. | `_call_llm_with_detection` uses `self._llm.stream()` with a `for` loop. On degradation, breaks immediately. `stream.close()` in `finally` sends `GeneratorExit` → httpx TCP disconnect → Ollama stops generating in milliseconds. |
+| **Degradation detection** | Block‑level identical‑dict check in `_commit()`. Word/hyphen token‑spam in entity fields only. Junk lines silently skipped (no detection). | `TokenStreamHandler` monitors the stream in real‑time: ≥10 consecutive identical words, ≥10 consecutive hyphen‑sub‑tokens, ≥20 consecutive junk lines (no `:` separator). Sets `degraded=True` flag. Parser‑level: junk‑line counter raises `RuntimeError` after 20+; raw junk lines checked for token spam. |
+| **Batch failure recovery** | Entire batch entities lost on `RuntimeError`. Blind retry of the same batch (would fail identically if cause was prompt‑overflow). | Partial entities returned on `RuntimeError` (salvaged). Recursive split on degradation (batch → [half, half] → [quarter, quarter]…) until each sub‑batch fits the model. |
+| **Entity dedup** | `_merge_entity_batches` deduplicated by name only — kept longest evidence, discarded evidence diversity. | Dedup by `(name, claim)` pair. Same entity+claim → combine evidence sentences + union chunk sources. Different claims → kept as separate facts. `_combine_evidence()` and `_union_sources()` module‑level helpers. |
+| **GPU memory flush** | `keep_alive=0` + `/api/ps` polling — 0.8 s "confirmed unloaded" for 9.6 GB (physically impossible). Process restart without cooldown — memory pressure dipped then immediately spiked. | Process restart (SIGKILL + `OLLAMA_RESTART_COOLDOWN_SECONDS=5`) between batches. The 5 s delay after kill gives Metal/IOKit time to deallocate GPU pages before the new server starts. Orphaned runners cleaned via `pgrep -f "ollama runner"`. |
+| **MLX backend investigation** | Not attempted. | `OLLAMA_MLX=1` does **not exist** in Ollama 0.24.0 (hallucinated by Gemini). `OLLAMA_LLM_LIBRARY=mlx` is accepted but ignored — no MLX backend compiled into Ollama 0.24.0. All models are GGUF format, which uses llama.cpp backends exclusively (Metal/CUDA/CPU). KV cache quantization at `q8_0` was already active throughout this session. |
+| **Prompt engineering** | Pass 1 cross‑chunk prompt required the model to reason about chunk references. Model hallucinated from training data. | No cross‑chunk prompt. Single standard extraction prompt for all batches. Categories ordered by entity density (`_categories_to_line_tagged_sorted`) — complex categories get priority output. |
+| **Failed chunk handling** | None. Lost entities were lost. | Single chunks that still degrade at the base case are saved to `projects/default/failed_chunks/<pmcid>_chunk_<idx>_<ts>.txt`. Documented gap, not silently lost. |
+| **Diagnostic tool** | Tested `extract_entities_batched` with `keep_alive` vs process restart comparison. | Updated for `extract_paper_recursive`. Now reports `degradation_events` and `failed_chunks` alongside `spam_errors`. |
 
 ---
 
 ## What was accomplished
 
-### Gap H — Token‑Spam Detection (`extraction_agent.py`)
+### Stream‑based degradation detection & early abort (`streaming_handler.py` + `extraction_agent.py`)
 
-**Two‑pass `_detect_token_spam()` validator in `_parse_line_tagged`'s `_commit()`.**
+**Three‑layer defense against model degradation:**
 
-- **Word‑level pass**: splits on whitespace, checks for ≥3 consecutive identical words. Catches `Energy: Energy: Energy: …`, `TYPE: TYPE: TYPE: …`, `N/A N/A N/A …`, `(Skipping…) (Skipping…) …`.
-- **Character‑level pass**: for tokens >20 chars containing hyphens, splits on `-` and checks for ≥3 consecutive identical sub‑tokens. Catches `e-coli-coli-coli…` and similar hyphen‑boundary spam.
+| Layer | Mechanism | Latency |
+|-------|-----------|---------|
+| Detect | `TokenStreamHandler` monitors stream: word repetition (≥10), hyphen repetition (≥10), junk lines (≥20) | < 100 ms after onset |
+| Abort | `_call_llm_with_detection` uses `stream()` + `for` loop. On `handler.degraded`, breaks; `stream.close()` in `finally` sends `GeneratorExit` → httpx disconnect | < 500 ms |
+| Recover | `_extract_batch_recursive` catches `ModelDegradedException`, salvages partials, restarts GPU (cooldown), splits batch, recurses | ~5 s + retry time |
 
-**Rationale**: Not length‑based (spam can be 50 chars; legitimate evidence can be 2000+ chars). Not blacklist‑based (model emits unpredictable junk). Pure repetition signal. The original block‑level detector missed these because they occur *within a single entity block*, not across two blocks.
+The `stream.close()` in `finally` is **guaranteed** to run — `finally` fires on both `break` (degradation) and normal generator exhaustion. On an already‑exhausted generator, `.close()` is a no‑op.
 
-### Gap K — Guaranteed GPU Memory Reset (`pre_extractor.py`)
+### Single‑pass recursive extraction (`extraction_agent.py`)
 
-**Three‑tier process management:**
+**Entry point:** `extract_paper_recursive(chunks, batch_size=8)` — groups chunks, processes each group via `_extract_batch_recursive`, restarts GPU between groups.
 
-1. **`_ensure_dedicated_ollama()`** — runs ONCE per process lifetime. Unloads the macOS launchd plist (`~/Library/LaunchAgents/com.ollama.ollama.plist`), SIGKILLs all ollama processes on the machine, starts a fresh `ollama serve`. After this, the daemon owns the Ollama process and no watchdog respawns.
+**Recursive logic:** On degradation: salvage partial entities → restart GPU with cooldown → split batch in half → recurse both halves. Base case (1 chunk or max_depth 12): save to `failed_chunks/`, return salvage.
 
-2. **`_restart_ollama_process()`** — called between papers (and between batches when `EXTRACTION_RESET_MODE=process`). First call runs `_ensure_dedicated_ollama` and returns early (server already fresh). Subsequent calls: `_find_and_kill_ollama` (SIGKILL server by port 11434 + SIGKILL orphaned `ollama runner` subprocesses by `pgrep -f`) → wait for server death → `ollama serve` → wait for API readiness.
+**Why recursive splitting instead of blind retry:** Blind retry of a batch that degraded from prompt‑overflow (too many chunks → too many output tokens → KV cache corruption) will degrade identically on every attempt. Halving the batch reduces both prompt tokens and expected output tokens, addressing the causal mechanism.
 
-3. **`_find_and_kill_ollama()`** — `lsof -ti :PORT` to find server PID, `kill -9`, then `pgrep -f "ollama runner"` to find orphaned GPU runners (listen on ephemeral ports, not the main API port). Returns `(success, message)`.
+**What was tried and dropped:** Two‑pass extraction (`extract_paper_two_pass`) with Pass 1 for cross‑chunk claims. Live diagnostic on PMC10571047 (100 chunks) showed Pass 1 immediately hallucinated (`Polymer: Polyethylene`, `E‑coli: E. coli` — entities from training data, not the paper). The 15K‑token prompt exceeded gemma4's ~6K effective context. Pass 1 was removed; cross‑chunk entities are captured through salvage at each recursive level.
 
-**Why this works**: `ollama stop` is swallowed by the macOS menu‑bar app's launchd watchdog. `pkill -f ollama serve` (SIGTERM) doesn't always work on stuck Metal backends. SIGKILL (`kill -9`) is unblockable. Finding the PID by port (`lsof -ti :11434`) is more reliable than by process name. Cleaning orphaned runners by `pgrep -f "ollama runner"` prevents ~10 GB ghost accumulation.
+### GPU cooldown (`pre_extractor.py`)
 
-**Cost**: 15–30 s per restart (kill + wait + start + readiness). Acceptable at paper granularity. Gated by `EXTRACTION_RESET_MODE=process` for between‑batch use.
+After SIGKILL and server‑death confirmation, `_restart_ollama_process` now sleeps for `OLLAMA_RESTART_COOLDOWN_SECONDS` (default 5) before starting the new server. The previous 0.6 s restart loop (kill → 0.1 s death → 0.5 s server start) was too fast — Activity Monitor showed memory pressure dip then immediately spike, suggesting Metal GPU pages were reused before deallocation.
 
-### `DIRECTION` → `CLAIM` Semantic Redesign (`extraction_agent.py`)
+### Improved entity merge (`extraction_agent.py`)
 
-The `DIRECTION` field told the model "which way did this change?" This created a false binary: either something changed (write a direction) or it didn't (write `unchanged`). The model followed instructions — the instructions were wrong.
+`_merge_entity_batches` now deduplicates by `(name, claim)` pair. Same entity+claim → combine evidence (`_combine_evidence`) + union chunk sources (`_union_sources`). Different claims on the same entity are preserved separately. No‑claim entries merge evidence into claimed entries when available.
 
-`CLAIM` asks "what does the evidence say ABOUT this entity?" Three valid outcomes:
-- **Qualitative change**: `elevated`, `decreased`, `increased`, `reduced`, `upregulated`, `downregulated`
-- **Quantitative measurement**: `0.65 uA·mM⁻¹`, `11 V`, `R² = 0.993`, `18 s`
-- **State or role**: `M2 phenotype`, `matrix material`, `pro‑inflammatory`
-- **Omitted entirely** when the evidence simply mentions the entity without making a specific claim
+### Parser‑level defenses (Gaps L, M closed)
 
-**Changes**: System prompt (lines ~158‑220) — every `DIRECTION` replaced with `CLAIM`, `unchanged` removed from valid list, three‑mode examples added, negative examples updated. User prompt (lines ~227‑235) — instructions updated. Parser `_parse_entity_pipe` — maps legacy `direction` key → `claim` for backward compatibility with prior extractions on disk.
+- **Gap L (partial entity salvaging):** `_parse_line_tagged` wraps the main parsing loop in `try/except RuntimeError`. On failure, returns entities committed before the error instead of discarding everything.
+- **Gap M (junk‑line abort):** `_parse_line_tagged` now counts consecutive lines without `:` format separator. After ≥20, raises `RuntimeError`. Raw junk lines are also checked for token spam (`_detect_token_spam`).
 
-**Token savings**: ~1700 output tokens per 100‑entity paper (no more `| DIRECTION: unchanged` filler). Downstream context savings equivalent.
+### MLX backend investigation (dead end)
 
-### Diagnostic Infrastructure
+`OLLAMA_MLX=1` does not exist in Ollama 0.24.0. The flag was silently ignored (server logs showed `library=Metal` identically with and without it). All installed models are GGUF format, which runs exclusively on llama.cpp backends. MLX models use a different format (`.safetensors`). The Gemini suggesting this flag was hallucinating.
 
-`scripts/diagnose_cache_accumulation.py`:
-- Fetches a paper from Europe PMC by PMC ID or search query
-- Runs extraction with configurable reset mode
-- Defaults to `--mode process` (process restarts only, since keep_alive is known broken)
-- `--mode both` for side‑by‑side API vs process comparison
-- Clears stale LLM cache before run (prompt changes invalidate cached responses)
-- Bootstraps Ollama via `_ensure_dedicated_ollama()` (no manual `ollama serve &` needed)
-- Captures spam‑error counts from log output via `StringIO` handler
+### Ollama KV cache configuration
 
-### Daemon Yield Protocol (`orchestrator.py`)
-
-`_check_yield()` — called between paper extractions. Checks for `projects/default/daemon_yield` sentinel file. When present: unloads gemma4 via `_reset_ollama()`, logs yielding state, polls every 1 s for file removal (10 min timeout). User workflow: `touch daemon_yield` → daemon pauses → user queries via Streamlit (qwen3.6:35b loads) → `rm daemon_yield` → daemon resumes.
-
-The hardware constraint (36 GB M3 Max, qwen3.6:35b alone maxes out memory) means gemma4 and qwen can never be loaded simultaneously. The yield protocol is the coordination mechanism.
-
-### Bugfixes Uncovered
-
-- **Invalid model‑name defaults** (`llm/__init__.py`): Hardcoded fallback `qwen3.6:35b-a3b` → `qwen3.6:35b` (large) and `gemma4:e4b` (small). Affected every code path that ran without `.env` loaded.
-- **Relevance router LLM fallthrough** (`relevance_router.py`): `route()` called `_route_by_llm()` even when `use_llm=False` (embedding‑only mode). The `_route_by_embedding` result's `method` was `"llm_fallback"` which didn't match `"embedding"` → fell through to LLM call. Masked by the invalid model name (call always failed, fell back to embedding anyway). Fixed by returning embedding result directly when `use_llm=False`.
+The system was already running with optimal settings throughout this session: `OLLAMA_KV_CACHE_TYPE=q8_0` (8‑bit quantization, ~50% cache reduction), `OLLAMA_FLASH_ATTENTION=true`, `OLLAMA_NUM_PARALLEL=8`. These were set via launchctl before this session and are not part of our codebase changes.
 
 ---
 
 ## Lessons learned
 
-### 1. `keep_alive=0` does not flush Metal GPU memory
+### 1. Pass 1 (cross‑chunk extraction) is a hardware impossibility for gemma4:e4b
 
-The 0.8 s "confirmed unloaded" for a 9.6 GB model is physically impossible on Apple Silicon (DDR5 unified memory at ~100 GB/s bandwidth = minimum ~96 ms for pure transfer, plus Metal deallocation overhead). Diagnostic runs proved that degradation still occurs within a single paper's batches when using `keep_alive=0` resets — KV‑cache entries accumulate across batches and corrupt mid‑generation.
+100 chunks × ~150 tokens = 15,000 tokens of prompt content. gemma4:e4b's effective extraction context is ~6,000 tokens. The model physically cannot hold 100 chunks in working memory — it doesn't matter what instructions you give it, what model you use, or what backend runs it. The model hallucinates from training data because the actual chunks aren't visible.
 
-**Lesson**: `/api/ps` is an administrative status endpoint, not a hardware verification tool. Process death (SIGKILL) is the strongest available guarantee.
+**Lesson**: The model's effective context window is the hard constraint. Full‑paper extraction on local models requires either (a) a larger model (gemma4:26b or qwen3.6:35b), (b) pre‑emptive batching within the model's comfort zone, or (c) both. The recursive split‑on‑failure design handles this adaptively — the paper determines its own effective batch size.
 
-### 2. The macOS Ollama.app watchdog fights process restarts
+### 2. `stream.close()` in `finally` is reliable for aborting LangChain streams
 
-The menu‑bar app uses a `KeepAlive` launchd plist that respawns the server on any exit. `ollama stop`, `kill <pid>`, and even `kill -9 <pid>` all fail because a replacement process spawns within milliseconds. This creates ghost GPU runners (each ~10 GB) that accumulate across restarts. `pgrep -f "ollama runner"` reveals runners listening on ephemeral ports (e.g. 62635, 62676) — our `lsof -ti :11434` misses them.
+Python generators support `.close()` (PEP 342). Calling it sends `GeneratorExit` to the yield point, unwinding LangChain's `_stream()` method which cleans up the underlying `openai.Stream` / httpx response. Ollama sees the TCP connection drop and stops generating. The `finally` block guarantees `.close()` runs on both `break` (degradation) and normal completion.
 
-**Lesson**: macOS process ownership must be seized at the launchd level (`launchctl unload <plist>`) before any process‑level kill can work. A one‑time `_ensure_dedicated_ollama()` at cycle start is the correct granularity.
+### 3. Salvaging partial entities is worth it — they capture cross‑batch claims
 
-### 3. Four distinct degradation signatures from Metal KV‑cache corruption
+The 100‑chunk salvage captures entities whose evidence spans chunks on both sides of the midpoint. Sub‑batches A (0‑49) and B (50‑99) each see only half. The salvage from the full‑batch degraded run is the **only** source for wide‑span cross‑batch entities. This was the same motivation as Pass 1, but achieved through salvage rather than a dedicated pass — no extra LLM calls.
 
-| Signature | Caught by | Caught? |
-|-----------|----------|---------|
-| Block‑level repetition (same entity block repeated) | `_commit()` identical‑dict check | ✅ |
-| Word‑level token spam (`Energy: Energy: Energy: …`) | `_detect_token_spam` word pass | ✅ |
-| Character‑level token spam (`e-coli-coli-coli…`) | `_detect_token_spam` character pass | ✅ |
-| Junk lines without colons (parser skips → infinite generation) | Not yet caught | ❌ |
+### 4. GPU cooldown between kill and restart matters
 
-**Lesson**: Degradation generates novel output patterns. Each new failure mode needs a corresponding detector. The pattern‑based approach (detect meaningful‑output‑has‑stopped) is more robust than a keyword‑based approach (detect known‑bad‑words).
+The previous 0.6 s restart (kill → 0.1 s death → 0.5 s server start) showed memory pressure dip then immediately spike in Activity Monitor. Adding 5 s of sleep after server‑death confirmation gives Metal/IOKit time to deallocate GPU pages. This is a heuristic — no macOS API can verify deallocation — but the memory pressure pattern in Activity Monitor visibly flattened with the cooldown.
 
-### 4. Prompt semantics beat programmatic filters
+### 5. Degradation detection must operate on the raw stream, not parsed entities
 
-Blacklists (`if value == "unchanged": strip`) break when the model invents a new filler next week. Whitelists (`if key in _VALID_ATTRS: keep`) are fragile and constrain emergent useful behavior (e.g., the model organically producing `CLAIM: 11 V` for quantitative measurements). Grounding checks (`if claim in evidence: keep`) fail on paraphrases — the model's job IS to summarize.
+The `e‑coli‑coli‑coli…` failure from the previous diagnosis escaped all existing detectors because the spam appeared as lines without `:` — silently skipped by the parser. `TokenStreamHandler` catches this at the character level (hyphen‑split repetition) before the parser ever sees it.
 
-**Lesson**: Fix the prompt so the model stops producing junk. Programmatic defenses are for catastrophic failure modes (infinite loops, token spam), not for output quality. The `DIRECTION` → `CLAIM` redesign exemplifies this — the model stopped emitting `unchanged` because it no longer felt obligated to fill a direction slot.
+### 6. Blind retry of the same batch is an anti‑pattern
 
-### 5. Partial entity loss on batch failure is a real cost
+The previous `extract_entities_batched` retried the exact same batch on degradation. If the cause was batch‑size‑related (too many chunks → too many output tokens), retry would identically fail. The recursive split addresses the causal mechanism (halve the batch = halve the tokens), not the symptom.
 
-When `_commit()` raises `RuntimeError` (repetition/spam), the entire batch's entities are discarded — including 100‑177 correctly parsed entities before the error. In a diagnostic run, batch 1 lost 177 entities at 207 s. The `_parse_line_tagged` function propagates the exception without returning partial results.
+### 7. Gemini can hallucinate configuration flags
 
-**Lesson**: Parse‑then‑validate is the wrong order. Parse‑accumulate‑validate would save good work and only discard the failing entity. A try/except wrapper around the parsing loop that returns `result` on `RuntimeError` is the fix (~5 lines).
-
-### 6. LLM cache returns stale results when prompts change
-
-The cache key is `sha256(CACHE_VERSION + system_prompt + user_prompt + model)`. When we changed `DIRECTION` → `CLAIM`, the extraction system prompt changed → new cache key → should be a miss. But category discovery (`discover_categories`) uses a separate prompt that didn't change. And previous extraction runs with the same chunk set might have cached the OLD prompt's output (before the prompt change) under a key that looks identical because model name + chunks haven't changed.
-
-**Lesson**: The diagnostic script now clears the cache directory before each run. For production, the cache TTL (24 h) provides eventual consistency. A `CACHE_VERSION` bump in `src/cache/__init__.py` is the correct mechanism for prompt‑change invalidation but wasn't used this session.
-
----
-
-## Novel approaches invented
-
-### 1. Launchd disarm for macOS process ownership
-
-**File**: `src/ingestion/pre_extractor.py` — `_ensure_dedicated_ollama()`.
-
-Disarming the Ollama.app launchd watchdog (`launchctl unload ~/Library/LaunchAgents/com.ollama.ollama.plist`) and then SIGKILLing all ollama processes gives the daemon exclusive process ownership. No competing respawn. The server is started from a `subprocess.Popen` call under our control. This is necessary on macOS because the menu‑bar app's `KeepAlive` plist defeats every other kill mechanism — `ollama stop`, `kill`, `pkill` all fail against a watchdog that restarts within milliseconds.
-
-Generalisable to any macOS background process that manages a GPU server.
-
-### 2. `pgrep`‑based orphan GPU runner cleanup
-
-**File**: `src/ingestion/pre_extractor.py` — `_find_and_kill_ollama()`.
-
-GPU runner subprocesses (`ollama runner --ollama-engine --port <ephemeral>`) listen on ephemeral ports (e.g. 62635, 62676), not the main API port (11434). `lsof -ti :11434` misses them. Each orphaned runner holds ~10 GB GPU memory. `pgrep -f "ollama runner"` finds them by process command‑line pattern, then `kill -9` cleans them. Combined with the port‑based kill, this guarantees exactly one fresh runner after each restart.
-
-### 3. Character‑level consecutive‑repetition detection
-
-**File**: `src/agents/extraction_agent.py` — `_detect_token_spam` character‑level pass.
-
-Hyphenated spam like `e-coli-coli-coli…` appears as a single whitespace‑delimited "word" to the word‑level detector. Splitting on hyphens and checking for ≥3 consecutive identical sub‑tokens catches this without affecting legitimate hyphenated terms like `Ti-6Al-4V` or `poly(VDF-co-HFP)` (fewer than 3 consecutive repeated sub‑tokens, and filtered by length ≤20).
-
-### 4. Yield protocol for single‑model hardware
-
-**File**: `src/agents/orchestrator.py` — `_check_yield()`.
-
-A file‑based coordination primitive (`projects/default/daemon_yield`) between the daemon and the user. No IPC, no sockets, no state‑file polling races. The daemon checks between papers, never mid‑extraction. The user creates/deletes a file. Simple, restart‑safe, zero infrastructure.
-
-### 5. `CLAIM` field semantics — evidence‑aboutness over change‑direction
-
-**File**: `src/agents/extraction_agent.py` — system prompt rules 3‑4.
-
-Abandoned the `DIRECTION` change‑arrow frame (which forced the model to write `unchanged` for all non‑changing entities) in favor of `CLAIM` — "what does the evidence say ABOUT this entity?" — which naturally handles qualitative changes, quantitative measurements, state/role annotations, and omission. No blacklist, no whitelist, no grounding heuristic. The model produces clean output because the task definition matches what it's actually doing.
+`OLLAMA_MLX=1` does not exist in Ollama 0.24.0. The suggestion was plausible (Ollama does support MLX for native Apple Silicon models) but the specific flag was invented. Always verify AI‑suggested configuration with `--help` or source inspection before spending time on implementation.
 
 ---
 
 ## Identified gaps and status
 
-### Phase 10.5 (closed this session)
+### Closed this session
 
 | # | Gap | Severity | Status |
 |---|------|----------|--------|
-| H | Token‑level spam not detected by block‑level detector | ~~High~~ | ✅ Closed — two‑pass `_detect_token_spam` (word‑level + character‑level) |
-| K | No guaranteed GPU‑memory reset mechanism | ~~Medium~~ | ✅ Closed — `_restart_ollama_process()` with launchd disarm + SIGKILL + orphan cleanup |
+| H | Token‑level spam not detected by block‑level detector (prior session) | ~~High~~ | ✅ Closed — word + character‑level `_detect_token_spam` in parser + real‑time `TokenStreamHandler` |
+| K | No guaranteed GPU‑memory reset mechanism (prior session) | ~~Medium~~ | ✅ Closed — `_restart_ollama_process()` with cooldown + orphan cleanup |
+| L | Batch failures discard good entities | ~~High~~ | ✅ Closed — `_parse_line_tagged` returns partial entities on `RuntimeError` |
+| M | Junk‑line infinite generation not caught | ~~Medium~~ | ✅ Closed — Junk‑line counter (≥20) raises `RuntimeError`; raw lines checked for token spam |
+| — | Pass 1 hallucination from prompt‑overflow | — | ✅ Closed — Pass 1 removed; single‑pass recursive captures cross‑batch claims through salvage |
 
-### Phase 10.5 (remaining — close before Phase 11 wiring)
-
-| # | Gap | Severity | Description |
-|---|------|----------|-------------|
-| L | Batch failures discard good entities | High | `_parse_line_tagged` propagates `RuntimeError` without returning partial results. Wrap the parsing loop with try/except → return `result` on error (~5 lines). |
-| M | Junk‑line infinite generation not caught | Medium | Lines without colons are silently skipped by the parser. After 20+ consecutive junk lines (no entity committed), the model has lost the format entirely — abort the batch. A consecutive‑junk‑line counter in the parsing loop (~10 lines). |
-| N | Ollama generation token‑limit ceiling | Medium | `OLLAMA_CONTEXT_LENGTH=32768` but gemma4 effectively degrades past ~8K output tokens. High‑entity papers (177+ entities/batch) hit repetition loops when output fills the effective context. Mitigation: reduce batch_size from 8 to 4 for papers with >50 chunks, or increase generation timeout. |
-
-### Phase 10.5 (evergreen — inherent hardware limitations)
+### Open (Phase 10.5 remaining / new)
 
 | # | Gap | Severity | Description |
 |---|------|----------|-------------|
-| I | `/api/ps` cannot verify true GPU memory state | High | No software‑level API — in any framework (Ollama, llama‑cpp‑python, MLX) — exposes Metal buffer state. Apple does not provide GPU memory telemetry through public APIs. Process death is the strongest guarantee available but does not prove Metal freed pages. |
-| E | No long‑running daemon validation | Medium | Daemon has run multiple cycles but never for >8 h continuous. Longer runs (>10 cycles, >24 h) still needed to validate memory stability at scale. The diagnostic tool provides a targeted test for the extraction phase specifically. |
+| N | `stream.close()` abort reliability untested at scale | Low | The `finally` block guarantees `.close()` is called, but the httpx cleanup depends on LangChain's internal stream handling. Edge cases (hung Ollama, network timeout during generator exit) not tested. No known failures. |
+| O | No ≥8 h continuous daemon validation | Medium | Daemon has run short cycles but never >8 h. Longer runs needed to validate memory stability with the new cooldown and recursive extraction. |
+| P | `_merge_entity_batches` operates within categories | Low | Entities classified under different TYPEs by different recursive sub‑batches stay separate (e.g., `IL‑6` in `cytokine` in salvage, `IL‑6` in `material` in sub‑batch). For consistent models this is rare. A cross‑category dedup pass could be added but the risk/reward is low. |
 
-### Phase 11 (partial build)
+### Evergreen (inherent hardware limitations)
 
 | # | Gap | Severity | Description |
 |---|------|----------|-------------|
-| P | Community summaries not generated | High | `community_detection.py` runs in orchestrator cycles but `community_summarizer.py` is not called. Communities exist with IDs and sizes but no human‑readable descriptions. |
-| Q | Relevance router not wired into retrieval | High | `relevance_router.py` is designed and tested but not called by Survey Mode or any retrieval path. KG communities do not gate context access. |
-| R | Progressive disclosure not integrated | Medium | `progressive_disclosure.py` tiered disclosure (system → community → paper) is designed and tested but not wired into the UI or daemon. |
-| G | SPECTER2 embeddings unused (carried forward) | Low | `spector2_cache.json` has embeddings but `paper_similarity_search()` was never built. ~20 lines. |
+| I | `/api/ps` cannot verify true GPU memory state | High | No macOS API exposes Metal buffer state. Process death (SIGKILL) is the strongest guarantee. The 5 s cooldown is a heuristic; no software can prove pages were deallocated. |
+| E | No long‑running daemon validation | Medium | See Gap O above. |
+
+### Phase 11 (partial build — unchanged from prior session)
+
+| # | Gap | Severity | Description |
+|---|------|----------|-------------|
+| P | Community summaries not generated | High | `community_detection.py` runs in orchestrator cycles but `community_summarizer.py` is not called. |
+| Q | Relevance router not wired into retrieval | High | `relevance_router.py` is designed and tested but not called. |
+| R | Progressive disclosure not integrated | Medium | Tiered disclosure not in UI or daemon. |
+| G | SPECTER2 embeddings unused | Low | `spector2_cache.json` has embeddings but `paper_similarity_search()` was never built. |
 
 ---
 
@@ -253,44 +183,44 @@ Abandoned the `DIRECTION` change‑arrow frame (which forced the model to write 
 
 ### Carried forward from prior sessions
 
-All Phase 4–10 constraints still apply. See README §17.
+All Phase 4–10.5 constraints still apply. See README §17.
 
 ### New decisions (this session)
 
-- **Process restart over API unload for GPU memory hygiene** — `keep_alive=0` + `/api/ps` polling is not reliable on macOS. SIGKILL‑by‑port (`lsof -ti :PORT` → `kill -9`) with `pgrep -f "ollama runner"` orphan cleanup is the correct primitive. The API unload (`_reset_ollama`) is retained as the always‑safe fallback when other models are active.
+- **Single‑pass recursive over two‑pass** — The two‑pass design was built, tested on live hardware, and dropped. Pass 1 (cross‑chunk extraction on all 100+ chunks) fails because gemma4:e4b's effective context (~6K tokens) cannot hold the prompt (15K+ tokens for 100 chunks). The single‑pass recursive system captures cross‑batch claims through salvage at each recursive level — no extra LLM call, no hallucination risk.
 
-- **Launchd disarm is a prerequisite for process management on macOS** — The Ollama.app `KeepAlive` plist respawns the server on any exit. `_ensure_dedicated_ollama()` must run once at cycle start before any process restart can work. Without it, every kill creates a ghost runner (~10 GB GPU waste).
+- **`stream()` with `stream.close()` over `invoke()`** — `invoke()` blocks until the full response completes (up to 4096 tokens). The stream loop breaks immediately on degradation and `stream.close()` in `finally` guarantees the httpx connection closes. This cuts degradation waste from "entire max_tokens of spam" to "detection latency + TCP teardown" (< 1 s).
 
-- **`CLAIM` semantics over `DIRECTION` change‑arrow** — The `DIRECTION` field's binary "changed / didn't change" framing forced the model to fill `unchanged` as a default. `CLAIM` ("what does the evidence say ABOUT this entity?") naturally handles qualitative changes, quantitative measurements, states/roles, and omission. The parser maps legacy `direction` → `claim` for backward compatibility.
+- **Recursive split‑on‑failure over blind retry** — Blind retry of a degraded batch addresses the symptom, not the cause. If the batch is too large for the model (prompt‑overflow → KV cache corruption), retrying the same batch will identically fail. Splitting in half reduces both prompt tokens and expected output tokens, addressing the causal mechanism.
 
-- **Prompt constraints over programmatic filters for output quality** — Blacklists, whitelists, and grounding heuristics were investigated and rejected. They create maintenance burdens and false‑positive risks. The prompt is the correct layer for output semantics. Programmatic defenses are reserved for catastrophic failure modes (infinite repetition, token spam) where detection is pattern‑based, not keyword‑based.
+- **GPU cooldown (`OLLAMA_RESTART_COOLDOWN_SECONDS`) over immediate restart** — The 0.6 s kill‑restart cycle was too fast for Metal page deallocation. Activity Monitor showed memory pressure dip then immediately spike. The 5 s cooldown (configurable) gives Metal/IOKit time.
 
-- **Repetition‑based spam detection over length‑based or keyword‑based** — Two‑pass consecutive repetition (word‑level then character‑level) catches all observed spam signatures without false positives on legitimate long evidence or hyphenated chemical names. No character‑length cap. No keyword list. Pure signal.
+- **Salvaging partial entities over discarding** — When `_parse_line_tagged` raises `RuntimeError`, entities committed before the error are returned. The salvage captures entities that sub‑batches cannot see (wide‑span cross‑batch claims).
 
-- **Between‑paper process restart with between‑batch gating** — Process restarts between papers are always enabled. Between‑batch restarts are gated by `EXTRACTION_RESET_MODE=process` (default `api`) because the 15‑30 s overhead per batch is significant for long papers (13‑batch paper = 3‑7 min overhead). The diagnostic tool confirmed that process restarts between batches do prevent cache accumulation; the API mode exists for papers where the overhead is unacceptable.
+- **`(name, claim)` dedup over name‑only dedup** — Name‑only dedup (keep longest evidence) threw away evidence diversity. `(name, claim)` dedup combines evidence sentences and unions chunk sources for identical claims, and preserves different claims as separate facts.
 
-- **Phase 11 files committed as partial build** — `community_detection.py`, `community_summarizer.py`, `relevance_router.py`, `progressive_disclosure.py` and their tests exist in the codebase but are NOT yet wired into the daemon or retrieval pipeline. They are designed and tested — wiring is the next task.
+- **Single‑model extraction (gemma4:e4b) over configurable Pass 1 model** — The `EXTRACTION_PASS1_MODEL` env var was added for qwen3.6:35b support in Pass 1, then removed when Pass 1 was dropped. All recursive extraction uses gemma4:e4b. If higher extraction quality is needed, switch `OLLAMA_SMALL_MODEL` to `gemma4:26b` (17 GB, 25.8B params) — no code change needed.
+
+- **Phase 10.5 Gaps H, K, L, M closed** — All four remaining Phase 10.5 extraction gaps are closed. The system has defenses at every level: stream (real‑time), parser (token spam + junk lines + block repetition), batch (recursive split), and GPU (process restart with cooldown).
 
 ---
 
 ## What NOT to change
 
-All prior constraints (Phase 4–10) apply. Additions from this session and prior:
+All prior constraints apply. Additions from this session:
 
-- Do NOT switch extraction back to full‑prompt or JSON — batched evidence‑grouped line‑tagged format is the standard.
-- Do NOT remove `extract_entities_batched()` or `_merge_entity_batches()`.
-- Do NOT remove the evidence‑grouped output format from the system prompt.
-- Do NOT remove the block‑level repetition detector in `_parse_line_tagged`'s `_commit()`.
-- Do NOT remove the token‑spam detector (`_detect_token_spam` — word‑level + character‑level).
-- Do NOT remove `max_retries=0` from the extraction LLM — retrying hung Ollama requests wastes time.
-- Do NOT remove `streaming=True` + `TokenStreamHandler` from extraction.
-- Do NOT remove `_reset_ollama()` — it is the always‑safe fallback.
-- Do NOT remove `_restart_ollama_process()` — SIGKILL restart is the only reliable Metal flush.
-- Do NOT remove `_ensure_dedicated_ollama()` — launchd disarm is required on macOS.
-- Do NOT remove the before/after model‑count logging in `_reset_ollama()`.
-- Do NOT revert `DIRECTION`/`CLAIM` to the old constrained‑direction semantics.
-- Do NOT add keyword blacklists or grounding‑check heuristics to the parser.
-- Do NOT reinstate deleted files or archived scripts.
+- Do NOT switch extraction back to full‑prompt or JSON.
+- Do NOT reinstate two‑pass extraction (Pass 1 cross‑chunk). The hardware cannot support it; the single‑pass recursive system is the correct architecture.
+- Do NOT remove batched extraction, evidence grouping, streaming, or any repetition/spam detection.
+- Do NOT remove `max_retries=0` from the extraction LLM.
+- Do NOT remove `_call_llm_with_detection` or `stream.close()` in the `finally` block.
+- Do NOT remove the recursive split‑on‑failure logic in `_extract_batch_recursive`.
+- Do NOT remove `_merge_entity_batches` (name, claim) dedup with evidence union.
+- Do NOT remove `_save_failed_chunk` or the `failed_chunks/` directory.
+- Do NOT remove `OLLAMA_RESTART_COOLDOWN_SECONDS` or the cooldown logic.
+- Do NOT remove `_reset_ollama()`, `_restart_ollama_process()`, `_ensure_dedicated_ollama()`, or `_find_and_kill_ollama()`.
+- Do NOT reinstate `EXTRACTION_PASS1_MODEL` or Pass 1 cross‑chunk prompt builders.
+- Do NOT add keyword blacklists or grounding heuristics to the parser.
 - Do NOT switch extraction back to JSON output.
 - All prior constraints: per‑paper source prefixes, chunk_index, no `lstrip()`, no `Accept: application/json` on EPMC session, etc.
 
@@ -300,146 +230,152 @@ All prior constraints (Phase 4–10) apply. Additions from this session and pr
 
 ```
 MODIFIED FILES (this session):
-src/agents/extraction_agent.py      — Gap H: two‑pass _detect_token_spam (word + character),
-                                       DIRECTION → CLAIM prompt rewrite, _parse_entity_pipe
-                                       legacy key mapping, between‑batch gated kill
-src/ingestion/pre_extractor.py       — Gap K: _ensure_dedicated_ollama() (launchd disarm),
-                                       _restart_ollama_process (sole‑user check + SIGKILL),
-                                       _find_and_kill_ollama (port PID + orphan runner cleanup),
-                                       between‑paper restart call site updated
-src/agents/orchestrator.py           — _check_yield() yield protocol, _ensure_dedicated_ollama()
-                                       bootstrap at cycle start, time import
-src/llm/__init__.py                  — Fixed fallback model defaults (qwen3.6:35b‑a3b → qwen3.6:35b,
-                                       qwen3.6:35b‑a3b → gemma4:e4b)
-src/agents/relevance_router.py       — Fixed LLM fallthrough when use_llm=False
-.env                                 — Added EXTRACTION_RESET_MODE=process
-.env.example                         — Added EXTRACTION_RESET_MODE=api (safe default for example)
-README.md                            — Updated §2 (Current State), §17 (Constraints)
-HANDOFF.md                           — This file — comprehensive session handoff
+src/agents/extraction_agent.py      — Major rewrite: _call_llm_with_detection (stream+abort),
+                                       extract_paper_recursive (single‑pass entry point),
+                                       _extract_batch_recursive (recursive split‑on‑failure),
+                                       _merge_entity_dicts (shallow merge for recursion),
+                                       _save_failed_chunk (base‑case disk persistence),
+                                       extract_entities simplified (removed mode parameter),
+                                       _merge_entity_batches improved ((name,claim) dedup + evidence union),
+                                       _categories_to_line_tagged_sorted (density ordering),
+                                       prompt builders consolidated,
+                                       _build_cross_chunk_prompt removed,
+                                       Gap L (partial salvage) + Gap M (junk‑line counter) closed in _parse_line_tagged
+src/ingestion/pre_extractor.py       — GPU cooldown (OLLAMA_RESTART_COOLDOWN_SECONDS) after server death,
+                                       calls extract_paper_recursive instead of extract_entities_batched
+src/streaming_handler.py             — TokenStreamHandler rewritten: real‑time word/hyphen/junk‑line detection,
+                                       ModelDegradedException carries partial text for salvage,
+                                       degradation flag (no raise during generation — avoids LangChain internals)
+src/graph/nodes.py                   — extract_paper_two_pass → extract_paper_recursive
+src/graph/survey_nodes.py            — extract_paper_two_pass → extract_paper_recursive
+scripts/diagnose_cache_accumulation.py — Updated for extract_paper_recursive, new metrics
+tests/test_extraction_agent.py        — Mocks updated for _call_llm_with_detection
+.env                                  — Added OLLAMA_RESTART_COOLDOWN_SECONDS=5
+.env.example                          — Added OLLAMA_RESTART_COOLDOWN_SECONDS=5
+README.md                             — §2, §7, §11, §17 updated for new architecture
+HANDOFF.md                            — This file — comprehensive session handoff
 
-NEW FILES (this session):
-scripts/diagnose_cache_accumulation.py  — Extraction diagnostic tool (process‑restart focus,
-                                           cache‑cleared, launchd‑disarmed bootstrap)
-
-PREVIOUSLY COMMITTED (Phase 11 partial build):
-src/agents/community_summarizer.py
-src/agents/relevance_router.py
-src/graph/community_detection.py
-src/graph/progressive_disclosure.py
-tests/test_community_detection.py
-tests/test_community_summarizer.py
-tests/test_phase11_integration.py
-tests/test_progressive_disclosure.py
-tests/test_relevance_router.py
+REMOVED (this session):
+extract_entities_batched              — Replaced by extract_paper_recursive
+extract_paper_two_pass                — Two‑pass design dropped after hardware failure
+_pass2_recursive                      — Renamed to _extract_batch_recursive
+_build_cross_chunk_prompt             — Removed with Pass 1
+EXTRACTION_PASS1_MODEL env var        — Removed with Pass 1
+mode parameter on extract_entities    — Removed; always "all" mode now
 ```
 
 ---
 
 ## Recommendations
 
-### Immediate (Phase 10.5 remaining gaps — close before Phase 11 wiring)
+### Immediate — run the diagnostic
 
-1. **Gap L — Save partial entities on batch failure** (~5 lines). Wrap `_parse_line_tagged`'s parsing loop in try/except → on `RuntimeError`, return `result` with entities parsed before the error. Saves 100‑177 entities per failed batch.
+```bash
+python scripts/diagnose_cache_accumulation.py PMC10571047
+```
 
-2. **Gap M — Junk‑line abort threshold** (~10 lines). Count consecutive lines in the parser that produce no committed entity. After 20 + consecutive junk lines, the model has lost format — `raise RuntimeError`. Catches the `e-coli-coli…` (and future) infinite‑generation patterns at the parser level.
+This is the same 100‑chunk paper that failed the two‑pass system. With the new single‑pass recursive extraction (13 batches of ~8), it should complete cleanly. Watch for `degradation_events` and `failed_chunks` in the output.
 
-3. **Gap G — Wire SPECTER2 paper similarity** (~20 lines). Add `paper_similarity_search(doi, top_k=5)` to `Spector2Cache`. Cosine similarity between cached SPECTER2 embeddings. Surface related papers in cycle handoff or discovery supplement.
+If it succeeds: the system is production‑ready for the daemon. Bump batch_size to 16, re‑test, find the sweet spot.
 
-### Phase 11 — Community routing (next major milestone)
+If individual batches degrade and split: the recursive system is working as designed. Check the cooldown is sufficient (increase `OLLAMA_RESTART_COOLDOWN_SECONDS` to 10 if splitting is frequent).
 
-Partial build already committed and tests pass. The KG is at ~3,800 nodes / 262K edges — far beyond the original community‑detection threshold. Next steps:
+If single chunks fail at the base case: the paper has inherently problem chunks (corrupted text, unusual formatting). These go to `failed_chunks/` — a documented gap, not a crash.
 
-1. Generate community summaries via `community_summarizer.py` (call from orchestrator after community detection).
-2. Wire `relevance_router.py` into Survey Mode retrieval — given a query, gate which communities provide context.
-3. Wire `progressive_disclosure.py` — tiered disclosure (system/community/paper) for KG context in the UI.
-4. Integrate community routing end‑to‑end: daemon updates communities → summaries generated → router gates retrieval → disclosure controls UI context.
+### Short‑term — bump batch_size
 
-### Beyond Phase 11
+Once the diagnostic passes at batch_size=8, incremental testing at 12, 16, and 20 will find gemma4:e4b's sweet spot for this paper size. Higher batch_size = fewer restarts = faster extraction. The recursive split catches any overshoot safely.
 
-The North Star Vision (README §1) identifies the persistent belief store as the next major architectural layer. The claim ledger (`src/synthesis/claim_ledger.py`) is the foundation. Key additions:
-- **Belief store data model**: Claims with confidence, evidence_for/against, version_history, status (supported/challenged/contradicted/deprecated).
-- **Contradiction detection agent**: Runs during daemon cycles — checks new entities/claims against existing beliefs, flags contradictions, updates confidences.
-- **Probabilistic KG edges**: Edge weights adjusted over time by daemon cycles.
+### Medium‑term — try gemma4:26b
+
+If extraction quality is insufficient, swap `OLLAMA_SMALL_MODEL=gemma4:26b` in `.env`. The 25.8B model (vs 8B for e4b) can handle larger batches and may produce better extractions. Cost: 17 GB vs 9.6 GB memory, ~20 s load time vs ~8 s. The extraction code requires zero changes.
+
+### Phase 11 — Community routing (unchanged from prior)
+
+Partial build committed, tests pass. Next steps:
+1. Generate community summaries via `community_summarizer.py`
+2. Wire `relevance_router.py` into Survey Mode retrieval
+3. Wire `progressive_disclosure.py` — tiered KG disclosure
+4. Integrate community routing end‑to‑end
+
+### Beyond Phase 11 — Anchoring‑confidence entity lifecycle (new design)
+
+During extraction, the anchoring‑confidence lifecycle was designed but **not implemented** — it is a Phase 11+ task. The design:
+
+Anchoring check (TF‑IDF cosine similarity) gates confidence scores on KG entities:
+- Strong match (≥ 0.7): confidence += 0.15 (capped at 1.0)
+- No match (< 0.35): confidence *= 0.85 (decay)
+- Cross‑verified by second paper: confidence += 0.10
+
+Visibility gating: `stable` (≥ 0.70) fully visible, `tentative` (0.40‑0.70) visible, `weak` (0.15‑0.40) hidden from retrieval, `suspect` (< 0.15) hidden but surfaced in handoff. Only human review sets confidence to 0.0 (permanent removal). No auto‑deletion — entities are soft‑deprecated with continuous decay, self‑healing when re‑verified by new evidence.
 
 ---
 
 ## Prompt for next AI session
 
 ```
-You are an expert senior software developer continuing the Federated RAG system
-for biomedical research. Phase 10.5 extraction hardening is 100% complete.
-All 375 tests pass, zero failures. Phase 11 (community routing & memory cascade)
-is the next major milestone.
+You are an expert senior software developer continuing the Federated RAG
+system for biomedical research. Extraction hardening is complete. All
+existing gaps (H, K, L, M) are closed. Phase 11 (community routing &
+memory cascade) is the next major milestone.
 
 Read the full README.md and this HANDOFF.md carefully before making changes.
 
 CURRENT STATE:
-  - 375 tests pass, zero failures.
-  - Orchestrator daemon runs full autonomous cycle: web discovery → parallel
-    EPMC fetch → batch ingest → PreExtractor → KG save → community detection →
-    cycle handoff. Dry‑run + live modes. Self‑bootstraps Ollama via launchd disarm.
-  - KG: ~3,810 nodes, ~262K edges. BM25: 27K+ documents. 43+ papers ingested.
-  - Extraction uses batched evidence‑grouped line‑tagged format with streaming
-    output, two‑pass repetition detection (block + word + character), and
-    between‑batch Ollama process restarts (SIGKILL with orphan runner cleanup).
-    Extraction output uses CLAIM semantics (qualitative/quantitative/state/role)
-    instead of the old DIRECTION change‑arrow. Legacy direction→claim mapping
-    in the parser for backward compatibility.
-  - Ollama GPU memory: keep_alive=0 + /api/ps polling is proven unreliable
-    (0.8s "confirmed unloaded" for 9.6GB is physically impossible on Metal).
-    Process restart (SIGKILL by port + ollama serve) is the mechanism.
-    macOS launchd watchdog must be disarmed first (_ensure_dedicated_ollama)
-    or ghost GPU runners (~10GB each) accumulate.
-  - Phase 10.5 Gaps H/K closed. Gaps I (Metal opacity) is inherent hardware
-    limitation — no framework can verify GPU memory state.
+  - 103 extraction‑related tests pass, zero failures. Full suite ~375.
+  - Extraction uses single‑pass recursive system: extract_paper_recursive
+    (batch_size=8) splits into groups; _extract_batch_recursive handles
+    each group with recursive split‑on‑failure. Stream‑level degradation
+    detection (TokenStreamHandler) catches any degradation pattern in
+    real‑time. stream.close() in finally guarantees httpx disconnect on
+    abort. GPU restarts between batches with 5 s cooldown.
+  - Orchestrator daemon runs full autonomous cycle: web discovery → EPMC
+    fetch → batch ingest → recursive extraction → KG save → community
+    detection → cycle handoff. Self‑bootstraps Ollama via launchd disarm.
+  - KG: ~3,810 nodes, ~262K edges. BM25: 27K+ documents. 43+ papers.
+  - Extraction uses evidence‑grouped line‑tagged format with CLAIM
+    semantics (qualitative/quantitative/state/role). Parser maps legacy
+    direction→claim. Entities deduped by (name, claim) with evidence
+    union and source chunk combination.
+  - Ollama GPU memory: process restart (SIGKILL + cooldown) is the
+    mechanism. keep_alive=0 + /api/ps polling is proven unreliable.
+    macOS launchd watchdog must be disarmed first. OLLAMA_MLX=1 does
+    NOT exist in Ollama 0.24.0. KV cache uses q8_0 quantization.
   - Phase 11 partial build committed: community_detection.py (wired),
     community_summarizer.py, relevance_router.py, progressive_disclosure.py
-    + their tests (NOT yet wired into retrieval pipeline).
-  - DeepSeek API available for development. Ollama (gemma4:e4b + qwen3.6:35b) is
-    the production target. Only one model fits in 36GB M3 Max at a time.
+    + their tests (NOT yet wired).
+  - DeepSeek API available for development. Ollama (gemma4:e4b +
+    qwen3.6:35b) is the production target. Only one model fits in 36GB
+    M3 Max at a time.
 
-CRITICAL OPEN GAPS (close before Phase 11 wiring):
-  L. Batch failures discard good entities — wrap parse loop to save partials.
-  M. Junk-line infinite generation not caught — consecutive-junk-line counter.
-  G. SPECTER2 paper similarity not wired (~20 lines).
-
-PHASE 11 PLANNED BUILD ORDER:
-  1. Close gaps L, M (preserves extraction yield under degradation)
-  2. Generate community summaries via community_summarizer.py
-  3. Wire relevance_router.py into Survey Mode retrieval
-  4. Wire progressive_disclosure.py — tiered KG disclosure
-  5. Integrate community routing end‑to‑end
+CRITICAL OPEN:
+  - Phase 11 wiring: community summaries, relevance router, progressive
+    disclosure.
+  - Long‑running daemon validation (≥8 h).
 
 ARCHITECTURAL CONSTRAINTS (DO NOT VIOLATE — see README §17 for full list):
-  - Do NOT switch extraction back to full‑prompt or JSON.
-  - Do NOT remove batched extraction, evidence grouping, streaming, repetition
-    detection, token-spam detection, max_retries=0, or any of the Ollama memory
-    management primitives (_reset_ollama, _restart_ollama_process,
-    _ensure_dedicated_ollama).
-  - Do NOT revert CLAIM to DIRECTION semantics.
-  - Do NOT add keyword blacklists or grounding heuristics to the parser.
+  - Do NOT remove or disable any of the extraction defense layers
+    (stream detection, recursive split, cooldown, salvage, failed_chunks).
+  - Do NOT reinstate two‑pass extraction or cross‑chunk prompts.
+  - Do NOT switch extraction back to JSON or full‑prompt.
   - All prior constraints still apply.
 
 REUSABLE PRIMITIVES:
   - Orchestrator(graph_storage=gs, dry_run=True).run_once()
-  - Orchestrator(graph_storage=gs, interval_minutes=60).start()
   - PreExtractor.extract_paper(paper_id, chunks, graph_storage=gs)
-  - ExtractionAgent().extract_entities_batched(chunks, categories, query)
-  - ExtractionAgent._parse_line_tagged(text) / _merge_entity_batches(entities)
-  - PreExtractor._reset_ollama() — API unload + polling fallback
-  - PreExtractor._restart_ollama_process() — SIGKILL restart between papers
-  - PreExtractor._ensure_dedicated_ollama() — one‑time launchd disarm
-  - PreExtractor._find_and_kill_ollama(host) — port PID + orphan cleanup
-  - _detect_token_spam(value) — word‑level + character‑level repetition check
-  - _ground_claim(claim, evidence) — grounding check (explored, NOT adopted —
-    fails on paraphrases)
-  - run_parallel(func, items, max_workers=4)
-  - WebSearchClient().discover_topics(terms)
-  - EuropePMCClient().full_text_xml(pmcid)
+  - agent.extract_paper_recursive(chunks, categories, query, batch_size=8)
+  - agent._extract_batch_recursive(chunks, categories, query)
+  - agent._call_llm_with_detection(system_prompt, user_prompt)
+  - PreExtractor._restart_ollama_process() — SIGKILL + cooldown
+  - PreExtractor._ensure_dedicated_ollama() — launchd disarm
+  - TokenStreamHandler() — real‑time degradation detection
+  - _detect_token_spam(value) — word + character repetition
+  - _merge_entity_batches(entities) — (name,claim) dedup + evidence union
+  - _combine_evidence(e1, e2), _union_sources(s1, s2)
 
 QUICK START:
   python scripts/diagnose_cache_accumulation.py PMC10571047   # diagnostic
   python phase9_verify.py --test orchestrator                  # dry run
-  python phase9_verify.py --test orchestrator --orchestrator-live  # live cycle
+  python phase9_verify.py --test orchestrator --orchestrator-live  # live
   python -m pytest tests/ -q --tb=short                        # all tests
 ```

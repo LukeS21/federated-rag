@@ -11,13 +11,14 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from pathlib import Path
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.cache.llm_cache import get_cache
-from src.cache.llm_cache import get_cache
 from src.llm import get_chat_model
+from src.streaming_handler import ModelDegradedException
 from src.unicode_map import scrub_unicode
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,53 @@ logger = logging.getLogger(__name__)
 def _strip_thinking(text: str) -> str:
     """Remove <think>...</think> blocks from Qwen outputs."""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def _combine_evidence(existing: str, new: str) -> str:
+    """Combine two evidence strings, deduplicating exact matches."""
+    if not existing:
+        return new
+    if not new:
+        return existing
+    existing_set = {e.strip() for e in existing.split(" | ") if e.strip()}
+    new_set = {e.strip() for e in new.split(" | ") if e.strip()}
+    combined = existing_set | new_set
+    return " | ".join(sorted(combined, key=len, reverse=True))
+
+
+def _union_sources(existing: str, new: str) -> str:
+    """Union two SOURCE strings, keeping the paper prefix and deduplicating chunk numbers.
+
+    Input:  ``"Chunk 3,7,12 | paper.pdf"`` + ``"Chunk 5,7,12 | paper.pdf"``
+    Output: ``"Chunk 3,5,7,12 | paper.pdf"``
+    """
+    if not existing:
+        return new
+    if not new:
+        return existing
+
+    def _parse(src: str) -> tuple[set[int], str]:
+        numbers: set[int] = set()
+        paper = src
+        if " | " in src:
+            prefix, _, paper = src.partition(" | ")
+        else:
+            prefix = src
+        # Also check for "Chunk " prefix
+        prefix_stripped = prefix.replace("Chunk ", "").strip()
+        for part in re.split(r"[,;\s]+", prefix_stripped):
+            try:
+                numbers.add(int(part))
+            except (ValueError, TypeError):
+                pass
+        return numbers, paper.strip()
+
+    nums_a, paper_a = _parse(existing)
+    nums_b, paper_b = _parse(new)
+    all_nums = sorted(nums_a | nums_b)
+    paper = paper_a or paper_b
+    num_str = ",".join(str(n) for n in all_nums)
+    return f"Chunk {num_str} | {paper}" if paper else f"Chunk {num_str}"
 
 
 class ExtractionAgent:
@@ -110,32 +158,14 @@ class ExtractionAgent:
     ) -> Dict[str, Any]:
         """Extract structured entities grouped by the discovered categories.
 
-        The LLM outputs a **line‑tagged** format instead of JSON.  Each
-        entity block starts with ``TYPE: <category>`` and is terminated by
-        a blank line.  This eliminates JSON parse failures (no braces,
-        commas, or quotes to break) and uses ~30 % fewer tokens than
-        pretty‑printed JSON with repeated field names.
-
-        Args:
-            chunks: Retrieved chunks (text and metadata).
-            categories: Output of ``discover_categories()``.
-            query: The original research question.
-            ner_entities: Optional deterministic NER entities from SciSpaCy
-                to use as grounding hints.
-
-        Returns:
-            A dictionary whose top-level keys are category names.  Each
-            value is a list of entity objects containing at least
-            ``entity``, ``evidence``, and ``source``.
+        The LLM outputs a **line‑tagged** format.  Categories are ordered
+        by entity density so complex categories get priority output.
         """
-        # Scrub all chunk texts to plain ASCII before building the prompt
         scrubbed_chunks = [
             {**ch, "text": scrub_unicode(ch["text"])} for ch in chunks
         ]
         chunk_summaries = self._format_chunks_for_prompt(scrubbed_chunks)
-
-        # Convert categories to line‑tagged text (avoids JSON overhead in prompt)
-        categories_text = self._categories_to_line_tagged(categories)
+        categories_text = self._categories_to_line_tagged_sorted(categories)
 
         ner_hint = ""
         if ner_entities:
@@ -149,7 +179,320 @@ class ExtractionAgent:
                 + "\n\n"
             )
 
-        system_prompt = (
+        system_prompt = self._build_all_entities_prompt()
+        user_prompt = self._build_user_prompt(
+            chunk_summaries, categories_text, query, ner_hint,
+        )
+
+        try:
+            raw_output = self._call_llm_with_detection(system_prompt, user_prompt)
+        except ModelDegradedException as e:
+            logger.warning(
+                "Model degradation during extraction: %s. "
+                "Parsing partial output and re‑raising.",
+                e,
+            )
+            raw_output = e.text
+            result = self._parse_line_tagged(raw_output, context="entity_extraction")
+            e.parsed = result
+            raise
+
+        result = self._parse_line_tagged(raw_output, context="entity_extraction")
+
+        if not result:
+            result = self._parse_markdown_fallback(raw_output)
+            if result:
+                logger.info("Markdown fallback parsed %d categories", len(result))
+            else:
+                logger.warning(
+                    "Both line‑tagged and markdown parsers failed. "
+                    "Raw (first 300 chars): %s",
+                    raw_output[:300],
+                )
+
+        return result
+
+    # ------------------------------------------------------------------
+    #  Adaptive Recursive Extraction
+    # ------------------------------------------------------------------
+    def extract_paper_recursive(
+        self,
+        chunks: List[Dict[str, Any]],
+        categories: Dict[str, Any],
+        query: str,
+        ner_entities: List[Dict[str, Any]] | None = None,
+        batch_size: int = 8,
+    ) -> Dict[str, Any]:
+        """Adaptive batched extraction with recursive split‑on‑failure.
+
+        Chunks are processed in groups of *batch_size*.  Each group is
+        extracted via :meth:`_extract_batch_recursive`, which splits in
+        half on degradation and recursively retries.  Between groups the
+        GPU is restarted for a clean Metal slate.
+
+        For most papers this results in a predictable number of LLM
+        calls (``ceil(chunks / batch_size)``).  Dense papers that
+        degrade split their batches dynamically — the paper determines
+        its own effective batch size.
+        """
+        if not chunks:
+            return {}
+
+        all_entities: Dict[str, List[Dict[str, Any]]] = {}
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
+
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            batch_num = i // batch_size + 1
+            logger.info(
+                "Extraction batch %d/%d (%d chunks)",
+                batch_num, total_batches, len(batch),
+            )
+
+            batch_entities = self._extract_batch_recursive(
+                batch, categories, query, ner_entities=ner_entities,
+            )
+
+            for category, entity_list in batch_entities.items():
+                all_entities.setdefault(category, []).extend(entity_list)
+
+            # Restart GPU between batches — guaranteed clean slate
+            if i + batch_size < len(chunks):
+                try:
+                    from src.ingestion.pre_extractor import PreExtractor
+                    PreExtractor._restart_ollama_process(timeout=60.0)
+                except Exception:
+                    pass
+
+        return self._merge_entity_batches(all_entities)
+
+    def _extract_batch_recursive(
+        self,
+        chunks: List[Dict[str, Any]],
+        categories: Dict[str, Any],
+        query: str,
+        ner_entities: List[Dict[str, Any]] | None = None,
+        depth: int = 0,
+        max_depth: int = 12,
+    ) -> Dict[str, Any]:
+        """Extract entities from *chunks*, splitting in half on degradation.
+
+        On degradation: salvages partial entities from the degraded run,
+        restarts the GPU, splits the chunk set in half, and recurses into
+        each half.  Smaller sub‑batches mean fewer output tokens → lower
+        KV‑cache pressure → higher success probability.
+
+        Base case (1 chunk or max depth): saves chunk text to
+        ``failed_chunks/`` and returns whatever was salvaged.
+        """
+        logger.info(
+            "Extraction (depth %d): %d chunks", depth, len(chunks),
+        )
+
+        try:
+            entities = self.extract_entities(
+                chunks, categories, query,
+                ner_entities=ner_entities,
+            )
+            count = sum(len(v) for v in entities.values())
+            logger.info(
+                "Extraction (depth %d): success — %d entities across %d categories",
+                depth, count, len(entities),
+            )
+            return entities
+
+        except ModelDegradedException as e:
+            logger.warning(
+                "Extraction degraded at depth %d (%d chunks, %d chars output): %s",
+                depth, len(chunks), len(e.text), e,
+            )
+            salvage = e.parsed if hasattr(e, "parsed") and e.parsed else {}
+            sal_count = sum(len(v) for v in salvage.values())
+            logger.info(
+                "Salvage (depth %d): %d partial entities", depth, sal_count,
+            )
+
+            if len(chunks) <= 1 or depth >= max_depth:
+                self._save_failed_chunk(chunks[0] if chunks else None)
+                logger.warning(
+                    "Base case reached (depth %d, %d chunks). "
+                    "Saving chunk to failed_chunks/.",
+                    depth, len(chunks),
+                )
+                return salvage
+
+            try:
+                from src.ingestion.pre_extractor import PreExtractor
+                PreExtractor._restart_ollama_process(timeout=60.0)
+            except Exception:
+                pass
+
+            mid = len(chunks) // 2
+            logger.info(
+                "Splitting %d chunks → [%d, %d] at depth %d",
+                len(chunks), mid, len(chunks) - mid, depth,
+            )
+
+            left = self._extract_batch_recursive(
+                chunks[:mid], categories, query,
+                ner_entities=ner_entities,
+                depth=depth + 1, max_depth=max_depth,
+            )
+            right = self._extract_batch_recursive(
+                chunks[mid:], categories, query,
+                ner_entities=ner_entities,
+                depth=depth + 1, max_depth=max_depth,
+            )
+
+            return self._merge_entity_dicts(salvage, left, right)
+
+        except (FutureTimeoutError, Exception) as exc:
+            logger.warning(
+                "Non‑degradation failure at depth %d (%d chunks): %s",
+                depth, len(chunks), exc,
+            )
+            if len(chunks) <= 1:
+                self._save_failed_chunk(chunks[0] if chunks else None)
+            return {}
+
+    @staticmethod
+    def _merge_entity_dicts(*dicts: Dict[str, Any]) -> Dict[str, Any]:
+        """Shallow merge of multiple category→entity‑list dicts.
+
+        Does NOT deduplicate — call :meth:`_merge_entity_batches` after
+        all recursive levels complete for full dedup with evidence
+        combination.
+        """
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for d in dicts:
+            if not d:
+                continue
+            for category, entity_list in d.items():
+                if isinstance(entity_list, list):
+                    result.setdefault(category, []).extend(entity_list)
+        return result
+
+    def _save_failed_chunk(self, chunk: Dict[str, Any] | None) -> None:
+        """Save a chunk that failed even at batch_size=1 to disk for review."""
+        if not chunk:
+            return
+        chunk_dir = Path("projects/default/failed_chunks")
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        meta = chunk.get("metadata", {}) or {}
+        chunk_id = meta.get("pmcid", "unknown")
+        chunk_idx = meta.get("chunk_index", "?")
+        ts = int(time.monotonic())
+        path = chunk_dir / f"{chunk_id}_chunk_{chunk_idx}_{ts}.txt"
+        try:
+            path.write_text(str(chunk.get("text", "") or "")[:10000])
+            logger.info("Failed chunk saved: %s", path)
+        except OSError as exc:
+            logger.warning("Could not save failed chunk: %s", exc)
+
+    @staticmethod
+    def _merge_entity_batches(
+        entities: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        """Merge entity batches with (name, claim) dedup and evidence union.
+
+        Deduplication rules:
+        - Same (name, claim) → combine evidence sentences (preserves full context)
+        - Same name, different claims → keep both (different facts)
+        - Same name, no claim vs has claim → merge evidence into claimed entry
+        - Same name, no claim, no claimed variant → keep the no‑claim entry
+
+        Chunk sources are unioned so every supporting chunk is traceable.
+        """
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        index: Dict[str, Dict[str, int]] = {}  # name → claim → idx
+
+        for category, entity_list in entities.items():
+            result.setdefault(category, [])
+            index.setdefault(category, {})
+
+            for ent in entity_list:
+                if not isinstance(ent, dict):
+                    continue
+                name = str(ent.get("entity", "")).strip()
+                if not name:
+                    continue
+                claim = str(ent.get("claim", "")).strip()
+
+                name_key = name.lower()
+                cat_idx = index[category]
+
+                if name_key in cat_idx:
+                    existing_idx = cat_idx[name_key]
+                    existing = result[category][existing_idx]
+                    existing_claim = str(existing.get("claim", "")).strip()
+
+                    if claim and claim == existing_claim:
+                        # Same claim — combine evidence and union sources
+                        existing["evidence"] = _combine_evidence(
+                            str(existing.get("evidence", "")),
+                            str(ent.get("evidence", "")),
+                        )
+                        existing["source"] = _union_sources(
+                            str(existing.get("source", "")),
+                            str(ent.get("source", "")),
+                        )
+                    elif claim and not existing_claim:
+                        # New claim beats no-claim — replace
+                        old_evidence = str(existing.get("evidence", ""))
+                        new_evidence = str(ent.get("evidence", ""))
+                        result[category][existing_idx] = {
+                            **ent,
+                            "evidence": _combine_evidence(old_evidence, new_evidence),
+                            "source": _union_sources(
+                                str(existing.get("source", "")),
+                                str(ent.get("source", "")),
+                            ),
+                        }
+                    elif claim and existing_claim and claim != existing_claim:
+                        # Different claims — keep both as separate entries
+                        cat_idx[name_key] = len(result[category])
+                        result[category].append(ent)
+                    elif not claim and existing_claim:
+                        # No-claim variant → merge evidence into claimed entry
+                        existing["evidence"] = _combine_evidence(
+                            str(existing.get("evidence", "")),
+                            str(ent.get("evidence", "")),
+                        )
+                        existing["source"] = _union_sources(
+                            str(existing.get("source", "")),
+                            str(ent.get("source", "")),
+                        )
+                    else:
+                        # Both no-claim — keep longest evidence
+                        if len(str(ent.get("evidence", ""))) > len(
+                            str(existing.get("evidence", ""))
+                        ):
+                            result[category][existing_idx] = ent
+                else:
+                    cat_idx[name_key] = len(result[category])
+                    result[category].append(ent)
+
+        return result
+
+    # ------------------------------------------------------------------
+    #  Internal helpers
+    # ------------------------------------------------------------------
+    def _format_chunks_for_prompt(self, chunks: List[Dict[str, Any]]) -> str:
+        """Compress chunk list into a numbered text block with PDF source labels."""
+        lines = []
+        for i, ch in enumerate(chunks):
+            text = ch.get("text", "")
+            clean = " ".join(text.split())
+            src = (ch.get("metadata", {}) or {}).get("source", "?")
+            lines.append(f"[Chunk {i} | {src}] {clean}")
+        return "\n".join(lines)
+
+    # ── Prompt builders ──────────────────────────────────────────────
+
+    @staticmethod
+    def _build_all_entities_prompt() -> str:
+        """System prompt for Pass 2 — extract every entity from every chunk."""
+        return (
             "CRITICAL FORMAT INSTRUCTION — YOU MUST FOLLOW THIS EXACTLY. "
             "Failure to use the correct format means your output will be DISCARDED.\n\n"
             "You are a biomedical entity extraction specialist. "
@@ -217,11 +560,32 @@ class ExtractionAgent:
             '  ENTITY: CBCT images | CLAIM: source             <-- WRONG, omit CLAIM\n'
         )
 
-        user_prompt = (
-            f"Research Query: {query}\n\n"
-            f"Discovered Categories:\n{categories_text}\n\n"
-            f"{ner_hint}"
-            f"Retrieved Chunks (format: [Chunk N | source] text):\n{chunk_summaries}\n\n"
+    @staticmethod
+    def _build_user_prompt(
+        chunk_summaries: str,
+        categories_text: str,
+        query: str,
+        ner_hint: str = "",
+        extra_instructions: str = "",
+    ) -> str:
+        """Build the user prompt for entity extraction.
+
+        Args:
+            chunk_summaries: Formatted chunk text.
+            categories_text: Line‑tagged categories (sorted by density).
+            query: The research question.
+            ner_hint: Optional NER entity hints.
+            extra_instructions: Additional mode‑specific instructions.
+        """
+        parts = [
+            f"Research Query: {query}\n",
+            f"Discovered Categories:\n{categories_text}\n",
+            ner_hint,
+            f"Retrieved Chunks (format: [Chunk N | source] text):\n{chunk_summaries}\n",
+        ]
+        if extra_instructions:
+            parts.append(extra_instructions + "\n")
+        parts.append(
             "INSTRUCTIONS:\n"
             "1. Group entities that share the SAME evidence sentence together.\n"
             "2. State EVIDENCE:, SOURCE:, and TYPE: once per group. Then one ENTITY: line per entity.\n"
@@ -231,168 +595,21 @@ class ExtractionAgent:
             "6. NO markdown, NO JSON, NO bullet points.\n"
             "7. Separate groups with one blank line. No introduction, no summary."
         )
-
-        raw_output = self._call_llm(system_prompt, user_prompt)
-        result = self._parse_line_tagged(raw_output, context="entity_extraction")
-
-        # Fallback: if line‑tagged produced nothing, try parsing markdown keyword lists
-        if not result:
-            result = self._parse_markdown_fallback(raw_output)
-            if result:
-                logger.info("Markdown fallback parser recovered %d categories from entity_extraction",
-                             len(result))
-            else:
-                logger.warning(
-                    "Both line‑tagged and markdown parsers failed for entity_extraction. "
-                    "Raw (first 300 chars): %s",
-                    raw_output[:300],
-                )
-
-        return result
-
-    # ------------------------------------------------------------------
-    #  Batched Entity Extraction (Phase 10.5 — avoids prompt‑size hangs)
-    # ------------------------------------------------------------------
-    def extract_entities_batched(
-        self,
-        chunks: List[Dict[str, Any]],
-        categories: Dict[str, Any],
-        query: str,
-        ner_entities: List[Dict[str, Any]] | None = None,
-        batch_size: int = 8,
-    ) -> Dict[str, Any]:
-        """Extract entities in batches to keep per‑call prompt sizes manageable.
-
-        Each batch of *batch_size* chunks gets its own ``extract_entities()``
-        call.  Results are merged and entity names are deduplicated /
-        normalised across batches.
-
-        Args:
-            chunks: All retrieved chunks for this paper / query.
-            categories: Output of ``discover_categories()``.
-            query: The original research question.
-            ner_entities: Optional deterministic SciSpaCy NER hints.
-            batch_size: Maximum chunks per single LLM extraction call (default 8).
-
-        Returns:
-            Merged entity dict (same structure as ``extract_entities()``).
-        """
-        if not chunks:
-            return {}
-
-        all_entities: Dict[str, List[Dict[str, Any]]] = {}
-        batches = (len(chunks) + batch_size - 1) // batch_size
-
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i : i + batch_size]
-            batch_num = i // batch_size + 1
-            logger.info(
-                "Extraction batch %d/%d (%d chunks)", batch_num, batches, len(batch)
-            )
-            t0 = time.monotonic()
-            try:
-                with ThreadPoolExecutor(max_workers=1) as ex:
-                    future = ex.submit(
-                        self.extract_entities,
-                        batch, categories, query,
-                        ner_entities=ner_entities,
-                    )
-                    batch_entities = future.result(timeout=600)
-            except FutureTimeoutError:
-                elapsed = time.monotonic() - t0
-                logger.warning(
-                    "Extraction batch %d/%d timed out after %.0fs (%d chunks)",
-                    batch_num, batches, elapsed, len(batch),
-                )
-                continue
-            except Exception as exc:
-                elapsed = time.monotonic() - t0
-                logger.warning(
-                    "Extraction batch %d/%d failed after %.0fs (%d chunks): %s",
-                    batch_num, batches, elapsed, len(batch), exc,
-                )
-                continue
-
-            elapsed = time.monotonic() - t0
-            entity_count = sum(len(v) for v in batch_entities.values())
-            logger.info(
-                "Extraction batch %d/%d done: %d chunks → %d entities, %.1fs",
-                batch_num, batches, len(batch), entity_count, elapsed,
-            )
-
-            for category, entity_list in batch_entities.items():
-                all_entities.setdefault(category, []).extend(entity_list)
-
-            # Flush Ollama GPU memory between batches to prevent
-            # Metal-backend fragmentation from degrading later batches.
-            if i + batch_size < len(chunks):  # only between batches, not after last
-                try:
-                    from src.ingestion.pre_extractor import PreExtractor  # noqa: F811 — lazy to avoid circular import
-                    _reset_mode = os.getenv("EXTRACTION_RESET_MODE", "api").strip().lower()
-                    if _reset_mode == "process":
-                        PreExtractor._restart_ollama_process(timeout=60.0)
-                    else:
-                        PreExtractor._reset_ollama(timeout=30.0)
-                except Exception:
-                    pass
-
-        return self._merge_entity_batches(all_entities)
-
-    @staticmethod
-    def _merge_entity_batches(
-        entities: Dict[str, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
-        """Merge entity batches, normalising names and deduplicating.
-
-        Entities with the same normalised name within a category are
-        deduplicated — the entry with the longest evidence text is kept.
-        """
-        result: Dict[str, List[Dict[str, Any]]] = {}
-
-        for category, entity_list in entities.items():
-            seen: Dict[str, int] = {}  # normalised_name → index in result list
-            result[category] = []
-
-            for ent in entity_list:
-                if not isinstance(ent, dict):
-                    continue
-                name = str(ent.get("entity", "")).strip()
-                if not name:
-                    continue
-
-                key = name.lower()
-                if key in seen:
-                    existing_idx = seen[key]
-                    existing = result[category][existing_idx]
-                    if len(str(ent.get("evidence", ""))) > len(
-                        str(existing.get("evidence", ""))
-                    ):
-                        result[category][existing_idx] = ent
-                else:
-                    seen[key] = len(result[category])
-                    result[category].append(ent)
-
-        return result
-
-    # ------------------------------------------------------------------
-    #  Internal helpers
-    # ------------------------------------------------------------------
-    def _format_chunks_for_prompt(self, chunks: List[Dict[str, Any]]) -> str:
-        """Compress chunk list into a numbered text block with PDF source labels."""
-        lines = []
-        for i, ch in enumerate(chunks):
-            text = ch.get("text", "")
-            clean = " ".join(text.split())
-            src = (ch.get("metadata", {}) or {}).get("source", "?")
-            lines.append(f"[Chunk {i} | {src}] {clean}")
-        return "\n".join(lines)
+        return "".join(parts)
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
         """Send a prompt to the LLM and return the full response text.
 
         Responses are cached by (system_prompt, user_prompt) hash with 24h TTL
         since temperature=0 makes outputs deterministic.
+
+        Raises :class:`ModelDegradedException` when the streaming handler
+        detects model degradation (KV‑cache corruption, repetition spam,
+        format loss).  The exception carries the captured text so callers
+        can salvage partial entities and retry with a fresh GPU.
         """
+        from src.streaming_handler import ModelDegradedException, TokenStreamHandler
+
         cache = get_cache()
         cached = cache.get(system_prompt, user_prompt, model=self.model)
         if cached is not None:
@@ -411,15 +628,96 @@ class ExtractionAgent:
         callbacks: list[Any] = []
         if self.callback:
             callbacks.append(self.callback)
-        try:
-            from src.streaming_handler import TokenStreamHandler
-            callbacks.append(TokenStreamHandler())
-        except ImportError:
-            pass
+        handler = TokenStreamHandler()
+        callbacks.append(handler)
         if callbacks:
             config["callbacks"] = callbacks
         response = self._llm.invoke(messages, config=config)
         result = (response.content or "").strip()
+
+        if handler.degraded:
+            raise ModelDegradedException(
+                handler.degraded_reason,
+                text=result,
+            )
+
+        cache.set(system_prompt, user_prompt, result, model=self.model)
+        return result
+
+    def _call_llm_with_detection(self, system_prompt: str, user_prompt: str) -> str:
+        """Extraction‑only LLM call with real‑time degradation detection.
+
+        Uses ``self._llm.stream()`` instead of ``invoke()`` so the loop
+        can **break immediately** when the :class:`TokenStreamHandler`
+        detects spam, repetition, or format loss.  The ``finally`` block
+        calls ``stream.close()`` to send ``GeneratorExit``, forcing
+        LangChain's underlying httpx connection to drop — Ollama stops
+        generating in milliseconds rather than waiting for ``max_tokens``
+        of garbage.
+
+        Raises :class:`ModelDegradedException` on detection so callers can
+        salvage partial text and retry with a fresh GPU.
+        """
+        from src.streaming_handler import TokenStreamHandler
+
+        cache = get_cache()
+        cached = cache.get(system_prompt, user_prompt, model=self.model)
+        if cached is not None:
+            return cached
+
+        logger.debug(
+            "LLM call (streaming): system=%d chars, user=%d chars, model=%s",
+            len(system_prompt), len(user_prompt), self.model,
+        )
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ]
+        config: dict[str, Any] = {}
+        callbacks: list[Any] = []
+        if self.callback:
+            callbacks.append(self.callback)
+        handler = TokenStreamHandler()
+        callbacks.append(handler)
+        if callbacks:
+            config["callbacks"] = callbacks
+
+        all_tokens = ""
+        stream = self._llm.stream(messages, config=config)
+        try:
+            for chunk in stream:
+                token = getattr(chunk, "content", "") or ""
+                all_tokens += token
+                if handler.degraded:
+                    logger.warning(
+                        "Model degradation detected mid‑stream — aborting generation. "
+                        "Reason: %s",
+                        handler.degraded_reason,
+                    )
+                    break
+        except ModelDegradedException:
+            raise
+        except Exception as e:
+            if handler.degraded:
+                raise ModelDegradedException(
+                    handler.degraded_reason,
+                    text=all_tokens.strip(),
+                ) from e
+            raise
+        finally:
+            try:
+                stream.close()  # GeneratorExit → httpx disconnect → Ollama stops
+            except Exception:
+                pass
+
+        if handler.degraded:
+            raise ModelDegradedException(
+                handler.degraded_reason,
+                text=all_tokens.strip(),
+            )
+
+        result = all_tokens.strip()
         cache.set(system_prompt, user_prompt, result, model=self.model)
         return result
 
@@ -493,6 +791,44 @@ class ExtractionAgent:
         discovered = categories.get("discovered_categories", [])
         if isinstance(discovered, list):
             for cat in discovered:
+                if isinstance(cat, dict):
+                    name = cat.get("name", "")
+                    desc = cat.get("description", "")
+                    if name:
+                        lines.append(f"CATEGORY: {name}")
+                    if desc:
+                        lines.append(f"DESCRIPTION: {desc}")
+                    lines.append("")
+
+        key_vars = categories.get("key_variables", [])
+        if isinstance(key_vars, list) and key_vars:
+            lines.append("KEY_VARIABLES: " + ", ".join(str(v) for v in key_vars))
+            lines.append("")
+
+        methods = categories.get("experimental_methods", [])
+        if isinstance(methods, list) and methods:
+            lines.append("METHODS: " + ", ".join(str(m) for m in methods))
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _categories_to_line_tagged_sorted(categories: Dict[str, Any]) -> str:
+        """Format categories as line‑tagged text, ordered by entity density.
+
+        Categories with the most examples_found come first — the LLM
+        naturally extracts from categories in prompt order, so complex
+        categories get priority output before simpler ones.
+        """
+        lines: List[str] = []
+        discovered = categories.get("discovered_categories", [])
+        if isinstance(discovered, list):
+            sorted_cats = sorted(
+                discovered,
+                key=lambda c: len(c.get("examples_found", [])) if isinstance(c, dict) else 0,
+                reverse=True,
+            )
+            for cat in sorted_cats:
                 if isinstance(cat, dict):
                     name = cat.get("name", "")
                     desc = cat.get("description", "")
@@ -637,37 +973,67 @@ class ExtractionAgent:
                         d[k] = v
             return d
 
-        for line in text.strip().split("\n"):
-            stripped = line.strip()
-            if not stripped:
-                _commit()
-                current = {}
-                continue
+        junk_streak = 0
+        _MAX_JUNK_LINES = 20
 
-            if ":" not in stripped:
-                continue
+        try:
+            for line in text.strip().split("\n"):
+                stripped = line.strip()
+                if not stripped:
+                    _commit()
+                    current = {}
+                    continue
 
-            key, _, value = stripped.partition(":")
-            key = key.strip().lower()
-            value = value.strip()
+                if ":" not in stripped:
+                    # Check raw line for token spam (e-coli-coli..., etc.)
+                    if _detect_token_spam(stripped):
+                        raise RuntimeError(
+                            "Token spam detected on raw line (no ':' format): %r. "
+                            "Model degraded — Metal backend KV‑cache corruption."
+                            % stripped[:120]
+                        )
+                    junk_streak += 1
+                    if junk_streak >= _MAX_JUNK_LINES:
+                        raise RuntimeError(
+                            "Model degraded: %d consecutive junk lines "
+                            "(no ':' format separator). Model has lost "
+                            "line‑tagged output format — aborting batch." % junk_streak
+                        )
+                    continue
 
-            if key in ("evidence", "source", "type"):
-                group[key] = value
-            elif key == "entity" and value and "|" in value:
-                _commit()
-                current = {}
-                current = _parse_entity_pipe(value)
-                _commit()
-                current = {}
-            elif key == "entity":
-                _commit()
-                current = {}
-                if value:
-                    current["entity"] = value
-            elif value:
-                current[key] = value
+                # Line has ':' — model is still producing formatted output
+                junk_streak = 0
 
-        _commit()
+                key, _, value = stripped.partition(":")
+                key = key.strip().lower()
+                value = value.strip()
+
+                if key in ("evidence", "source", "type"):
+                    group[key] = value
+                elif key == "entity" and value and "|" in value:
+                    _commit()
+                    current = {}
+                    current = _parse_entity_pipe(value)
+                    _commit()
+                    current = {}
+                elif key == "entity":
+                    _commit()
+                    current = {}
+                    if value:
+                        current["entity"] = value
+                elif value:
+                    current[key] = value
+
+            _commit()
+        except RuntimeError:
+            if result:
+                logger.warning(
+                    "Batch extraction degraded — returning %d partial entities "
+                    "across %d categories.",
+                    sum(len(v) for v in result.values()), len(result),
+                )
+            else:
+                raise
 
         if not result:
             logger.warning(

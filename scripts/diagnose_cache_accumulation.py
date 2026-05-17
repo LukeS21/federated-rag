@@ -156,7 +156,7 @@ def _run_extraction(
     categories = agent.discover_categories(summary_chunks, query)
 
     # Capture log output during extraction to count spam errors.
-    # _detect_token_spam raises RuntimeError which extract_entities_batched
+    # _detect_token_spam raises RuntimeError which extract_paper_recursive
     # catches silently, so we must intercept the warning-level log message.
     log_capture = io.StringIO()
     capture_handler = logging.StreamHandler(log_capture)
@@ -166,7 +166,7 @@ def _run_extraction(
     root_logger.addHandler(capture_handler)
 
     t0 = time.monotonic()
-    entities = agent.extract_entities_batched(chunks, categories, query)
+    entities = agent.extract_paper_recursive(chunks, categories, query)
     elapsed = time.monotonic() - t0
 
     root_logger.removeHandler(capture_handler)
@@ -174,10 +174,12 @@ def _run_extraction(
     capture_handler.close()
 
     token_spam_errors = captured_text.count("Token-level spam detected")
-    batch_failures = captured_text.count("Extraction batch") - captured_text.count(" done:")
+    degradation_events = captured_text.count("degraded") - captured_text.count("non‑degradation")
+    failed_chunks = captured_text.count("Failed chunk saved")
 
     total_entities = sum(len(v) for v in entities.values())
-    batches = (len(chunks) + 7) // 8
+    # Adaptive batch count — varies by paper size and recursive splits
+    batches = "adaptive"
 
     # Unload model after extraction
     try:
@@ -194,7 +196,8 @@ def _run_extraction(
         "categories": len(categories.get("discovered_categories", [])) if categories else 0,
         "elapsed_s": round(elapsed, 1),
         "spam_errors": token_spam_errors,
-        "batch_failures": max(0, batch_failures),
+        "degradation_events": degradation_events,
+        "failed_chunks": failed_chunks,
         "spam_detected": token_spam_errors > 0,
     }
 
@@ -271,16 +274,15 @@ def main() -> None:
             print("    Set EXTRACTION_RESET_MODE=process in .env for daemon extraction.")
         elif result_a["spam_detected"] and result_b["spam_detected"]:
             print("\n>>> RESULT: Both modes show spam — inherent Metal KV-cache corruption.")
-            print("    Process restarts won't fix mid-batch degradation.")
-            print("    Mitigation: reduce batch_size from 8 to 4 chunks.")
+            print("    The recursive split-on-failure should handle this automatically.")
+            print("    If single-chunk failures persist, increase OLLAMA_RESTART_COOLDOWN_SECONDS.")
         else:
             print("\n>>> RESULT: No spam detected in either mode — cannot determine cause.")
             print("    Re-run with the exact paper/prompt that produced spam (e.g. PMC10571047).")
 
         if result_b["elapsed_s"] > 0:
             overhead = result_b["elapsed_s"] - result_a["elapsed_s"]
-            print(f"\nProcess-restart overhead: +{overhead:.0f}s "
-                  f"(+{overhead / result_b['batches']:.1f}s per batch)")
+            print(f"\nProcess-restart overhead: +{overhead:.0f}s")
     else:
         # ── Process-restart only ─────────────────────────────────────────
         print("=" * 65)
@@ -290,13 +292,14 @@ def main() -> None:
         print(json.dumps(result, indent=2))
 
         if result["spam_detected"]:
-            print(f"\n>>> {result['spam_errors']} token-spam errors detected "
-                  f"with process restarts.")
-            print("    Mitigation: reduce batch_size from 8 to 4 chunks.")
+            print(f"\n>>> {result['spam_errors']} token-spam errors, "
+                  f"{result['degradation_events']} degradation events, "
+                  f"{result['failed_chunks']} failed chunks.")
+            print("    Recursive split-on-failure should handle these automatically.")
+            print("    If single-chunk failures persist, increase OLLAMA_RESTART_COOLDOWN_SECONDS.")
         else:
             print(f"\n>>> NO spam detected. {result['entities']} entities "
-                  f"extracted in {result['elapsed_s']:.0f}s, "
-                  f"{result['batches']} batches.")
+                  f"extracted in {result['elapsed_s']:.0f}s.")
 
     # Clean up env var
     os.environ.pop("EXTRACTION_RESET_MODE", None)
