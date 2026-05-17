@@ -2,16 +2,172 @@
   "pipeline": "Europe PMC + Semantic Scholar",
   "query": "titanium implant macrophage polarization osseointegration surface modification",
   "target_count": 10,
-  "search_time_s": 0.826,
+  "search_time_s": 0.994,
   "papers_found": 10,
-  "fetch_time_s": 2.809,
-  "parse_time_s": 0.319,
+  "fetch_time_s": 6.522,
+  "parse_time_s": 0.308,
   "total_chunks": 414,
   "total_words": 262484,
-  "s2_time_s": 20.617,
+  "s2_time_s": 30.88,
   "s2_papers_matched": 10,
   "s2_embeddings_fetched": 8,
-  "total_time_s": 24.571,
+  "s2_cache_hits": 0,
+  "coverage_diagnostic": {
+    "query": "titanium implant macrophage polarization osseointegration surface modification",
+    "s2_total": 10,
+    "epmc_total": 10,
+    "s2_oa_count": 3,
+    "matched": 0,
+    "coverage_pct": 0.0,
+    "epmc_results": [
+      {
+        "pmcid": "PMC5512621",
+        "doi": "10.3390/ma8095269",
+        "title": "Macrophages, Foreign Body Giant Cells and Their Response to Implantable Biomaterials.",
+        "year": 2015,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC5506916",
+        "doi": "10.3390/ma10040334",
+        "title": "Calcium Phosphate Bioceramics: A Review of Their History, Structure, Properties, Coating Technologie",
+        "year": 2017,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC7876544",
+        "doi": "10.1016/j.bioactmat.2021.01.030",
+        "title": "Antibacterial metals and alloys for potential biomedical implants.",
+        "year": 2021,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC6677551",
+        "doi": "10.1126/sciadv.aax6946",
+        "title": "Application of hydroxyapatite nanoparticles in tumor-associated bone segmental defect.",
+        "year": 2019,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC8221428",
+        "doi": "10.3389/fimmu.2021.691013",
+        "title": "Inflammasomes in Alveolar Bone Loss.",
+        "year": 2021,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC9745784",
+        "doi": "10.1093/rb/rbac098",
+        "title": "Recent advances in regenerative biomaterials.",
+        "year": 2022,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC9504745",
+        "doi": "10.3390/ijms231810975",
+        "title": "Recent Advances of Chitosan Formulations in Biomedical Applications.",
+        "year": 2022,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC8748715",
+        "doi": "10.1038/s41467-021-27816-1",
+        "title": "Engineering immunomodulatory and osteoinductive implant surfaces via mussel adhesion-mediated ion co",
+        "year": 2022,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC7878740",
+        "doi": "10.1038/s41413-020-00131-z",
+        "title": "On the road to smart biomaterials for bone research: definitions, concepts, advances, and outlook.",
+        "year": 2021,
+        "journal": ""
+      },
+      {
+        "pmcid": "PMC10504735",
+        "doi": "10.1186/s40824-023-00422-6",
+        "title": "GelMA-based bioactive hydrogel scaffolds with multiple bone defect repair functions: therapeutic str",
+        "year": 2023,
+        "journal": ""
+      }
+    ],
+    "s2_coverage_detail": [
+      {
+        "title": "Enhancing the Osseointegration of Titanium Implants by Modulating M1/M2 Macrophage Polarization thro",
+        "doi": "10.1021/acsami.5c20696",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "Inflammatory or Reparative? Tuning Macrophage Polarization Using Anodized Anisotropic Nanoporous Tit",
+        "doi": "10.1002/smsc.202400211",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "Effects of titanium implant surface modification on macrophage polarization and osteogenesis",
+        "doi": "10.3969/j.issn.2095-4344.0718",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "Interleukin-4 assisted calcium-strontium-zinc-phosphate coating induces controllable macrophage pola",
+        "doi": "10.1016/j.msec.2020.111512",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "TNF-α-licensed exosome-integrated titaniumaccelerated T2D osseointegration by promoting autophagy-re",
+        "doi": "10.1016/j.bbrc.2024.150316",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "Aspirin/PLGA coated 3D-printed Ti-6Al-4V alloy modulate macrophage polarization to enhance osteoblas",
+        "doi": "10.1007/s10856-022-06697-w",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "Cavitation erosion: An efficient method for promoting osteogenesis and immunomodulation of titanium ",
+        "doi": "10.1016/j.dental.2025.07.017",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "From ROS scavenging to boosted osseointegration: cerium-containing mesoporous bioactive glass nanopa",
+        "doi": "10.1186/s12951-024-02865-y",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "Biomimetic Gradient Microporous Scaffold with a Triply Periodic Minimal Surface Enhances Osseointegr",
+        "doi": "10.34133/bmr.0266",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      },
+      {
+        "title": "Machine Learning Approach to Investigating Macrophage Polarization on Various Titanium Surface Chara",
+        "doi": "10.34133/bmef.0100",
+        "in_pmc": false,
+        "matched_pmcid": "",
+        "match_method": ""
+      }
+    ]
+  },
+  "ingested_pmcids": [],
+  "figure_counts": {},
+  "kg_updated": false,
+  "total_time_s": 38.704,
   "paper_details": [
     {
       "title": "Macrophages, Foreign Body Giant Cells and Their Response to Implantable Biomater",
