@@ -6,6 +6,9 @@ batch can be aborted and retried with a fresh GPU state.
 """
 
 import logging
+import zlib
+from io import TextIOBase
+from typing import Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -14,6 +17,7 @@ logger = logging.getLogger(__name__)
 JUNK_LINE_THRESHOLD = 20
 WORD_REPEAT_THRESHOLD = 10
 HYPHEN_REPEAT_THRESHOLD = 10
+COMPRESSION_RATIO_THRESHOLD = 8.0
 DEGRADATION_CHECK_INTERVAL_CHARS = 100
 
 
@@ -34,6 +38,10 @@ class TokenStreamHandler(BaseCallbackHandler):
 
     Degradation signals detected:
 
+    * **Compression ratio** — tail text compresses far beyond normal
+      (≥8:1 ratio, normal text is ~1.5‑3:1).  This is a *universal*
+      degradation detector — any form of repetition (word, line, hyphen,
+      or novel pattern) inflates the compression ratio.
     * **Word‑level repetition** — ≥10 consecutive identical space‑delimited
       words (e.g. ``Energy: Energy: Energy: …``).
     * **Hyphen‑level repetition** — ≥10 consecutive identical sub‑tokens
@@ -53,6 +61,8 @@ class TokenStreamHandler(BaseCallbackHandler):
         junk_line_threshold: int = JUNK_LINE_THRESHOLD,
         word_repeat_threshold: int = WORD_REPEAT_THRESHOLD,
         hyphen_repeat_threshold: int = HYPHEN_REPEAT_THRESHOLD,
+        compression_ratio_threshold: float = COMPRESSION_RATIO_THRESHOLD,
+        output_file: Optional[TextIOBase] = None,
     ) -> None:
         self.current_text = ""
         self.degraded = False
@@ -60,12 +70,18 @@ class TokenStreamHandler(BaseCallbackHandler):
         self._junk_line_threshold = junk_line_threshold
         self._word_repeat_threshold = word_repeat_threshold
         self._hyphen_repeat_threshold = hyphen_repeat_threshold
+        self._compression_ratio_threshold = compression_ratio_threshold
+        self._output_file = output_file
         self._chars_since_check = 0
 
     # ── LangChain callbacks ────────────────────────────────────────────
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
-        print(token, end="", flush=True)
+        if self._output_file:
+            self._output_file.write(token)
+            self._output_file.flush()
+        else:
+            print(token, end="", flush=True)
         self.current_text += token
         self._chars_since_check += len(token)
 
@@ -77,7 +93,11 @@ class TokenStreamHandler(BaseCallbackHandler):
             self._check_degradation()
 
     def on_llm_end(self, response, **kwargs) -> None:
-        print()
+        if self._output_file:
+            self._output_file.write("\n")
+            self._output_file.flush()
+        else:
+            print()
 
     # ── Degradation detection ──────────────────────────────────────────
 
@@ -112,7 +132,7 @@ class TokenStreamHandler(BaseCallbackHandler):
         """Periodic check on the tail of accumulated text for repetition."""
         if len(self.current_text) < 200:
             return
-        tail = self.current_text[-1000:]
+        tail = self.current_text[-2000:]
         words = tail.split()
 
         # ── Word‑level repetition ──────────────────────────────────
@@ -144,3 +164,16 @@ class TokenStreamHandler(BaseCallbackHandler):
                         return
                 else:
                     run = 1
+
+        # ── Compression ratio (universal repetition detector) ──────
+        if not self.degraded and len(tail) >= 400:
+            try:
+                compressed = zlib.compress(tail.encode("utf-8"))
+                ratio = len(tail) / max(len(compressed), 1)
+                if ratio >= self._compression_ratio_threshold:
+                    self._mark_degraded(
+                        f"Compression ratio {ratio:.1f}:1 indicates "
+                        f"repetitive output (normal text ~1.5‑3:1)"
+                    )
+            except Exception:
+                pass

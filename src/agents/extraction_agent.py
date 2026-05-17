@@ -10,10 +10,12 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import zlib
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
+import tiktoken
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.cache.llm_cache import get_cache
@@ -95,6 +97,7 @@ class ExtractionAgent:
         if client_kwargs is None:
             client_kwargs = {}
         self.model = model
+        self.num_ctx = num_ctx
         self._llm = get_chat_model(
             model=model,
             temperature=temperature,
@@ -102,6 +105,300 @@ class ExtractionAgent:
             streaming=True,
         )
         self.callback = callback
+        self._last_output_tokens = 0
+
+    # ── Token counting ────────────────────────────────────────────────
+
+    _tokenizer: tiktoken.Encoding | None = None
+
+    @classmethod
+    def _get_tokenizer(cls) -> tiktoken.Encoding:
+        """Lazy-load the tiktoken tokenizer shared by all instances."""
+        if cls._tokenizer is None:
+            cls._tokenizer = tiktoken.get_encoding("cl100k_base")
+        return cls._tokenizer
+
+    @staticmethod
+    def _format_chunk_text(i: int, chunk: Dict[str, Any]) -> str:
+        """Format a single chunk for prompt injection (used for token counting)."""
+        text = chunk.get("text", "")
+        clean = " ".join(text.split())
+        src = (chunk.get("metadata", {}) or {}).get("source", "?")
+        return f"[Chunk {i} | {src}] {clean}"
+
+    # ── Extraction statistics (persisted across papers) ────────────────
+
+    _STATS_DIR = Path("projects/default")
+    _STATS_FILE = "extraction_stats.json"
+    _BAD_CHUNKS_FILE = "bad_chunks.json"
+
+    @classmethod
+    def _load_extraction_stats(cls, model: str) -> Dict[str, Any]:
+        """Return {output_ratio, boundary_lower, boundary_upper, total_chunk_tokens, total_output_tokens}.
+
+        *boundary_lower* starts at 2500 — calibrated so the first wave
+        produces ~8‑chunk batches (matching the empirically‑safe
+        batch_size=8 from prior extraction runs).
+        *boundary_upper* starts at 16384 — the configured context window.
+        Both self‑calibrate from pass/fail data across all runs.
+        """
+        path = cls._STATS_DIR / cls._STATS_FILE
+        default = {
+            "output_ratio": 0.50,
+            "boundary_lower": 2500,
+            "boundary_upper": 16384,
+            "total_chunk_tokens": 0,
+            "total_output_tokens": 0,
+        }
+        if path.exists():
+            try:
+                data = json.loads(path.read_text())
+                entry = data.get(model)
+                if entry:
+                    for k, v in default.items():
+                        entry.setdefault(k, v)
+                    return entry
+            except (json.JSONDecodeError, OSError):
+                pass
+        return dict(default)
+
+    @classmethod
+    def _save_extraction_stats(cls, model: str, stats: Dict[str, Any]) -> None:
+        path = cls._STATS_DIR / cls._STATS_FILE
+        data = {}
+        if path.exists():
+            try:
+                data = json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+        data[model] = stats
+        cls._STATS_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+
+    @classmethod
+    def _update_output_ratio(
+        cls, model: str, chunk_tokens: int, output_tokens: int,
+    ) -> float:
+        """Weighted update: 80% historical, 20% latest.  Returns new ratio."""
+        stats = cls._load_extraction_stats(model)
+        stats["total_chunk_tokens"] += chunk_tokens
+        stats["total_output_tokens"] += output_tokens
+        if output_tokens > 0 and chunk_tokens > 0:
+            latest = output_tokens / max(chunk_tokens, 1)
+            stats["output_ratio"] = 0.80 * stats["output_ratio"] + 0.20 * latest
+        cls._save_extraction_stats(model, stats)
+        return stats["output_ratio"]
+
+    @classmethod
+    def _update_boundary(
+        cls, model: str, actual_total: int, passed: bool,
+    ) -> None:
+        """Narrow the safe‑context boundary from pass/fail data.
+
+        - PASS: raises ``boundary_lower`` (this total was safe).
+        - DEGRADE: lowers ``boundary_upper`` (this total was unsafe).
+
+        The gap between lower and upper shrinks with every extraction,
+        converging to the model's true effective‑context limit.
+        """
+        stats = cls._load_extraction_stats(model)
+        if passed:
+            stats["boundary_lower"] = max(stats["boundary_lower"], actual_total)
+        else:
+            stats["boundary_upper"] = min(stats["boundary_upper"], actual_total)
+        cls._save_extraction_stats(model, stats)
+
+    @classmethod
+    def _load_bad_chunks(cls) -> Dict[str, Dict[str, int]]:
+        """Return {pmcid: {chunk_idx: fail_count}}."""
+        path = cls._STATS_DIR / cls._BAD_CHUNKS_FILE
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+        return {}
+
+    @classmethod
+    def _save_bad_chunks(cls, data: Dict[str, Dict[str, int]]) -> None:
+        path = cls._STATS_DIR / cls._BAD_CHUNKS_FILE
+        cls._STATS_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+
+    @classmethod
+    def _record_bad_chunk(cls, pmcid: str, chunk_idx: int) -> None:
+        data = cls._load_bad_chunks()
+        key = str(pmcid)
+        data.setdefault(key, {})
+        idx = str(chunk_idx)
+        data[key][idx] = data[key].get(idx, 0) + 1
+        cls._save_bad_chunks(data)
+
+    @classmethod
+    def _is_bad_chunk(cls, pmcid: str, chunk_idx: int, threshold: int = 3) -> bool:
+        data = cls._load_bad_chunks()
+        return data.get(str(pmcid), {}).get(str(chunk_idx), 0) >= threshold
+
+    # ── Adaptive batch sizing (output‑ratio driven) ────────────────────
+
+    def _calculate_chunk_budget(self, system_prompt: str) -> int:
+        """Calculate tokens available for chunk content per batch.
+
+        Uses the self‑calibrating **boundary** (model's proven safe total
+        context) and **output_ratio** (chunk → output token multiplier).
+        Both improve with every wave across every extraction.
+
+        .. math::
+           budget = (boundary_lower × 0.95 - system - overhead) / (1 + ratio)
+
+        Override with ``EXTRACTION_CHUNK_BUDGET`` env var.
+        """
+        tokenizer = self._get_tokenizer()
+        stats = self._load_extraction_stats(self.model)
+        output_ratio = stats["output_ratio"]
+        boundary_lower = stats["boundary_lower"]
+
+        system_tokens = len(tokenizer.encode(system_prompt))
+        user_overhead = 350
+
+        # Safe total context (5% margin below proven passes)
+        safe_total = boundary_lower * 0.95
+        available = safe_total - system_tokens - user_overhead
+        if available <= 0:
+            available = 500
+
+        budget = int(available / (1.0 + output_ratio))
+
+        env_override = os.getenv("EXTRACTION_CHUNK_BUDGET", "").strip()
+        if env_override and env_override.isdigit():
+            budget = min(budget, int(env_override))
+
+        budget = max(100, budget)
+        logger.debug(
+            "Chunk budget: %d tokens (boundary_lower=%d, system=%d, "
+            "overhead=%d, ratio=%.3f)",
+            budget, boundary_lower, system_tokens, user_overhead, output_ratio,
+        )
+        return budget
+
+    def _pack_chunks_into_batches(
+        self, chunks: List[Dict[str, Any]], chunk_budget: int,
+    ) -> List[List[Dict[str, Any]]]:
+        """Greedy token‑based packing of chunks into batches.
+
+        Each chunk's token count is measured *after* formatting (includes
+        the ``[Chunk N | source]`` prefix).  A batch is closed when adding
+        the next chunk would exceed *chunk_budget*.  This guarantees no
+        single batch overflows the model's prompt budget.
+        """
+        if not chunks:
+            return []
+        tokenizer = self._get_tokenizer()
+        batches: List[List[Dict[str, Any]]] = []
+        current: List[Dict[str, Any]] = []
+        current_tokens = 0
+
+        for i, chunk in enumerate(chunks):
+            formatted = self._format_chunk_text(i, chunk)
+            ct = len(tokenizer.encode(formatted))
+
+            if current_tokens + ct > chunk_budget and current:
+                batches.append(current)
+                current = []
+                current_tokens = 0
+
+            current.append(chunk)
+            current_tokens += ct
+
+        if current:
+            batches.append(current)
+
+        logger.info(
+            "Packed %d chunks → %d batches (budget=%d tok/batch)",
+            len(chunks), len(batches), chunk_budget,
+        )
+        return batches
+
+    # ── Worker calculation ────────────────────────────────────────────
+
+    @staticmethod
+    def _calculate_max_workers(num_ctx: int, total_batches: int) -> int:
+        """Calculate maximum concurrent extraction workers.
+
+        Bounded by three factors:
+        1. ``OLLAMA_NUM_PARALLEL`` — Ollama's server-side concurrency limit.
+        2. GPU memory — model + KV cache × workers must fit.
+        3. ``EXTRACTION_MAX_WORKERS`` env var — manual override.
+
+        KV cache formula: ``2 × layers × kv_heads × head_dim × num_ctx``
+        bytes per request (q8_0 = 1 byte/element).
+        """
+        ollama_limit = int(os.getenv("OLLAMA_NUM_PARALLEL", "4"))
+
+        # Per‑request KV cache from model architecture + num_ctx
+        model_name = os.getenv("OLLAMA_SMALL_MODEL", "").lower()
+
+        # KV bytes per context token: 2 × layers × kv_heads × head_dim
+        # Architecture estimates for common models:
+        if "35b" in model_name or "32b" in model_name:
+            kv_bytes_per_token = 2 * 64 * 8 * 128   # ~64 layers, qwen‑scale
+            model_gb = 25.0
+        elif "26b" in model_name:
+            kv_bytes_per_token = 2 * 48 * 8 * 128   # ~48 layers
+            model_gb = 17.0
+        else:  # 4‑8B models (gemma4:e4b, medgemma:4b)
+            kv_bytes_per_token = 2 * 32 * 8 * 128   # ~32 layers
+            model_gb = 10.5
+
+        kv_gb_per_request = (kv_bytes_per_token * num_ctx) / (1024**3)
+
+        # Target 80% of 36 GB, capped at 28.8 GB
+        available_gb = 28.8 - model_gb
+        max_by_memory = max(1, int(available_gb / max(kv_gb_per_request, 0.5)))
+
+        workers = min(ollama_limit, max_by_memory, total_batches)
+
+        override = os.getenv("EXTRACTION_MAX_WORKERS", "").strip()
+        if override and override.isdigit():
+            workers = min(workers, int(override))
+
+        logger.info(
+            "Extraction workers: %d (ollama=%d, mem_ceil=%d, batches=%d, "
+            "model=%.1fGB, kv=%.2fGB/req)",
+            workers, ollama_limit, max_by_memory, total_batches,
+            model_gb, kv_gb_per_request,
+        )
+        return max(1, workers)
+
+    # ── Single‑shot extraction (for parallel waves) ───────────────────
+
+    def _try_extract_once(
+        self,
+        chunks: List[Dict[str, Any]],
+        categories: Dict[str, Any],
+        query: str,
+        ner_entities: List[Dict[str, Any]] | None = None,
+        output_file=None,
+    ):
+        """Run extraction once.  Returns (entities, degraded, salvage, output_tokens).
+
+        Never raises — degradation and errors are captured so the wave
+        loop can re‑queue the batch and aggregate output statistics.
+        """
+        try:
+            entities = self.extract_entities(
+                chunks, categories, query,
+                ner_entities=ner_entities,
+                output_file=output_file,
+            )
+            return entities, False, {}, self._last_output_tokens
+        except ModelDegradedException as e:
+            salvage = e.parsed if hasattr(e, "parsed") and e.parsed else {}
+            ot = len(self._get_tokenizer().encode(e.text)) if e.text else 0
+            return {}, True, salvage, ot
+        except (FutureTimeoutError, Exception) as exc:
+            logger.warning("Non‑degradation extraction error: %s", exc)
+            return {}, True, {}, 0
 
     # ------------------------------------------------------------------
     #  Category Discovery (Pass 1)
@@ -155,6 +452,7 @@ class ExtractionAgent:
         categories: Dict[str, Any],
         query: str,
         ner_entities: List[Dict[str, Any]] | None = None,
+        output_file=None,
     ) -> Dict[str, Any]:
         """Extract structured entities grouped by the discovered categories.
 
@@ -185,14 +483,16 @@ class ExtractionAgent:
         )
 
         try:
-            raw_output = self._call_llm_with_detection(system_prompt, user_prompt)
+            raw_output = self._call_llm_with_detection(system_prompt, user_prompt, output_file=output_file)
+            self._last_output_tokens = len(self._get_tokenizer().encode(raw_output))
         except ModelDegradedException as e:
             logger.warning(
                 "Model degradation during extraction: %s. "
                 "Parsing partial output and re‑raising.",
                 e,
             )
-            raw_output = e.text
+            raw_output = e.text or ""
+            self._last_output_tokens = len(self._get_tokenizer().encode(raw_output))
             result = self._parse_line_tagged(raw_output, context="entity_extraction")
             e.parsed = result
             raise
@@ -213,7 +513,7 @@ class ExtractionAgent:
         return result
 
     # ------------------------------------------------------------------
-    #  Adaptive Recursive Extraction
+    #  Pulsed‑Wave Parallel Extraction (self‑calibrating, token‑budgeted)
     # ------------------------------------------------------------------
     def extract_paper_recursive(
         self,
@@ -221,159 +521,245 @@ class ExtractionAgent:
         categories: Dict[str, Any],
         query: str,
         ner_entities: List[Dict[str, Any]] | None = None,
-        batch_size: int = 8,
     ) -> Dict[str, Any]:
-        """Adaptive batched extraction with recursive split‑on‑failure.
+        """Extract entities with self‑calibrating token‑budgeted batching.
 
-        Chunks are processed in groups of *batch_size*.  Each group is
-        extracted via :meth:`_extract_batch_recursive`, which splits in
-        half on degradation and recursively retries.  Between groups the
-        GPU is restarted for a clean Metal slate.
-
-        For most papers this results in a predictable number of LLM
-        calls (``ceil(chunks / batch_size)``).  Dense papers that
-        degrade split their batches dynamically — the paper determines
-        its own effective batch size.
+        Architecture:
+        1. Load per‑model output ratio from ``extraction_stats.json``
+           (aggregated across all papers).  Compute a per‑batch chunk
+           budget that accounts for *estimated* output tokens.
+        2. Pack chunks greedily by actual tiktoken count.  Known‑bad
+           chunks (failed ≥3 times before) are pre‑emptively isolated
+           into single‑chunk batches.
+        3. Partition batches into **waves** — GPU restart, then all
+           batches in the wave run in parallel.
+        4. After each wave, update the output ratio from actual output
+           token counts.  The next wave uses the updated ratio.
+        5. Degraded batches split in half, re‑queued (priority: smaller
+           sub‑batches first).  Base‑case chunks recorded in
+           ``bad_chunks.json`` for future pre‑emption.
+        6. Stats persisted to ``extraction_stats.json`` after the paper.
         """
         if not chunks:
             return {}
 
-        all_entities: Dict[str, List[Dict[str, Any]]] = {}
-        total_batches = (len(chunks) + batch_size - 1) // batch_size
+        # ── 0. Load persistent state ───────────────────────────────────
+        stats = self._load_extraction_stats(self.model)
+        output_ratio = stats["output_ratio"]
 
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i : i + batch_size]
-            batch_num = i // batch_size + 1
-            logger.info(
-                "Extraction batch %d/%d (%d chunks)",
-                batch_num, total_batches, len(batch),
-            )
+        bad_chunks = self._load_bad_chunks()
+        pmcid = ""
+        if chunks:
+            meta = (chunks[0].get("metadata", {}) or {}).get("pmcid", "")
+            pmcid = str(meta) if meta else ""
 
-            batch_entities = self._extract_batch_recursive(
-                batch, categories, query, ner_entities=ner_entities,
-            )
+        # ── 1. Budget ─────────────────────────────────────────────────
+        system_prompt = self._build_all_entities_prompt()
+        system_tokens = len(self._get_tokenizer().encode(system_prompt))
+        chunk_budget = self._calculate_chunk_budget(system_prompt)
 
-            for category, entity_list in batch_entities.items():
-                all_entities.setdefault(category, []).extend(entity_list)
+        # ── 2. Pack (pre‑emptively isolate known‑bad chunks) ──────────
+        normal = []
+        singletons = []
+        for i, ch in enumerate(chunks):
+            ch_idx = (ch.get("metadata", {}) or {}).get("chunk_index", i)
+            if pmcid and self._is_bad_chunk(pmcid, ch_idx):
+                singletons.append(ch)
+            else:
+                normal.append(ch)
 
-            # Restart GPU between batches — guaranteed clean slate
-            if i + batch_size < len(chunks):
-                try:
-                    from src.ingestion.pre_extractor import PreExtractor
-                    PreExtractor._restart_ollama_process(timeout=60.0)
-                except Exception:
-                    pass
-
-        return self._merge_entity_batches(all_entities)
-
-    def _extract_batch_recursive(
-        self,
-        chunks: List[Dict[str, Any]],
-        categories: Dict[str, Any],
-        query: str,
-        ner_entities: List[Dict[str, Any]] | None = None,
-        depth: int = 0,
-        max_depth: int = 12,
-    ) -> Dict[str, Any]:
-        """Extract entities from *chunks*, splitting in half on degradation.
-
-        On degradation: salvages partial entities from the degraded run,
-        restarts the GPU, splits the chunk set in half, and recurses into
-        each half.  Smaller sub‑batches mean fewer output tokens → lower
-        KV‑cache pressure → higher success probability.
-
-        Base case (1 chunk or max depth): saves chunk text to
-        ``failed_chunks/`` and returns whatever was salvaged.
-        """
+        batches = self._pack_chunks_into_batches(normal, chunk_budget)
+        # Known‑bad chunks run alone — low risk, fast to complete
+        for ch in singletons:
+            batches.insert(0, [ch])  # front of queue — finish fast
         logger.info(
-            "Extraction (depth %d): %d chunks", depth, len(chunks),
+            "Batches: %d normal + %d isolated (bad chunks)",
+            len(batches) - len(singletons), len(singletons),
         )
 
-        try:
-            entities = self.extract_entities(
-                chunks, categories, query,
-                ner_entities=ner_entities,
-            )
-            count = sum(len(v) for v in entities.values())
-            logger.info(
-                "Extraction (depth %d): success — %d entities across %d categories",
-                depth, count, len(entities),
-            )
-            return entities
+        # ── 3. Workers ────────────────────────────────────────────────
+        max_workers = self._calculate_max_workers(self.num_ctx, len(batches))
 
-        except ModelDegradedException as e:
-            logger.warning(
-                "Extraction degraded at depth %d (%d chunks, %d chars output): %s",
-                depth, len(chunks), len(e.text), e,
-            )
-            salvage = e.parsed if hasattr(e, "parsed") and e.parsed else {}
-            sal_count = sum(len(v) for v in salvage.values())
-            logger.info(
-                "Salvage (depth %d): %d partial entities", depth, sal_count,
-            )
+        # ── 4. Pulsed‑wave execution ──────────────────────────────────
+        all_entities: Dict[str, List[Dict[str, Any]]] = {}
+        queue: List[Any] = [(b, 0) for b in batches]  # (chunks_list, depth)
+        max_depth = 12
+        failed = 0
+        wave_total_chunk_tokens = 0
+        wave_total_output_tokens = 0
+        _LOGS_DIR = Path("logs/extraction")
+        wave_num = 0
 
-            if len(chunks) <= 1 or depth >= max_depth:
-                self._save_failed_chunk(chunks[0] if chunks else None)
-                logger.warning(
-                    "Base case reached (depth %d, %d chunks). "
-                    "Saving chunk to failed_chunks/.",
-                    depth, len(chunks),
-                )
-                return salvage
+        while queue:
+            wave_num += 1
+            wave_ok = 0
+            wave_degraded = 0
 
+            # ── GPU restart at wave start ─────────────────────────
             try:
                 from src.ingestion.pre_extractor import PreExtractor
                 PreExtractor._restart_ollama_process(timeout=60.0)
             except Exception:
                 pass
 
-            mid = len(chunks) // 2
+            # Priority: smaller sub‑batches completed first
+            queue.sort(key=lambda item: len(item[0]))
+
+            wave_size = min(max_workers, len(queue))
+            wave = queue[:wave_size]
+            queue = queue[wave_size:]
+
+            # ── Set up per‑worker log files ───────────────────────
+            _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            log_paths: List[Path] = []
+            for w, (chunks_list, depth) in enumerate(wave):
+                n = len(chunks_list)
+                first_idx = (chunks_list[0].get("metadata", {}) or {}).get(
+                    "chunk_index", "?")
+                fname = (
+                    f"wave_{wave_num:03d}"
+                    f"_chunk-{first_idx}"
+                    f"_{n}chunks.txt"
+                )
+                log_paths.append(_LOGS_DIR / fname)
+
             logger.info(
-                "Splitting %d chunks → [%d, %d] at depth %d",
-                len(chunks), mid, len(chunks) - mid, depth,
+                "Wave %d: %d workers, %d queued (workers=%d, ratio=%.3f)",
+                wave_num, wave_size, len(queue), max_workers, output_ratio,
+            )
+            if wave_size > 1:
+                logger.info(
+                    "Worker log files in %s/\n  %s",
+                    _LOGS_DIR,
+                    "\n  ".join(
+                        f"tail -f {p}" for p in log_paths
+                    ),
+                )
+
+            # ── Open log files (one per worker) ───────────────────
+            worker_files: list = []
+            for lp in log_paths:
+                try:
+                    worker_files.append(open(str(lp), "w"))
+                except OSError:
+                    worker_files.append(None)
+
+            try:
+                with ThreadPoolExecutor(max_workers=wave_size) as executor:
+                    futures = {}
+                    for idx, (chunks_list, depth) in enumerate(wave):
+                        out_f = worker_files[idx]
+                        f = executor.submit(
+                            self._try_extract_once,
+                            chunks_list, categories, query, ner_entities,
+                            output_file=out_f,
+                        )
+                        futures[f] = (chunks_list, depth)
+
+                    for future in as_completed(futures):
+                        chunks_list, depth = futures[future]
+                        entities, degraded, salvage, output_tokens = future.result()
+                        n = len(chunks_list)
+
+                        # Accumulate output token stats for this wave
+                        ct = sum(
+                            len(self._get_tokenizer().encode(
+                                self._format_chunk_text(j, ch)))
+                            for j, ch in enumerate(chunks_list)
+                        )
+                        wave_total_chunk_tokens += ct
+                        wave_total_output_tokens += output_tokens
+
+                        if degraded:
+                            wave_degraded += 1
+                            # ── Collect salvage ───────────────────────
+                            for cat, ent_list in salvage.items():
+                                all_entities.setdefault(cat, []).extend(ent_list)
+
+                            if depth >= max_depth or n <= 1:
+                                failed += 1
+                                if n >= 1 and pmcid:
+                                    ch_idx = (chunks_list[0].get("metadata", {}) or {}).get("chunk_index", 0)
+                                    self._record_bad_chunk(pmcid, ch_idx)
+                                if n >= 1:
+                                    self._save_failed_chunk(chunks_list[0])
+                                logger.warning(
+                                    "Base case (depth %d, %d chunks) — "
+                                    "saved to failed_chunks/", depth, n,
+                                )
+                                # Base‑case degradation is a data problem,
+                                # not a context‑window problem — skip boundary update.
+                                continue
+
+                            # ── Non‑base degradation: update boundary ──
+                            actual_total = system_tokens + 350 + ct + output_tokens
+                            self._update_boundary(
+                                self.model, actual_total, passed=False,
+                            )
+
+                            # ── Split and re‑queue ────────────────────
+                            mid = n // 2
+                            if mid == 0:
+                                mid = 1
+                            left = chunks_list[:mid]
+                            right = chunks_list[mid:]
+                            logger.info(
+                                "Degraded (depth %d, %d chunks) → "
+                                "split [%d, %d] for next wave",
+                                depth, n, len(left), len(right),
+                            )
+                            for sub in sorted([left, right], key=len):
+                                queue.append((sub, depth + 1))
+                        else:
+                            wave_ok += 1
+                            for cat, ent_list in entities.items():
+                                all_entities.setdefault(cat, []).extend(ent_list)
+                            logger.info(
+                                "OK (depth %d, %d chunks) → %d entities",
+                                depth, n, sum(len(v) for v in entities.values()),
+                            )
+
+                            # ── Pass: update boundary ─────────────────
+                            actual_total = system_tokens + 350 + ct + output_tokens
+                            self._update_boundary(
+                                self.model, actual_total, passed=True,
+                            )
+
+            finally:
+                # Close worker log files
+                for fh in worker_files:
+                    try:
+                        if fh:
+                            fh.close()
+                    except Exception:
+                        pass
+
+            # ── Wave summary ────────────────────────────────────
+            logger.info(
+                "Wave %d: %d/%d passed, %d degraded → %d queued",
+                wave_num, wave_ok, wave_size, wave_degraded, len(queue),
             )
 
-            left = self._extract_batch_recursive(
-                chunks[:mid], categories, query,
-                ner_entities=ner_entities,
-                depth=depth + 1, max_depth=max_depth,
-            )
-            right = self._extract_batch_recursive(
-                chunks[mid:], categories, query,
-                ner_entities=ner_entities,
-                depth=depth + 1, max_depth=max_depth,
-            )
+            # ── Per‑wave ratio update ────────────────────────────
+            if wave_total_chunk_tokens > 0 and wave_total_output_tokens > 0:
+                output_ratio = self._update_output_ratio(
+                    self.model, wave_total_chunk_tokens,
+                    wave_total_output_tokens,
+                )
 
-            return self._merge_entity_dicts(salvage, left, right)
+            # ── Recompute budget for next wave (boundary may have moved) ──
+            chunk_budget = self._calculate_chunk_budget(system_prompt)
 
-        except (FutureTimeoutError, Exception) as exc:
-            logger.warning(
-                "Non‑degradation failure at depth %d (%d chunks): %s",
-                depth, len(chunks), exc,
-            )
-            if len(chunks) <= 1:
-                self._save_failed_chunk(chunks[0] if chunks else None)
-            return {}
-
-    @staticmethod
-    def _merge_entity_dicts(*dicts: Dict[str, Any]) -> Dict[str, Any]:
-        """Shallow merge of multiple category→entity‑list dicts.
-
-        Does NOT deduplicate — call :meth:`_merge_entity_batches` after
-        all recursive levels complete for full dedup with evidence
-        combination.
-        """
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for d in dicts:
-            if not d:
-                continue
-            for category, entity_list in d.items():
-                if isinstance(entity_list, list):
-                    result.setdefault(category, []).extend(entity_list)
-        return result
+        total = sum(len(v) for v in all_entities.values())
+        logger.info(
+            "Extraction done: %d entities, %d failed, %d categories "
+            "(final ratio=%.3f)",
+            total, failed, len(all_entities), output_ratio,
+        )
+        return self._merge_entity_batches(all_entities)
 
     def _save_failed_chunk(self, chunk: Dict[str, Any] | None) -> None:
-        """Save a chunk that failed even at batch_size=1 to disk for review."""
+        """Save a chunk that failed at the base case to disk for review."""
         if not chunk:
             return
         chunk_dir = Path("projects/default/failed_chunks")
@@ -644,7 +1030,7 @@ class ExtractionAgent:
         cache.set(system_prompt, user_prompt, result, model=self.model)
         return result
 
-    def _call_llm_with_detection(self, system_prompt: str, user_prompt: str) -> str:
+    def _call_llm_with_detection(self, system_prompt: str, user_prompt: str, output_file=None) -> str:
         """Extraction‑only LLM call with real‑time degradation detection.
 
         Uses ``self._llm.stream()`` instead of ``invoke()`` so the loop
@@ -657,6 +1043,9 @@ class ExtractionAgent:
 
         Raises :class:`ModelDegradedException` on detection so callers can
         salvage partial text and retry with a fresh GPU.
+
+        If *output_file* is provided, live tokens are written there instead
+        of stdout (avoids jumbled output in parallel mode).
         """
         from src.streaming_handler import TokenStreamHandler
 
@@ -678,7 +1067,7 @@ class ExtractionAgent:
         callbacks: list[Any] = []
         if self.callback:
             callbacks.append(self.callback)
-        handler = TokenStreamHandler()
+        handler = TokenStreamHandler(output_file=output_file)
         callbacks.append(handler)
         if callbacks:
             config["callbacks"] = callbacks
@@ -1034,6 +1423,21 @@ class ExtractionAgent:
                 )
             else:
                 raise
+
+        if not result and len(text) > 500:
+            try:
+                compressed = zlib.compress(text.encode("utf-8"))
+                ratio = len(text) / max(len(compressed), 1)
+                if ratio >= 12.0:
+                    raise ModelDegradedException(
+                        f"Compression ratio {ratio:.1f}:1 indicates repetitive "
+                        f"degradation (text={len(text)} chars, no entities parsed)",
+                        text=text,
+                    )
+            except ModelDegradedException:
+                raise
+            except Exception:
+                pass
 
         if not result:
             logger.warning(

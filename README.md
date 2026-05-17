@@ -80,40 +80,53 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 ## 2. Current State
 
-**As of 17 May 2026 — Extraction hardening complete; single‑pass recursive extraction operational.**
+**As of 17 May 2026 — Pulsed‑wave parallel extraction with self‑calibrating boundary and compression‑ratio degradation detection operational.**
 
 | Metric | Value |
 |--------|-------|
-| Tests passing | **103** (extraction‑related; full suite ~375) |
+| Tests passing | **41** (extraction‑related; full suite ~375) |
 | Knowledge graph | ~3,810 nodes, ~262K edges |
 | BM25 corpus | 27K+ indexed documents |
 | Papers ingested | ~43+ OA papers (multiple daemon cycles) |
-| Daemon | Orchestrator runs full cycle every 60 min (web discovery → EPMC → ingest → recursive extraction → KG → community detection → handoff) |
+| Daemon | Orchestrator runs full cycle every 60 min (web discovery → EPMC → ingest → pulsed‑wave extraction → KG → community detection → handoff) |
 | LLM provider | Local Ollama (gemma4:e4b + qwen3.6:35b) |
 | UI | Streamlit (`streamlit run app.py`) |
 
 ### What's Running
 
-- **Background daemon**: Autonomous cycle every 60 min — discovers new topics via web search, fetches OA papers from Europe PMC, ingests into ChromaDB + BM25, extracts entities via **single‑pass recursive extraction** (batch_size=8, splits in half on degradation), updates the knowledge graph, runs community detection, writes cycle handoff.
-- **Ollama process management**: Launchd watchdog disarmed at cycle start so the daemon owns the process lifecycle. Between‑batch process restarts (SIGKILL + `ollama serve`) with configurable GPU cooldown (`OLLAMA_RESTART_COOLDOWN_SECONDS=5`) prevent Metal‑backend fragmentation. Orphaned GPU runners cleaned via `pgrep -f "ollama runner"`.
+- **Background daemon**: Autonomous cycle every 60 min — discovers new topics via web search, fetches OA papers from Europe PMC, ingests into ChromaDB + BM25, extracts entities via **pulsed‑wave parallel extraction** (token‑budgeted greedy packing, per‑wave GPU restart, parallel workers, priority‑queue re‑entry for degraded sub‑batches), updates the knowledge graph, runs community detection, writes cycle handoff.
+
+- **Ollama process management**: Launchd watchdog disarmed at cycle start so the daemon owns the process lifecycle. GPU restarts (SIGKILL + `ollama serve`) between pulsed waves with configurable cooldown (`OLLAMA_RESTART_COOLDOWN_SECONDS=5`) prevent Metal‑backend fragmentation. Orphaned GPU runners cleaned via `pgrep -f "ollama runner"`.
+
+- **Self‑calibrating batch sizing**: No hardcoded `batch_size`. Chunks are packed into batches by actual tiktoken count (greedy, up to a per‑wave budget). The budget itself self‑calibrates from pass/fail data across all extractions: `budget = (boundary_lower × 0.95 − system − overhead) / (1 + output_ratio)`. `boundary_lower` rises from passes; `boundary_upper` falls from real (non‑base‑case) degradations. Both persist per‑model in `projects/default/extraction_stats.json`. Starts conservatively (~8 chunks/batch, matching the old batch_size=8) and converges upward as data accumulates.
+
+- **Per‑worker output isolation**: In parallel mode, live LLM token output is written to `logs/extraction/wave_NNN_*.txt` files instead of stdout. The console shows wave‑level summaries with `tail -f` instructions. Degradation detection runs identically regardless of output destination.
+
 - **Stream‑based extraction with early abort**: `_call_llm_with_detection` uses `self._llm.stream()` with a `for` loop — on degradation the loop **breaks immediately** and `stream.close()` forces `GeneratorExit`, closing the httpx connection. Ollama stops generating in milliseconds, not 4096 tokens later.
-- **Real‑time degradation detection**: `TokenStreamHandler` monitors the token stream for word‑level repetition (≥10 consecutive identical words), hyphen‑level repetition (≥10 consecutive identical sub‑tokens within a single hyphenated token), and junk‑line streaks (≥20 consecutive lines without `:` format separator). Sets `degraded=True` flag; does NOT raise (avoids LangChain callback internals).
-- **Recursive split‑on‑failure**: `_extract_batch_recursive` catches `ModelDegradedException` from the stream handler, salvages any entities committed before degradation, restarts the GPU with cooldown, splits the chunk batch in half, and recursively retries each half. Base case (single chunk or max depth 12): saves chunk to `projects/default/failed_chunks/`.
+
+- **Multi‑layer degradation detection**:
+  - Pattern‑specific: word‑level repetition (≥10 consecutive identical words), hyphen‑level repetition (≥10 consecutive identical sub‑tokens), junk‑line streaks (≥20 consecutive lines without `:` format).
+  - **Universal: compression‑ratio** (zlib, ≥8:1) — catches any repetition pattern including novel failure modes not covered by pattern‑specific detectors. Normal extraction output compresses at ~1.5:1; repetitive output at 30–70:1.
+
 - **Improved entity dedup**: `_merge_entity_batches` merges by `(name, claim)` pair — same entity+claim combines evidence sentences and unions chunk source references. Different claims on the same entity are preserved as separate facts.
+
+- **Bad chunk pre‑emption**: Chunks that reach the base case ≥3 times are tracked in machine‑readable `projects/default/bad_chunks.json`. On future extractions, known‑bad chunks are automatically isolated into single‑chunk batches at the front of the queue.
+
 - **Yield protocol**: Daemon pauses between papers when `projects/default/daemon_yield` sentinel exists — unloads gemma4 to free GPU for user queries.
+
 - **Web UI**: Query interface with 4 modes, benchmark dashboard, session history, export.
 
 ### Open Problems
 
 - **Ollama GPU memory at the Metal layer is fundamentally opaque** (Gap I). No software‑level API exposes true Metal buffer state. Process death (SIGKILL) is the strongest guarantee available; the 5 s cooldown after kill is a heuristic tuned for DDR5 unified memory at 100 GB/s.
-- **Mid‑batch KV‑cache corruption** still possible for extremely dense batches. The recursive split‑on‑failure and stream‑level early abort are the general defenses — they catch *any* degradation pattern, not just known signatures.
 - **`stream.close()` abort reliability** — breaking the `for` loop and calling `stream.close()` sends `GeneratorExit`, but the underlying httpx cleanup depends on LangChain's internal stream handling. The `finally` block guarantees `.close()` is called; edge cases remain untested at scale.
+- **Boundary calibration needs live data** — the self‑calibrating boundary starts conservative (~8 chunks/batch) and converges as papers are processed. Several papers of live extraction data are needed for the boundary to converge to the model's true effective‑context limit.
 - **Phase 11 partial build not yet wired**. `community_summarizer.py`, `relevance_router.py`, and `progressive_disclosure.py` are designed and tested but not integrated.
 - **No long‑running daemon validation** ≥8 h continuous. Short cycles of 2‑4 papers have been tested.
 
 ### What's Next
 
-Phase 11 community routing. Also: investigate gemma4:26b (17 GB, 25.8B parameters) for higher extraction quality when batch_size = 8 proves insufficient. See [Planned Capabilities](#18-planned-capabilities).
+Phase 11 community routing. Also: investigate gemma4:26b (17 GB, 25.8B parameters) for higher extraction quality. The self‑calibrating boundary will automatically adjust for the larger model's context window. See [Planned Capabilities](#18-planned-capabilities).
 
 ---
 
@@ -359,17 +372,44 @@ The LLM reads all retrieved chunks and identifies recurring themes, variables, e
 
 A LangGraph interrupt at a human checkpoint allows the researcher to accept, remove, or add categories.
 
-### 7.3 Recursive Batch Extraction (Pass 2b)
+### 7.3 Pulsed‑Wave Parallel Extraction (Pass 2b) — current architecture
 
-**Problem (Phase 10.5):** Full‑paper extraction (100+ chunks in one LLM call) produced ~15K‑token prompts that exceeded gemma4:e4b's effective context window (~6K tokens). The model hallucinated from training data because it couldn't see the actual chunks.
+**Problem (Phase 10.5):** The old `_extract_batch_recursive` sequential recursion with fixed `batch_size=8` was slow (13 GPU restarts for a 100‑chunk paper). The batch sizing was one‑size‑fits‑all — every paper got the same chunk count regardless of chunk density. And the budget derivation from `num_ctx=16384` was wrong (see §7.3a below).
 
-**Solution — adaptive recursive extraction:** The entry point `extract_paper_recursive(chunks, batch_size=8)` processes chunks in groups of 8. Each group is handled by `_extract_batch_recursive` — on degradation the stream is aborted in milliseconds (`stream.close()`), the GPU is restarted with cooldown, partial entities are salvaged, the batch is split in half, and both halves are recursively retried. Base case: single chunks that still degrade are saved to `projects/default/failed_chunks/`.
+**Solution — pulsed‑wave parallel extraction with self‑calibrating boundary:**
 
-**Why this works:** The system self‑adapts — simple papers complete at batch_size=8 with 1 call per batch; dense papers that degrade split dynamically until each sub‑batch fits the model's effective context. Between‑batch GPU restarts guarantee a clean Metal slate.
+```
+GPU restart (5s)
 
-**Previous architecture (deprecated):** `extract_entities_batched` with static batch_size=8 and blind retry of the same batch. Replaced because blind retry of a batch that degraded from prompt‑size overflow would degrade identically. The recursive split addresses the actual failure mode.
+Wave 1:  [batch_a ∥ batch_b ∥ batch_c ∥ batch_d]     ← parallel workers
+         collect passes, split degradations → re‑queue
+         update boundary + output ratio from real data
+         recompute budget for next wave
 
-**Previous previous architecture (deprecated):** Two‑pass extraction (`extract_paper_two_pass`) with Pass 1 for cross‑chunk claims and Pass 2 for recursive all‑entity extraction. Pass 1 failed immediately on 100‑chunk papers because it fed all chunks to the model at once — the same prompt‑overflow problem. Replaced by the single‑pass recursive system which captures cross‑chunk claims through salvage at each recursive level.
+Wave 2:  GPU restart (5s)
+         queue sorted: smaller sub‑batches first
+         [sub_a1 ∥ sub_a2 ∥ batch_e ∥ batch_f]
+         ...
+```
+
+The entry point `extract_paper_recursive(chunks, categories, query)` handles:
+1. **Token‑budgeted packing**: Chunks packed by actual tiktoken count (not a fixed number). Dense chunks get fewer siblings; short chunks get more. Each batch fits the budget exactly.
+2. **Self‑calibrating budget**: `budget = (boundary_lower × 0.95 − system − overhead) / (1 + output_ratio)`. `boundary_lower` rises from passes; `boundary_upper` falls from real degradations. Persisted per‑model in `extraction_stats.json`. Starts at ~8 chunks/batch (matching old batch_size=8) and converges upward.
+3. **Per‑wave GPU restart**: SIGKILL + cooldown at the start of each wave. All workers in the wave run on a clean GPU. Between‑wave restarts prevent Metal fragmentation.
+4. **Parallel workers**: Up to `OLLAMA_NUM_PARALLEL` concurrent requests per wave, capped by GPU memory (qwen3.6:35b auto‑capped at 1). Each worker gets its own independent KV cache; `stream.close()` on degradation only affects the degraded request's HTTP connection.
+5. **Priority queue**: Degraded batches split in half and re‑queued. Smaller sub‑batches sorted to the front of each wave. Base‑case chunks (depth 12 or 1 chunk) saved to `failed_chunks/` and tracked in `bad_chunks.json`.
+
+**Per‑worker output**: All live LLM token output written to `logs/extraction/wave_NNN_*.txt` files. Console shows wave‑level summaries with `tail -f` instructions. No jumbled stdout in parallel mode.
+
+**Why this works:** The system starts conservative (matching the empirically‑safe old behavior) and self‑calibrates upward from real data. No hardcoded batch sizes, no magic fractions, no derivation from `num_ctx`. The boundary converges to the model's true effective‑context limit over multiple papers.
+
+### 7.3a Previous architectures (deprecated)
+
+**Deprecated — `_extract_batch_recursive` (removed 17 May 2026):** Sequential recursive handler — on degradation the stream was aborted via `stream.close()`, GPU was restarted, the batch was split in half, and both halves were recursively retried. Replaced by the pulsed‑wave loop which provides the same split‑on‑failure behavior but with parallel execution within each wave. The recursive logic is now achieved by the wave loop re‑processing split batches with priority ordering.
+
+**Deprecated — `extract_entities_batched` (removed earlier):** Static `batch_size=8` with blind retry of the same batch. Replaced because blind retry of a batch that degraded from prompt‑size overflow would degrade identically.
+
+**Deprecated — `extract_paper_two_pass` (removed earlier):** Two‑pass extraction with Pass 1 for cross‑chunk claims and Pass 2 for recursive all‑entity extraction. Pass 1 failed immediately on 100‑chunk papers because it fed all chunks to the model at once — the same prompt‑overflow problem. Cross‑chunk claims are now captured through salvage at each recursive level.
 
 ### 7.4 Evidence-Grouped Output Format (Pass 2b)
 
@@ -396,21 +436,27 @@ The parser (`_parse_line_tagged`) is fully backward-compatible with the old per-
 
 ### 7.6 Streaming, Degradation Detection & Recovery
 
-**Three‑layer defense against model degradation:**
+**Four‑layer defense against model degradation:**
 
 | Layer | Mechanism | Latency |
 |-------|-----------|---------|
-| **Detect** | `TokenStreamHandler` monitors the stream in real‑time: ≥10 consecutive identical words, ≥10 consecutive hyphen‑sub‑tokens (`e‑coli‑coli…`), ≥20 consecutive junk lines (no `:` separator). Sets `degraded=True` flag. | < 100 ms after onset |
+| **Detect** | `TokenStreamHandler` monitors the stream in real‑time: (1) word‑level repetition (≥10 consecutive identical words), (2) hyphen‑level repetition (≥10 consecutive identical sub‑tokens), (3) junk‑line streaks (≥20 consecutive lines without `:`), (4) **universal compression‑ratio** (zlib, ≥8:1 — catches any repetition pattern). Sets `degraded=True` flag. | < 100 ms after onset |
 | **Abort** | `_call_llm_with_detection` uses `self._llm.stream()` with a `for` loop. On `handler.degraded`, breaks immediately; `stream.close()` in `finally` sends `GeneratorExit` → httpx disconnect → Ollama stops. | < 500 ms after detection |
-| **Recover** | `_extract_batch_recursive` catches `ModelDegradedException`, salvages committed partial entities, restarts GPU with cooldown, splits batch in half, recurses both halves. | ~5 s (restart) + retry time |
+| **Recover** | Pulsed‑wave loop catches `ModelDegradedException`, salvages partial entities, splits batch in half, re‑queues both halves for the next wave (GPU restart before next wave). | ~5 s (restart) + retry time |
+| **Calibrate** | Boundary tracked from actual pass/fail data: passes raise `boundary_lower`, non‑base‑case degradations lower `boundary_upper`. Budget tightens/loosens per‑wave from the calibrated boundary. | Real‑time |
+
+**Compression‑ratio detection (novel approach):**
+
+All degradation patterns share one property — the model stops producing novel content. Repetitive text compresses at 30–70:1 while normal extraction output compresses at ~1.5:1. The compression ratio check in `TokenStreamHandler._check_degradation()` runs every 100 characters on the last 2000‑char tail (~10µs per check) and catches any repetition pattern — including novel failure modes not covered by pattern‑specific detectors. Example: the model repeating `EVIDENCE: The thermoelectric materials |` hundreds of times — each line has a `:` (not junk), words are different (not word‑spam), no hyphens present — but compression ratio instantly spikes to 30:1.
 
 **Parser‑level defenses (secondary):**
 - `_parse_line_tagged` junk‑line counter (≥20 without `:` → `RuntimeError`)
 - `_detect_token_spam` on committed entity fields and raw junk lines
 - Block‑level repetition detection (identical entity block committed twice)
+- Compression‑ratio post‑parse check (if zero entities and ratio ≥12:1 → `ModelDegradedException`)
 - On `RuntimeError`, returns partial entities already committed (salvaging, not discarding)
 
-**No retries on the same batch** — blind retry of a batch that degraded from prompt‑overflow would degrade identically. The recursive split addresses the failure mode, not the symptom.
+**No blind retry** — batches that degrade are split in half, not retried at the same size. Halving the batch addresses the causal mechanism (less tokens = less KV pressure), not the symptom.
 
 ### 7.7 Evidence Grounding
 
@@ -567,12 +613,13 @@ The Phase 10 orchestrator runs as an autonomous background daemon, continuousl
 └──────────────────────┬───────────────────────────────────────────┘
                        ▼
 ┌─ PreExtractor → KG ───────────────────────────────────────────────┐
-│  Sequential per paper.  Recursive extraction (batch_size=8) with    │
-│  evidence‑grouped line‑tagged format.  Stream‑based detection with   │
-│  early abort (stream.close() → httpx disconnect).  On degradation:  │
-│  salvage → restart GPU (cooldown) → split batch → recurse.         │
-│  Between‑batch restarts prevent Metal fragmentation.                │
-│  Entity dicts → GraphBuilder → graph_storage.save()                │
+│  Pulsed‑wave parallel extraction.  Token‑budgeted chunk packing      │
+│  (tiktoken per‑chunk).  GPU restart per wave.  Parallel workers     │
+│  within each wave.  Self‑calibrating boundary formula for budget.   │
+│  Stream‑based detection with early abort (stream.close()).           │
+│  Degradation → salvage → split → re‑queue (priority: smaller        │
+│  sub‑batches first).  Per‑worker output to logs/extraction/.        │
+│  Entity dicts → GraphBuilder → graph_storage.save()                 │
 └──────────────────────┬───────────────────────────────────────────┘
                        ▼
 ┌─ Community detection ─────────────────────────────────────────────┐
@@ -611,8 +658,8 @@ orch.stop()    # clean shutdown
 
 - **Dry-run mode**: `Orchestrator(dry_run=True)` runs the full discovery→query cycle but skips all API calls beyond web search. Returns `would_have_queries` in summary.
 - **Parallel fetch + batch ingest**: Parallelizes I/O-bound EPMC search/XML fetch, batches all chunks into one ingest call (avoids redundant BM25 rebuilds).
-- **Recursive extraction (batch_size=8, adaptive)**: Prevents prompt‑overflow hangs on large papers. Evidence‑grouped format saves 60‑70% output tokens. Stream‑based detection with early abort (`stream.close()`) stops degradation in ms. On failure: salvage partial entities → restart GPU (5 s cooldown) → split batch in half → recurse. Base case: save to `failed_chunks/`. Between‑batch GPU restarts guarantee clean Metal state.
-- **Between‑batch GPU restart**: After each extraction batch, the Ollama process is SIGKILLed by port, orphaned GPU runners cleaned via `pgrep`, and the server restarted with a configurable cooldown (`OLLAMA_RESTART_COOLDOWN_SECONDS=5`). This is the only reliable mechanism for flushing Metal GPU memory — the deprecated `keep_alive=0` + `/api/ps` polling could "confirm" a 9.6 GB model unload in 0.8 s (physically impossible on Apple Silicon).
+- **Pulsed‑wave parallel extraction**: Token‑budgeted greedy chunk packing (tiktoken per‑chunk). GPU restart at wave start. Parallel workers within each wave (up to `OLLAMA_NUM_PARALLEL`, memory‑aware cap). Self‑calibrating boundary formula for per‑batch budget — starts conservative (~8 chunks/batch), converges from pass/fail data across papers. Stream‑based detection with early abort (`stream.close()`). On non‑base‑case degradation: salvage → split → re‑queue for next wave (priority: smaller first). Base case: save to `failed_chunks/` + track in `bad_chunks.json`. Per‑worker LLM output to `logs/extraction/` files (clean console).
+- **Between‑wave GPU restart**: Before each pulsed wave, the Ollama process is SIGKILLed by port, orphaned GPU runners cleaned via `pgrep`, and the server restarted with a configurable cooldown (`OLLAMA_RESTART_COOLDOWN_SECONDS=5`). This is the only reliable mechanism for flushing Metal GPU memory — the deprecated `keep_alive=0` + `/api/ps` polling could "confirm" a 9.6 GB model unload in 0.8 s (physically impossible on Apple Silicon). Frequency: restarts = number of waves (typically 2–4 for a 100‑chunk paper), not one per batch (~13).
 - **State persistence**: `orchestrator_state.json` (cycle counter, heartbeat, total ingested, last error) read on restart for crash recovery.
 - **PID management**: `orchestrator.pid` written on start, removed on clean shutdown.
 - **Cycle handoffs**: `cycle_N_handoff.md` files with KG stats, ingest progress, cycle summary. Human `HANDOFF.md` never overwritten.
@@ -821,6 +868,7 @@ The system was built in 10 phases over ~2 months (April–May 2026), progressing
 - **Phase 7**: Vision — figure extraction from PDFs, multimodal description via gemma4:e4b, claim/citation ledger with SHA-256 dedup
 - **Phases 8-9**: Scale — Europe PMC API ingestion (replacing EZProxy/Playwright), SPECTER2 embeddings, corpus-scale retrieval at 22K+ documents
 - **Phase 10**: Autonomy — background daemon (web discovery → EPMC → ingest → KG → handoff every 60 min), line-tagged extraction format, parallel subagents
+- **Phase 10.5**: Extraction hardening — compression‑ratio degradation detection (universal, pattern‑agnostic), pulsed‑wave parallel extraction with self‑calibrating boundary‑based budget, token‑based greedy chunk packing (tiktoken), per‑worker log files, bad‑chunk pre‑emption (`bad_chunks.json`)
 
 Full build history with per-phase deliverables, lessons learned, and benchmark details: [`docs/phase-history.md`](docs/phase-history.md).
 
@@ -834,19 +882,31 @@ These rules preserve the system's design integrity. **Do not violate them.**
 
 ### Extraction & Output
 - Do NOT switch extraction output back to JSON — line-tagged format eliminates the 70% parse-failure rate on local models
-- Do NOT switch extraction back to full‑prompt (all chunks in one call) — gemma4:e4b's effective context is ~6K tokens; 100‑chunk papers (~15K tokens) cause hallucination failures
+- Do NOT switch extraction back to full‑prompt (all chunks in one call) — the token‑budgeted pulsed‑wave system is the correct architecture
 - Do NOT remove the evidence‑grouped output format from the system prompt — saves 60‑70% tokens
 - Do NOT remove `max_retries=0` from the extraction LLM instance — retrying hung Ollama requests wastes time in daemon context
 - Do NOT remove streaming extraction (`streaming=True` + `TokenStreamHandler`) — real‑time degradation detection depends on it
 - Do NOT remove `_call_llm_with_detection` or its `stream.close()` in the `finally` block — the `GeneratorExit` → httpx disconnect is the only mechanism for stopping Ollama generation in milliseconds
+- Do NOT remove the compression‑ratio detection in `TokenStreamHandler._check_degradation()` — it catches *any* repetition pattern, including novel failure modes
 - Do NOT remove the block‑level repetition detector in `_parse_line_tagged`'s `_commit()` — catches identical entity blocks
-- Do NOT remove the token‑spam detector (`_detect_token_spam`) — catches word‑level (`Energy: Energy: Energy:`) AND character‑level (`e-coli-coli-coli…`) token repetition
+- Do NOT remove the token‑spam detector (`_detect_token_spam`) — catches word‑level AND character‑level token repetition
 - Do NOT remove the junk‑line counter in `_parse_line_tagged` — catches ≥20 consecutive lines without `:` format separator
 - Do NOT remove partial entity salvaging on `RuntimeError` in `_parse_line_tagged` — returns committed entities instead of discarding the entire batch
-- Do NOT remove the recursive split‑on‑failure logic in `_extract_batch_recursive` — this is the adaptive defense that replaces blind batch retry
-- Do NOT remove `_merge_entity_batches` dedup by `(name, claim)` with evidence union — preserves full context across recursive sub‑batches
+- **Do NOT reinstate `_extract_batch_recursive` or `_merge_entity_dicts`** — removed 17 May 2026. The pulsed‑wave loop in `extract_paper_recursive` is the sole extraction path.
+- Do NOT add `batch_size` back as a parameter — batch sizing is now token‑driven via the self‑calibrating boundary formula.
+- Do NOT derive the chunk budget from `num_ctx` — the self‑calibrating boundary formula (`boundary_lower × 0.95 − system − overhead) / (1 + ratio)`) replaces it.
+- Do NOT remove `_update_boundary` or `_update_output_ratio` — these are the calibration mechanisms.
+- Do NOT remove the per‑wave budget recomputation — each wave must use the latest calibrated values.
+- Do NOT remove `_pack_chunks_into_batches` token‑based packing — per‑chunk tiktoken counting is the batch‑size correctness guarantee.
+- Do NOT remove `_try_extract_once` — it's the single‑shot wrapper used by all parallel workers.
+- Do NOT remove `_calculate_max_workers` — the memory‑aware worker cap prevents OOM on large models.
+- Do NOT remove `extraction_stats.json` persistence — it's the calibration memory (boundary + ratio per model).
+- Do NOT remove `bad_chunks.json` pre‑emption — it prevents repeated failures on known‑corrupted chunks.
+- Do NOT remove base‑case boundary exclusion — corrupted single chunks must not pollute the context‑window calibration.
+- Do NOT remove `_merge_entity_batches` dedup by `(name, claim)` with evidence union — preserves full context across sub‑batches
 - Do NOT remove `_save_failed_chunk` — single‑chunk failures are documented, not silently lost
 - Do NOT remove the line-tagged parser (`_parse_line_tagged`) or formatters (`_categories_to_line_tagged`, `_categories_to_line_tagged_sorted`)
+- Do NOT remove per‑worker log files in parallel mode — they keep stdout clean; degradation detection is unaffected
 - Do NOT revert `DIRECTION`/`CLAIM` to the old constrained‑direction semantics — the `CLAIM` field captures qualitative changes, quantitative measurements, and states/roles; `DIRECTION` is mapped to `CLAIM` in the parser for backward compatibility
 - Do NOT add keyword blacklists or grounding‑check heuristics to the parser — prompt constraints are the correct layer for output quality; programmatic filters create a maintenance arms race
 - Plain ASCII output only — Unicode-to-ASCII substitution enforced at extraction, synthesis, and final scrub
