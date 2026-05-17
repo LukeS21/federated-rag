@@ -84,7 +84,7 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 | Metric | Value |
 |--------|-------|
-| Tests passing | **307** (zero failures) |
+| Tests passing | **375** (zero failures) |
 | Knowledge graph | ~3,810 nodes, ~262K edges |
 | BM25 corpus | 27K+ indexed documents |
 | Papers ingested | ~43+ OA papers (multiple daemon cycles) |
@@ -95,19 +95,23 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 ### What's Running
 
-- **Background daemon**: Autonomous cycle every 60 min — discovers new topics via web search, fetches OA papers from Europe PMC, ingests into ChromaDB + BM25, extracts entities with batched evidence‑grouped line‑tagged format, updates the knowledge graph, runs community detection, writes cycle handoff. Between‑batch Ollama memory resets prevent Metal‑backend GPU fragmentation.
+- **Background daemon**: Autonomous cycle every 60 min — discovers new topics via web search, fetches OA papers from Europe PMC, ingests into ChromaDB + BM25, extracts entities with batched evidence‑grouped line‑tagged format, updates the knowledge graph, runs community detection, writes cycle handoff. Between‑batch Ollama process restarts (SIGKILL + `ollama serve`) prevent Metal‑backend GPU fragmentation. The macOS Ollama.app launchd watchdog is disarmed at cycle start so the daemon owns the process lifecycle.
 - **Web UI**: Query interface with 4 modes (Survey, Deep, Quick, Sectioned), benchmark dashboard, session history, export
 - **Vision pipeline**: Extracts, filters, describes, and embeds figures from ingested PDFs
 - **Streaming extraction**: Real‑time token‑level visibility into LLM generation during entity extraction
+- **Extraction quality defenses**: Block‑level repetition detection in `_parse_line_tagged`'s `_commit()`; word‑level and character‑level (hyphen‑split) consecutive‑repetition detection catches token spam like `Energy: Energy: Energy: …` and `e-coli-coli-coli…`
+- **Yield protocol**: Daemon pauses extraction between papers when sentinel file `projects/default/daemon_yield` exists — unloads gemma4 to free GPU memory for a user query (qwen3.6:35b maxes out the 36 GB M3 Max alone; both models can never be loaded simultaneously)
 
 ### Open Problems
 
-- **Ollama GPU memory degradation**: Despite API‑based model resets with polling verification, the llama.cpp Metal backend accumulates memory fragmentation over 100+ sequential inference requests. The `/api/ps` endpoint reports administrative state, not true Metal buffer state. Block‑level repetition detection catches the most common failure mode; token‑level spamming within individual field values is not yet caught. A safe Ollama process restart (only when the daemon is the sole Ollama user) was designed but not built.
-- **No guaranteed GPU memory verification**: No reliable software‑level verification of Metal GPU memory state exists without Metal profiling tools (PyObjC/MTLCaptureManager — complex, Mac‑only) or a full Ollama process restart (which kills other agents).
+- **Ollama GPU memory at the Metal layer is fundamentally opaque** (Gap I). No software‑level API — in any framework (Ollama, llama‑cpp‑python, MLX) — can verify true Metal buffer state. Apple does not expose GPU memory telemetry through a public API. The `/api/ps` endpoint reports Ollama's administrative view, not hardware reality. The 0.8 s "confirmed unloaded" for a 9.6 GB model is physically impossible on Apple Silicon. Process‑death (SIGKILL) is the strongest guarantee available, but even a dead process does not prove Metal freed its pages — only that the PID is gone.
+- **Mid‑batch KV‑cache corruption** under sustained generation load. Not fixable by process restarts — it occurs *within a single generation*. The model produces clean output for 100‑150 entities then degrades (prompt‑example regurgitation, `(Skipping…)` loops, hyphenated single‑token spam, 600 s timeouts). Smaller batch sizes (4 chunks) and the existing spam detectors are the only defenses. This appears to be an inherent limitation of llama.cpp's Metal backend on Apple Silicon under sustained token generation.
+- **Batch failures discard good entities**. When `_parse_line_tagged` raises `RuntimeError` (repetition detection), the entire batch's partial entities — including 100‑177 correctly parsed entities before the error — are lost. A partial‑save wrapper is designed but not built (see Phase 10.5 remaining gaps in HANDOFF).
+- **Phase 11 partial build not yet wired**. `community_detection.py` runs in orchestrator cycles but `community_summarizer.py`, `relevance_router.py`, and `progressive_disclosure.py` are designed and tested but not integrated into the daemon or retrieval pipeline.
 
 ### What's Next
 
-Phases 11-13 are designed. The immediate architectural priority beyond the current roadmap is the **persistent belief store** — expanding the claim ledger into a living hypothesis tracker with contradiction detection, confidence scores, and cross-cycle updating. See [Planned Capabilities](#18-planned-capabilities).
+Phase 11 community routing is designed and partial‑build committed. The immediate architectural priority is wiring community access into Survey Mode retrieval and integrating progressive KG disclosure. See [Planned Capabilities](#18-planned-capabilities).
 
 ---
 
@@ -813,8 +817,11 @@ These rules preserve the system's design integrity. **Do not violate them.**
 - Do NOT remove the evidence‑grouped output format from the system prompt — saves 60‑70% tokens
 - Do NOT remove `max_retries=0` from the extraction LLM instance — retrying hung Ollama requests wastes time in daemon context
 - Do NOT remove streaming output (`streaming=True` + `TokenStreamHandler`) from extraction — real‑time visibility is critical for diagnosing degradation
-- Do NOT remove the block‑level repetition detector in `_parse_line_tagged`'s `_commit()` — catches the most common degradation pattern
+- Do NOT remove the block‑level repetition detector in `_parse_line_tagged`'s `_commit()` — catches identical entity blocks
+- Do NOT remove the token‑spam detector (`_detect_token_spam`) — catches word‑level (`Energy: Energy: Energy:`) AND character‑level (`e-coli-coli-coli…`) token repetition
 - Do NOT remove the line-tagged parser (`_parse_line_tagged`) or formatters (`_categories_to_line_tagged`, `_entities_to_line_tagged`)
+- Do NOT revert `DIRECTION`/`CLAIM` to the old constrained‑direction semantics — the `CLAIM` field captures qualitative changes, quantitative measurements, and states/roles; `DIRECTION` is mapped to `CLAIM` in the parser for backward compatibility
+- Do NOT add keyword blacklists or grounding‑check heuristics to the parser — prompt constraints are the correct layer for output quality; programmatic filters create a maintenance arms race
 - Plain ASCII output only — Unicode-to-ASCII substitution enforced at extraction, synthesis, and final scrub
 
 ### Debate & Synthesis
@@ -836,7 +843,9 @@ These rules preserve the system's design integrity. **Do not violate them.**
 - Do NOT make `_fetch_and_parse_for_query()` an instance method or closure — module-level functions are compatible with ThreadPoolExecutor
 - Do NOT change `write_handoff()` default path to `HANDOFF.md` — always accept explicit `output_path`
 - Do NOT remove `orchestrator_state.json` or `orchestrator.pid` management
-- Do NOT remove `_reset_ollama()` or its between‑batch call site — this is the only mechanism preventing cumulative GPU fragmentation
+- Do NOT remove `_reset_ollama()` or its between‑batch call site — it is the always‑safe fallback when process restart is impossible
+- Do NOT remove `_restart_ollama_process()` — SIGKILL‑by‑port + `ollama serve` between papers/batches is the only reliable GPU memory flush
+- Do NOT remove `_ensure_dedicated_ollama()` — launchd disarm at cycle start is required for process restarts to work on macOS (otherwise the Ollama.app watchdog respawns killed processes, creating ghost runners that each hold ~10 GB GPU memory)
 - Do NOT remove the before/after model‑count logging in `_reset_ollama()` — only audit trail for memory reset effectiveness
 
 ### Security

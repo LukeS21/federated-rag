@@ -81,8 +81,8 @@ def _init_provider_config() -> None:
             )
             _base_url = _public_base_url
             _api_key = "ollama"
-            _small_model = os.getenv("OLLAMA_SMALL_MODEL", "qwen3.6:35b-a3b")
-            _large_model = os.getenv("OLLAMA_LARGE_MODEL", "qwen3.6:35b-a3b")
+            _small_model = os.getenv("OLLAMA_SMALL_MODEL", "gemma4:e4b")
+            _large_model = os.getenv("OLLAMA_LARGE_MODEL", "qwen3.6:35b")
             _alt_model = os.getenv("OLLAMA_ALT_MODEL", "medgemma:4b")
 
         logger.info("LLM provider: %s (public=%s, secure=%s, small=%s, large=%s, alt=%s)",
@@ -116,7 +116,7 @@ def resolve_model(model: str | None) -> str:
     """
     _init_provider_config()
     if model is None:
-        return _large_model or "qwen3.6:35b-a3b"
+        return _large_model or "qwen3.6:35b"
 
     lower = model.lower()
     if "chat" in lower or "small" in lower:

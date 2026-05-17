@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -18,6 +19,7 @@ GRAPH_PATH = PROJECT_DIR / "project_graph.json"
 STATE_PATH = PROJECT_DIR / "orchestrator_state.json"
 PID_PATH = PROJECT_DIR / "orchestrator.pid"
 LOG_PATH = PROJECT_DIR / "orchestrator.log"
+YIELD_PATH = PROJECT_DIR / "daemon_yield"
 DEFAULT_INTERVAL_MINUTES = 60
 DEFAULT_MAX_PAPERS_PER_QUERY = 5
 DEFAULT_SEED_TERMS = [
@@ -194,6 +196,14 @@ class Orchestrator:
             "would_have_queries": [],
             "errors": [],
         }
+
+        # ── Bootstrap: take ownership of Ollama (disarm launchd) ────────
+        if not self.dry_run:
+            try:
+                from src.ingestion.pre_extractor import PreExtractor
+                PreExtractor._ensure_dedicated_ollama()
+            except Exception:
+                pass
 
         # 1 ─ Web discovery
         seed_terms = self._derive_seed_terms()
@@ -428,6 +438,9 @@ class Orchestrator:
             if self.graph_storage is not None:
                 self._extract_to_kg(pmcid, pd["chunks"])
 
+            # Check for yield request from UI between papers
+            self._check_yield()
+
         progress.finalize()
         return per_query
 
@@ -547,6 +560,54 @@ class Orchestrator:
             )
         except Exception as exc:
             logger.warning("Handoff write failed: %s", exc)
+
+    def _check_yield(self, timeout: float = 600.0) -> None:
+        """Pause extraction if a user query is waiting for the GPU.
+
+        Checks for the presence of ``projects/default/daemon_yield`` — a
+        sentinel file created by the Streamlit UI or manually by the user.
+        When found, the daemon unloads gemma4 (freeing GPU memory for qwen),
+        yields, and polls until the file is removed.
+
+        This allows user queries to complete during daemon extraction without
+        killing the daemon or exceeding the 36 GB unified-memory budget.
+        Only one model can be loaded at a time on this hardware.
+        """
+        if not YIELD_PATH.exists():
+            return
+
+        logger.info(
+            "Daemon yield — sentinel file detected at %s. "
+            "Unloading gemma4 to free GPU for user query.",
+            YIELD_PATH,
+        )
+        self._write_state("yielding")
+
+        try:
+            from src.ingestion.pre_extractor import PreExtractor
+            PreExtractor._reset_ollama(timeout=10.0)
+        except Exception:
+            pass
+
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            if not YIELD_PATH.exists():
+                elapsed = time.monotonic() - t0
+                logger.info(
+                    "Daemon yield complete after %.1fs — sentinel removed. "
+                    "Resuming extraction.",
+                    elapsed,
+                )
+                self._write_state("extracting")
+                return
+            time.sleep(1)
+
+        logger.warning(
+            "Daemon yield timed out after %.0fs — sentinel still present. "
+            "Resuming extraction anyway.",
+            timeout,
+        )
+        self._write_state("extracting")
 
     def _cleanup_handoffs(self, max_age_days: int = 7) -> None:
         """Remove handoff files older than *max_age_days*.

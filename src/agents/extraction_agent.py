@@ -7,6 +7,7 @@ evidence-grounded entities from retrieved document chunks.
 
 import json
 import logging
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -156,34 +157,49 @@ class ExtractionAgent:
             "--- CORRECT OUTPUT FORMAT ---\n"
             "Group entities that share the SAME evidence sentence together. "
             "State the shared fields once, then list each entity compactly:\n\n"
-            "EVIDENCE: Polymeric nanocarriers like polyethyleneimine, dendrimers, and graphene-based materials offer efficient, non-viral alternatives, with magnetic nanoparticles showing promise in targeted applications.\n"
+            "EVIDENCE: Polymeric nanocarriers like polyethyleneimine, dendrimers, and graphene-based materials offer efficient, non-viral alternatives, with magnetic nanoparticles showing promise.\n"
             "SOURCE: Chunk 1 | paper_a.pdf\n"
             "TYPE: material\n"
-            "ENTITY: polyethyleneimine | DIRECTION: unchanged\n"
-            "ENTITY: dendrimers | DIRECTION: unchanged\n"
-            "ENTITY: graphene-based materials | DIRECTION: elevated\n\n"
+            "ENTITY: polyethyleneimine\n"
+            "ENTITY: dendrimers\n"
+            "ENTITY: graphene-based materials | CLAIM: elevated\n\n"
             "EVIDENCE: IL-6 levels were significantly elevated in the treated group compared to controls.\n"
             "SOURCE: Chunk 12 | paper_b.pdf\n"
             "TYPE: cytokine\n"
-            "ENTITY: IL-6 | DIRECTION: elevated\n\n"
+            "ENTITY: IL-6 | CLAIM: elevated\n\n"
+            "EVIDENCE: The sensor exhibited a sensitivity of 0.65 uA.mM-1 with a detection limit of 1.3 x 10-2 M.\n"
+            "SOURCE: Chunk 5 | paper_c.pdf\n"
+            "TYPE: sensor performance\n"
+            "ENTITY: sensitivity | CLAIM: 0.65 uA.mM-1\n"
+            "ENTITY: detection limit | CLAIM: 1.3 x 10-2 M\n\n"
             "EVIDENCE: Ti-6Al-4V alloy was used for all implantation experiments.\n"
             "SOURCE: Chunk 5 | paper_a.pdf\n"
             "TYPE: material\n"
-            "ENTITY: Ti-6Al-4V | DIRECTION: unchanged\n\n"
+            "ENTITY: Ti-6Al-4V\n\n"
+            "EVIDENCE: Macrophages polarized toward an M2 anti-inflammatory phenotype after 24h treatment.\n"
+            "SOURCE: Chunk 22 | paper_d.pdf\n"
+            "TYPE: cell type\n"
+            "ENTITY: macrophage | CLAIM: M2 phenotype | CONTEXT: after 24h treatment\n\n"
             "--- END OF FORMAT EXAMPLE ---\n\n"
             "FORMAT RULES (VIOLATIONS WILL BE REJECTED):\n"
             "1. Group entities that share the SAME evidence sentence — do NOT repeat evidence.\n"
             "2. Start each group with EVIDENCE:, SOURCE:, and TYPE: (any order).\n"
-            "3. Each entity is a compact line: ENTITY: name | DIRECTION: value\n"
-            "4. DIRECTION MUST only describe a MEASURABLE CHANGE vs baseline:\n"
-            "   Valid:  elevated, decreased, increased, reduced, unchanged,\n"
-            "           upregulated, downregulated, up, down.\n"
-            "   Omit DIRECTION entirely for entities where this makes no sense\n"
-            "   (materials, methods, equipment, anatomical structures, image\n"
-            "   types, organisms, concepts, etc.).  NEVER use placeholder\n"
-            "   values like 'source', 'characteristic', 'application',\n"
-            "   'general', 'N/A', 'prerequisite', or 'target'.\n"
-            "5. Optional per-entity attributes: DIRECTION:, CONTEXT:, CONDITIONS:\n"
+            "3. Each entity is a compact line: ENTITY: name | CLAIM: value\n"
+            "4. CLAIM captures what the evidence says ABOUT this entity:\n"
+            "   a) Qualitative change:  elevated, decreased, increased, reduced,\n"
+            "      upregulated, downregulated, up, down.\n"
+            "   b) Quantitative measurement:  0.65 uA.mM-1, 11 V, R2 = 0.993,\n"
+            "      18 s, 2 Pa.  Quote the value directly from evidence.\n"
+            "   c) State, role, or identity:  M2 phenotype, matrix material,\n"
+            "      pro-inflammatory cytokine.\n"
+            "   Omit CLAIM entirely when the evidence simply mentions the entity\n"
+            "   without making a specific claim about it.  NO filler values.\n\n"
+            "   WRONG:  ENTITY: PVDF | CLAIM: unchanged       <- omit instead\n"
+            "   WRONG:  ENTITY: sensors | CLAIM: N/A           <- omit instead\n"
+            "   CORRECT: ENTITY: PVDF                           <- no claim to make\n"
+            "   CORRECT: ENTITY: sensitivity | CLAIM: 0.65 uA.mM-1\n"
+            "   CORRECT: ENTITY: IL-6 | CLAIM: elevated\n"
+            "5. Optional per-entity attributes: CLAIM:, CONTEXT:, CONDITIONS:\n"
             "6. Separate groups with ONE blank line (empty line).\n"
             "7. NO markdown — NO **bold**, NO *italics*, NO bullet points, NO headers.\n"
             "8. NO JSON — NO braces, NO brackets, NO quotes.\n"
@@ -196,8 +212,9 @@ class ExtractionAgent:
             '  {"category": "materials", "entities": [...]} <-- WRONG, NO JSON\n'
             '  - Titanium (evidence: ...)                    <-- WRONG, NO bullets\n'
             '  Repeating the same EVIDENCE for every entity  <-- WRONG, GROUP THEM\n'
-            '  ENTITY: CBCT images | DIRECTION: source       <-- WRONG, omit DIRECTION\n'
-            '  ENTITY: implant | DIRECTION: target            <-- WRONG, omit DIRECTION\n'
+            '  ENTITY: PVDF | CLAIM: unchanged                <-- WRONG, omit CLAIM\n'
+            '  ENTITY: implant | CLAIM: target                <-- WRONG, omit CLAIM\n'
+            '  ENTITY: CBCT images | CLAIM: source             <-- WRONG, omit CLAIM\n'
         )
 
         user_prompt = (
@@ -208,10 +225,11 @@ class ExtractionAgent:
             "INSTRUCTIONS:\n"
             "1. Group entities that share the SAME evidence sentence together.\n"
             "2. State EVIDENCE:, SOURCE:, and TYPE: once per group. Then one ENTITY: line per entity.\n"
-            "3. Use compact entity format: ENTITY: name | DIRECTION: value\n"
-            "4. Copy evidence VERBATIM from the chunks above — do not summarize.\n"
-            "5. NO markdown, NO JSON, NO bullet points.\n"
-            "6. Separate groups with one blank line. No introduction, no summary."
+            "3. Use compact entity format: ENTITY: name | CLAIM: value\n"
+            "4. CLAIM is what the evidence says about this entity (qualitative change, quantitative measurement, or state/role). Omit CLAIM entirely when the evidence simply mentions the entity.\n"
+            "5. Copy evidence VERBATIM from the chunks above — do not summarize.\n"
+            "6. NO markdown, NO JSON, NO bullet points.\n"
+            "7. Separate groups with one blank line. No introduction, no summary."
         )
 
         raw_output = self._call_llm(system_prompt, user_prompt)
@@ -310,7 +328,11 @@ class ExtractionAgent:
             if i + batch_size < len(chunks):  # only between batches, not after last
                 try:
                     from src.ingestion.pre_extractor import PreExtractor  # noqa: F811 — lazy to avoid circular import
-                    PreExtractor._reset_ollama(timeout=30.0)
+                    _reset_mode = os.getenv("EXTRACTION_RESET_MODE", "api").strip().lower()
+                    if _reset_mode == "process":
+                        PreExtractor._restart_ollama_process(timeout=60.0)
+                    else:
+                        PreExtractor._reset_ollama(timeout=30.0)
                 except Exception:
                     pass
 
@@ -521,11 +543,68 @@ class ExtractionAgent:
         current: Dict[str, str] = {}  # per-entity: entity, direction, context, conditions
         _last_committed: Dict[str, str] = {}  # detect repetition loops
 
+        def _detect_token_spam(value: str, max_consecutive: int = 3) -> bool:
+            """Check if a field value contains consecutive repetition.
+
+            Two-pass detection catches the observed degradation signatures:
+
+            **Word-level** (space‑split):
+                ``Energy: Energy: Energy: …``  →  same word ≥ *max_consecutive*
+
+            **Character-level** (hyphen‑split within a single “word”):
+                ``e-coli-coli-coli-coli…``  →  same sub‑token ≥ *max_consecutive*
+
+            Neither pass uses raw length — legitimate long evidence is never
+            flagged; short spam chains are always caught.
+            """
+            if not value or len(value) < 15:
+                return False
+            words = value.split()
+
+            # ── Word-level pass ──────────────────────────────────────────
+            if len(words) >= max_consecutive:
+                run = 1
+                for i in range(1, len(words)):
+                    a = words[i].lower().rstrip(":,;.")
+                    b = words[i - 1].lower().rstrip(":,;.")
+                    if a == b:
+                        run += 1
+                        if run >= max_consecutive:
+                            return True
+                    else:
+                        run = 1
+
+            # ── Character-level pass (hyphenated spam) ───────────────────
+            for token in words:
+                if "-" not in token or len(token) <= 20:
+                    continue
+                parts = [p.strip().lower() for p in token.split("-") if p.strip()]
+                if len(parts) < max_consecutive:
+                    continue
+                run = 1
+                for i in range(1, len(parts)):
+                    if parts[i] == parts[i - 1]:
+                        run += 1
+                        if run >= max_consecutive:
+                            return True
+                    else:
+                        run = 1
+
+            return False
+
         def _commit() -> None:
             nonlocal _last_committed
             if not current.get("entity"):
                 return
             ent = {**group, **current}
+            for field_name, field_value in ent.items():
+                if isinstance(field_value, str) and _detect_token_spam(field_value):
+                    raise RuntimeError(
+                        "Token-level spam detected in %r field: %r. "
+                        "Model is degraded (likely Metal backend KV-cache "
+                        "corruption from sustained generation). "
+                        "Aborting batch extraction." % (field_name, field_value[:120])
+                    )
             if ent == _last_committed:
                 raise RuntimeError(
                     "LLM repetition loop detected — identical entity block "
@@ -539,7 +618,11 @@ class ExtractionAgent:
                 result.setdefault(cat, []).append(ent)
 
         def _parse_entity_pipe(value: str) -> Dict[str, str]:
-            """Parse 'name | KEY: val | KEY: val' into an entity dict."""
+            """Parse 'name | KEY: val | KEY: val' into an entity dict.
+
+            Maps the legacy ``direction`` key to ``claim`` for compatibility
+            with pre-Phase 10.5 extractions still stored on disk.
+            """
             d: Dict[str, str] = {}
             parts = [p.strip() for p in value.split("|")]
             d["entity"] = parts[0] if parts else ""
@@ -548,6 +631,8 @@ class ExtractionAgent:
                     k, _, v = part.partition(":")
                     k = k.strip().lower()
                     v = v.strip()
+                    if k == "direction":
+                        k = "claim"
                     if v:
                         d[k] = v
             return d

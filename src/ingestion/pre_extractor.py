@@ -11,8 +11,11 @@ the dominant query cost in Survey Mode (~60% of LLM calls).
 import json
 import logging
 import os
+import subprocess
+import time as _time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import numpy as np
 
@@ -22,6 +25,8 @@ from src.graph.base_graph import BaseGraphStorage
 from src.unicode_map import scrub_unicode
 
 logger = logging.getLogger(__name__)
+
+_launchd_disarmed = False
 
 EXTRACTIONS_DIR = "projects/default/extractions"
 EMBEDDINGS_DIR = "projects/default/embeddings"
@@ -132,7 +137,11 @@ class PreExtractor:
         # Prevents Metal backend memory fragmentation that accumulates across
         # 100+ sequential inference requests, causing late-cycle hangs and
         # garbage output ("TYPE: TYPE: TYPE:").
-        PreExtractor._reset_ollama()
+        #
+        # Uses process restart (kill + relaunch ollama) when the daemon is the
+        # sole Ollama user — the only reliable way to flush Metal GPU memory.
+        # Falls back to keep_alive=0 API unload when other models are active.
+        PreExtractor._restart_ollama_process()
 
         return entities
 
@@ -297,3 +306,339 @@ class PreExtractor:
         except Exception:
             logger.debug("Ollama reset failed (non-fatal)")
             pass
+
+    @staticmethod
+    def _ensure_dedicated_ollama(
+        ollama_host: str | None = None,
+    ) -> bool:
+        """Disarm the macOS Ollama app's launchd watchdog and take ownership.
+
+        The Ollama menu‑bar app uses a ``KeepAlive`` launchd plist that
+        respawns the server on any exit.  This means ``kill -9`` never
+        works — a new process pops up instantly, resulting in ghost
+        processes that waste GPU memory.
+
+        This method runs ONCE per process lifetime:
+        1. Unloads the Ollama launchd plist (stops the watchdog).
+        2. SIGKILLs all ollama-related processes.
+        3. Starts a fresh ``ollama serve`` under our control.
+
+        After this, ``_restart_ollama_process`` works normally —
+        kill + restart between batches guarantees true GPU flushes
+        without ghost processes multiplying.
+
+        Returns True if work was done (first call), False on subsequent
+        calls.  Callers can short‑circuit their own restart logic.
+        """
+        global _launchd_disarmed
+        if _launchd_disarmed:
+            return False
+
+        if ollama_host is None:
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+        port = urlparse(ollama_host).port or 11434
+
+        # ── Step 1: disarm the launchd watchdog ─────────────────────────
+        plists = [
+            os.path.expanduser("~/Library/LaunchAgents/com.ollama.ollama.plist"),
+        ]
+        for pp in plists:
+            if os.path.exists(pp):
+                try:
+                    subprocess.run(
+                        ["launchctl", "unload", pp],
+                        capture_output=True, timeout=10,
+                    )
+                    logger.info("Disarmed launchd watchdog: %s", pp)
+                except Exception as exc:
+                    logger.debug("launchctl unload %s: %s", pp, exc)
+
+        # ── Step 2: kill ALL ollama processes ───────────────────────────
+        try:
+            subprocess.run(
+                ["pkill", "-9", "-f", "ollama"],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            pass
+
+        # ── Step 3: wait for port to free up ────────────────────────────
+        deadline = _time.monotonic() + 15
+        while _time.monotonic() < deadline:
+            try:
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if not result.stdout.strip():
+                    break
+            except Exception:
+                break
+            _time.sleep(0.5)
+
+        # ── Step 4: start a fresh server under our control ──────────────
+        try:
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            logger.warning("ollama serve failed: %s", exc)
+            return False
+
+        # ── Step 5: wait for API readiness ──────────────────────────────
+        deadline = _time.monotonic() + 30
+        while _time.monotonic() < deadline:
+            try:
+                import urllib.request as _ur
+                _time.sleep(0.5)
+                _ur.urlopen(
+                    _ur.Request(ollama_host + "/api/tags", method="GET"),
+                    timeout=5,
+                )
+                break
+            except Exception:
+                continue
+
+        _launchd_disarmed = True
+        logger.info(
+            "Dedicated Ollama server ready on port %d — "
+            "launchd watchdog disarmed, we own the process.",
+            port,
+        )
+        return True
+
+    @staticmethod
+    def _find_and_kill_ollama(ollama_host: str) -> tuple[bool, str]:
+        """Kill the Ollama process by finding the PID listening on its port.
+
+        Uses ``lsof -ti :PORT`` to locate the PID, then ``kill -9``
+        (SIGKILL — unblockable).  This bypasses ``ollama stop``, which
+        can be swallowed by launchd, the macOS menu‑bar app, or a stuck
+        Metal backend that never exits cleanly.
+
+        Returns:
+            ``(success, message)`` — *success* is True if at least one
+            process was killed.
+        """
+        try:
+            port = urlparse(ollama_host).port or 11434
+        except Exception:
+            port = 11434
+
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            pids = [
+                line.strip()
+                for line in result.stdout.strip().splitlines()
+                if line.strip()
+            ]
+            if not pids:
+                return False, f"no process found on port {port}"
+        except FileNotFoundError:
+            return False, "lsof not available"
+        except Exception as exc:
+            return False, f"lsof failed: {exc}"
+
+        killed = []
+        for pid in pids:
+            try:
+                subprocess.run(
+                    ["kill", "-9", pid],
+                    capture_output=True, timeout=5,
+                )
+                killed.append(pid)
+            except Exception as exc:
+                logger.warning("kill -9 %s failed: %s", pid, exc)
+
+        # ── Also kill orphaned GPU runner subprocesses ──────────────────
+        # Runners listen on ephemeral ports (e.g. 62635, 62676), not the
+        # main API port, so lsof -ti :11434 misses them.  They hold ~10 GB
+        # each and accumulate across restarts.
+        try:
+            r = subprocess.run(
+                ["pgrep", "-f", "ollama runner"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for runner_pid in r.stdout.strip().splitlines():
+                runner_pid = runner_pid.strip()
+                if runner_pid and runner_pid not in killed:
+                    try:
+                        subprocess.run(
+                            ["kill", "-9", runner_pid],
+                            capture_output=True, timeout=5,
+                        )
+                        killed.append(runner_pid)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        if killed:
+            return True, f"killed {len(killed)} process(es) on port {port}: {', '.join(killed)}"
+        return False, f"could not kill processes on port {port}"
+
+    @staticmethod
+    def _restart_ollama_process(
+        model_name: str = "gemma4:e4b",
+        ollama_host: str | None = None,
+        timeout: float = 60.0,
+    ) -> None:
+        """Restart the Ollama server process to force a true Metal GPU flush.
+
+        Only proceeds when *model_name* is the **sole** model loaded in
+        Ollama — other models active means other agents are running (UI,
+        synthesis) and would break if Ollama were killed.
+
+        When safe, SIGKILLs the process listening on the Ollama port →
+        wait for server death → ``ollama serve`` (background) →
+        wait for API readiness → model loads on next LLM call.
+
+        Falls back to :meth:`_reset_ollama` (API keep_alive=0) when other
+        models are active or the restart fails for any reason.
+
+        Cost: 15–30 s per restart.  Called between papers by default,
+        between batches when ``EXTRACTION_RESET_MODE=process``.
+        """
+        if ollama_host is None:
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+        t_start = _time.monotonic()
+
+        # ── First call: disarm launchd watchdog, take process ownership ──
+        if PreExtractor._ensure_dedicated_ollama(ollama_host):
+            logger.info(
+                "Ollama restart complete — launchd disarmed, dedicated server "
+                "ready with fresh GPU.  Subsequent restarts will use fast kill+relaunch."
+            )
+            return
+
+        # ── Check if we are the sole user ────────────────────────────────
+        try:
+            import urllib.request as _ur
+            r = _ur.Request(ollama_host + "/api/ps", method="GET")
+            data = json.loads(_ur.urlopen(r, timeout=5).read())
+            loaded = [m.get("name", "") for m in data.get("models", [])]
+        except Exception:
+            loaded = []
+
+        other_models = [m for m in loaded if m != model_name]
+        if other_models:
+            logger.info(
+                "Skipping Ollama process restart — %d other model(s) active (%s). "
+                "Falling back to keep_alive=0 unload.",
+                len(other_models), ", ".join(other_models),
+            )
+            PreExtractor._reset_ollama(
+                model_name=model_name,
+                ollama_host=ollama_host,
+                timeout=min(timeout, 30.0),
+            )
+            return
+
+        logger.info(
+            "Restarting Ollama process — sole user (%s loaded). "
+            "This guarantees a true Metal GPU memory flush.",
+            model_name if loaded else "(none)",
+        )
+
+        # ── Step 1: kill the server by port (SIGKILL, unblockable) ────────
+        ok, msg = PreExtractor._find_and_kill_ollama(ollama_host)
+        if ok:
+            logger.info("Killed Ollama process: %s", msg)
+        else:
+            logger.info("No Ollama process killed (%s) — continuing", msg)
+
+        # ── Step 2: wait for server death ────────────────────────────────
+        deadline = _time.monotonic() + 30
+        server_dead = False
+        while _time.monotonic() < deadline:
+            try:
+                _ur.urlopen(_ur.Request(ollama_host + "/api/ps", method="GET"), timeout=2)
+                _time.sleep(0.5)  # still alive, keep waiting
+            except Exception:
+                server_dead = True
+                break
+
+        if not server_dead:
+            logger.warning(
+                "Ollama server still reachable after %ds — aborting restart, "
+                "falling back to keep_alive=0",
+                int(_time.monotonic() - t_start),
+            )
+            PreExtractor._reset_ollama(
+                model_name=model_name,
+                ollama_host=ollama_host,
+                timeout=min(timeout, 30.0),
+            )
+            return
+
+        _wait_death = _time.monotonic() - t_start
+        logger.info(
+            "Ollama stopped in %.1fs — server confirmed dead", _wait_death,
+        )
+
+        # ── Step 3: start the server ─────────────────────────────────────
+        try:
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "ollama binary not found in PATH — falling back to keep_alive=0"
+            )
+            PreExtractor._reset_ollama(
+                model_name=model_name,
+                ollama_host=ollama_host,
+                timeout=min(timeout, 30.0),
+            )
+            return
+        except Exception as exc:
+            logger.warning("ollama serve failed (%s) — falling back to keep_alive=0", exc)
+            PreExtractor._reset_ollama(
+                model_name=model_name,
+                ollama_host=ollama_host,
+                timeout=min(timeout, 30.0),
+            )
+            return
+
+        # ── Step 4: wait for server readiness ────────────────────────────
+        deadline = _time.monotonic() + 30
+        server_ready = False
+        while _time.monotonic() < deadline:
+            try:
+                _time.sleep(0.5)
+                r = _ur.Request(ollama_host + "/api/tags", method="GET")
+                _ur.urlopen(r, timeout=5)
+                server_ready = True
+                break
+            except Exception:
+                continue
+
+        if not server_ready:
+            logger.warning(
+                "Ollama server not ready after %ds — falling back to keep_alive=0",
+                int(_time.monotonic() - t_start),
+            )
+            PreExtractor._reset_ollama(
+                model_name=model_name,
+                ollama_host=ollama_host,
+                timeout=min(timeout, 30.0),
+            )
+            return
+
+        elapsed = _time.monotonic() - t_start
+        logger.info(
+            "Ollama process restart complete in %.1fs — %s reloaded. "
+            "Metal GPU memory fully flushed.",
+            elapsed, model_name,
+        )

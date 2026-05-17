@@ -97,10 +97,7 @@ class RelevanceRouter:
         threshold = threshold or self.EMBEDDING_THRESHOLD
 
         if not self.use_llm:
-            result = self._route_by_embedding(query, community_summaries, threshold)
-            if result["method"] == "embedding":
-                return result
-            logger.info("Embedding routing ambiguous — falling back to LLM")
+            return self._route_by_embedding(query, community_summaries, threshold)
 
         return self._route_by_llm(query, community_summaries, threshold)
 
