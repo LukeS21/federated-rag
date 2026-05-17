@@ -18,7 +18,7 @@ Phase   Status
  9      API‑Based Literature Ingestion (Europe PMC, SPECTER2)                  ✅ Complete
 10      Autonomous Background Agent (orchestrator daemon)                      ✅ Complete
 10.5    Extraction Hardening (batched extraction, memory mgmt, streaming)        ✅ Complete
-11      Memory Cascade & Community Routing                                     ⬜ Designed, partial build
+11      Memory Cascade & Community Routing                                     ⬜ Partial build (summarizer + router wired; progressive disclosure + SPECTER2 remain)
 12      Skills & Experiential Memory                                           ⬜ Designed
 13      Output Tools & Structured Writing                                      ⬜ Designed
 ```
@@ -80,7 +80,7 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 ## 2. Current State
 
-**As of 17 May 2026 — Pulsed‑wave parallel extraction with self‑calibrating boundary and compression‑ratio degradation detection operational.**
+**As of 17 May 2026 — Pulsed‑wave parallel extraction with self‑calibrating boundary, ratio‑based repack, data‑quality exemption, realtime calibration logging, and per‑wave Terminal worker windows operational.  Phase 10.5 extraction hardening is complete.  Phase 11 community routing has one remaining code gap (ProgressiveDisclosure wiring) plus a SPECTER2 paper‑similarity search to build.**
 
 | Metric | Value |
 |--------|-------|
@@ -98,9 +98,9 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 - **Ollama process management**: Launchd watchdog disarmed at cycle start so the daemon owns the process lifecycle. GPU restarts (SIGKILL + `ollama serve`) between pulsed waves with configurable cooldown (`OLLAMA_RESTART_COOLDOWN_SECONDS=5`) prevent Metal‑backend fragmentation. Orphaned GPU runners cleaned via `pgrep -f "ollama runner"`.
 
-- **Self‑calibrating batch sizing**: No hardcoded `batch_size`. Chunks are packed into batches by actual tiktoken count (greedy, up to a per‑wave budget). The budget itself self‑calibrates from pass/fail data across all extractions: `budget = (boundary_lower × 0.95 − system − overhead) / (1 + output_ratio)`. `boundary_lower` rises from passes; `boundary_upper` falls from real (non‑base‑case) degradations. Both persist per‑model in `projects/default/extraction_stats.json`. Starts conservatively (~8 chunks/batch, matching the old batch_size=8) and converges upward as data accumulates.
+- **Self‑calibrating batch sizing**: No hardcoded `batch_size`. Chunks are packed into batches by actual tiktoken count (greedy, up to a per‑wave budget). The budget itself self‑calibrates from pass/fail data across all extractions: `budget = (boundary_lower × 0.95 − system − overhead) / (1 + output_ratio)`. `boundary_lower` starts at 8000 (~800‑tok chunks produce ~20 batches per 100‑chunk paper), rises from passes; `boundary_upper` starts at 16384, falls from real degradations. **Symmetric clamp** prevents `lower > upper`. **Data‑quality exemption** (`depth=0, n≤3`) excludes corrupted‑chunk failures from calibration. **Ratio‑based repack** between waves repacks fresh batches with the updated budget so calibration improvements increase batch density mid‑run. All values persist per‑model in `projects/default/extraction_stats.json` with realtime INFO‑level console logs.
 
-- **Per‑worker output isolation**: In parallel mode, live LLM token output is written to `logs/extraction/wave_NNN_*.txt` files instead of stdout. The console shows wave‑level summaries with `tail -f` instructions. Degradation detection runs identically regardless of output destination.
+- **Per‑worker output isolation**: In parallel mode, live LLM token output is written to `logs/extraction/wave_NNN_*.txt` files instead of stdout. The console shows wave‑level summaries; per‑wave Terminal.app windows open automatically (`osascript`) showing live `tail -f` output, closing when the next wave begins. Degradation detection runs identically regardless of output destination. `OLLAMA_NUM_PARALLEL` is explicitly passed to the `ollama serve` subprocess via `env=os.environ.copy()` to guarantee the server respects the parallelism cap.
 
 - **Stream‑based extraction with early abort**: `_call_llm_with_detection` uses `self._llm.stream()` with a `for` loop — on degradation the loop **breaks immediately** and `stream.close()` forces `GeneratorExit`, closing the httpx connection. Ollama stops generating in milliseconds, not 4096 tokens later.
 
@@ -118,15 +118,21 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 ### Open Problems
 
-- **Ollama GPU memory at the Metal layer is fundamentally opaque** (Gap I). No software‑level API exposes true Metal buffer state. Process death (SIGKILL) is the strongest guarantee available; the 5 s cooldown after kill is a heuristic tuned for DDR5 unified memory at 100 GB/s.
+- **Ollama GPU memory at the Metal layer is fundamentally opaque** (Gap E). No software‑level API exposes true Metal buffer state. Process death (SIGKILL) is the strongest guarantee available; the 5 s cooldown after kill is a heuristic tuned for DDR5 unified memory at 100 GB/s.
 - **`stream.close()` abort reliability** — breaking the `for` loop and calling `stream.close()` sends `GeneratorExit`, but the underlying httpx cleanup depends on LangChain's internal stream handling. The `finally` block guarantees `.close()` is called; edge cases remain untested at scale.
-- **Boundary calibration needs live data** — the self‑calibrating boundary starts conservative (~8 chunks/batch) and converges as papers are processed. Several papers of live extraction data are needed for the boundary to converge to the model's true effective‑context limit.
-- **Phase 11 partial build not yet wired**. `community_summarizer.py`, `relevance_router.py`, and `progressive_disclosure.py` are designed and tested but not integrated.
+- **ProgressiveDisclosure not wired** — `progressive_disclosure.py` is fully built and tested (10 unit + 5 integration tests) but never instantiated in production. The data it needs (`community_data`, `community_summaries`, `relevant_communities`) is already computed in `survey_community_route_node`. Wiring replaces the ad‑hoc community section in `survey_scrub_node` with structured tiered disclosure.
+- **SPECTER2 `paper_similarity_search()` not built** — `spector2_cache.json` has 768‑dim embeddings for 8 papers but no consumer function. A `find_similar(doi, min_score=0.6)` method is needed for cosine‑similarity‑ranked paper discovery.
 - **No long‑running daemon validation** ≥8 h continuous. Short cycles of 2‑4 papers have been tested.
+- **Model‑key mismatch** — diagnostic script hardcodes `model="deepseek-chat"` while running `gemma4:e4b` via Ollama. Extracted stats are keyed to the wrong model, fragmenting calibration across code paths.
 
 ### What's Next
 
-Phase 11 community routing. Also: investigate gemma4:26b (17 GB, 25.8B parameters) for higher extraction quality. The self‑calibrating boundary will automatically adjust for the larger model's context window. See [Planned Capabilities](#18-planned-capabilities).
+1. **Wire ProgressiveDisclosure** — last Phase 11 code gap (3 files, ~30 lines). Instantiate in `survey_community_route_node`, store `disclosure_map` in state, consume in `survey_scrub_node`.
+2. **Build SPECTER2 `paper_similarity_search`** — `Spector2Cache.find_similar()` with cosine‑similarity ranking (2 files, ~30 lines).
+3. **≥8 h daemon validation run** — validate memory stability, boundary convergence, and parallel extraction over multiple daemon cycles.
+4. **Investigate gemma4:26b** (17 GB, 25.8B parameters) for higher extraction quality. The self‑calibrating boundary will automatically adjust.
+
+See [Planned Capabilities](#18-planned-capabilities) for Phase 12+ roadmap.
 
 ---
 
@@ -868,7 +874,7 @@ The system was built in 10 phases over ~2 months (April–May 2026), progressing
 - **Phase 7**: Vision — figure extraction from PDFs, multimodal description via gemma4:e4b, claim/citation ledger with SHA-256 dedup
 - **Phases 8-9**: Scale — Europe PMC API ingestion (replacing EZProxy/Playwright), SPECTER2 embeddings, corpus-scale retrieval at 22K+ documents
 - **Phase 10**: Autonomy — background daemon (web discovery → EPMC → ingest → KG → handoff every 60 min), line-tagged extraction format, parallel subagents
-- **Phase 10.5**: Extraction hardening — compression‑ratio degradation detection (universal, pattern‑agnostic), pulsed‑wave parallel extraction with self‑calibrating boundary‑based budget, token‑based greedy chunk packing (tiktoken), per‑worker log files, bad‑chunk pre‑emption (`bad_chunks.json`)
+- **Phase 10.5**: Extraction hardening — compression‑ratio degradation detection (universal, pattern‑agnostic), pulsed‑wave parallel extraction with self‑calibrating boundary‑based budget, token‑based greedy chunk packing (tiktoken), per‑worker log files, bad‑chunk pre‑emption (`bad_chunks.json`), boundary calibration for real‑world chunks (boundary_lower=8000), symmetric boundary clamp, data‑quality degradation exemption (depth=0, n≤3), ratio‑based queue repack between waves, realtime calibration INFO logging, OLLAMA_NUM_PARALLEL explicit passthrough to ollama serve, per‑wave Terminal.app worker windows.
 
 Full build history with per-phase deliverables, lessons learned, and benchmark details: [`docs/phase-history.md`](docs/phase-history.md).
 
@@ -910,6 +916,12 @@ These rules preserve the system's design integrity. **Do not violate them.**
 - Do NOT revert `DIRECTION`/`CLAIM` to the old constrained‑direction semantics — the `CLAIM` field captures qualitative changes, quantitative measurements, and states/roles; `DIRECTION` is mapped to `CLAIM` in the parser for backward compatibility
 - Do NOT add keyword blacklists or grounding‑check heuristics to the parser — prompt constraints are the correct layer for output quality; programmatic filters create a maintenance arms race
 - Plain ASCII output only — Unicode-to-ASCII substitution enforced at extraction, synthesis, and final scrub
+- **Do NOT lower `boundary_lower` below 8000** — 2500 was calibrated on unrealistic test chunks (~10 tok each) and produced excessive fragmentation (60 batches for 100 real‑world chunks)
+- **Do NOT remove the symmetric boundary clamp** — prevents contradictory `lower > upper` states caused by data‑quality degradations
+- **Do NOT remove the data‑quality exemption (depth=0, n≤3)** — bad‑data failures must not pollute the context‑window calibration
+- **Do NOT remove the ratio‑based queue repack between waves** — makes calibration improvements actionable during extraction
+- **Do NOT remove the per‑wave Terminal window spawning** — provides live per‑worker output without console bloat; "Wave" window‑name filter is the safety mechanism
+- **Do NOT remove the `env=env` OLLAMA_NUM_PARALLEL passthrough** in `_ensure_dedicated_ollama` or `_restart_ollama_process` — it's the only guarantee the parallelism setting reaches the server
 
 ### Debate & Synthesis
 - Do NOT remove the heterogeneous debate chain (Drafter→Critic→Arbiter)

@@ -379,11 +379,15 @@ class PreExtractor:
 
         # ── Step 4: start a fresh server under our control ──────────────
         try:
+            env = os.environ.copy()
+            env.setdefault("OLLAMA_NUM_PARALLEL", "4")
+            env.setdefault("OLLAMA_MAX_QUEUE", "8")
             subprocess.Popen(
                 ["ollama", "serve"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=env,
             )
         except Exception as exc:
             logger.warning("ollama serve failed: %s", exc)
@@ -594,11 +598,15 @@ class PreExtractor:
 
         # ── Step 3: start the server ─────────────────────────────────────
         try:
+            env = os.environ.copy()
+            env.setdefault("OLLAMA_NUM_PARALLEL", "4")
+            env.setdefault("OLLAMA_MAX_QUEUE", "8")
             subprocess.Popen(
                 ["ollama", "serve"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=env,
             )
         except FileNotFoundError:
             logger.warning(

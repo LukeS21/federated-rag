@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import re
+import shlex
+import subprocess
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
@@ -136,16 +138,16 @@ class ExtractionAgent:
     def _load_extraction_stats(cls, model: str) -> Dict[str, Any]:
         """Return {output_ratio, boundary_lower, boundary_upper, total_chunk_tokens, total_output_tokens}.
 
-        *boundary_lower* starts at 2500 — calibrated so the first wave
-        produces ~8‑chunk batches (matching the empirically‑safe
-        batch_size=8 from prior extraction runs).
+         *boundary_lower* starts at 8000 — calibrated to produce 4-5-chunk
+         batches for typical biomedical chunks (~900 tok/chunk), matching
+         the empirically-safe batch_size=8 behavior from prior runs.
         *boundary_upper* starts at 16384 — the configured context window.
         Both self‑calibrate from pass/fail data across all runs.
         """
         path = cls._STATS_DIR / cls._STATS_FILE
         default = {
             "output_ratio": 0.50,
-            "boundary_lower": 2500,
+            "boundary_lower": 8000,
             "boundary_upper": 16384,
             "total_chunk_tokens": 0,
             "total_output_tokens": 0,
@@ -185,8 +187,17 @@ class ExtractionAgent:
         stats["total_output_tokens"] += output_tokens
         if output_tokens > 0 and chunk_tokens > 0:
             latest = output_tokens / max(chunk_tokens, 1)
+            old_ratio = stats["output_ratio"]
             stats["output_ratio"] = 0.80 * stats["output_ratio"] + 0.20 * latest
+            changed = abs(stats["output_ratio"] - old_ratio) > 0.001
+        else:
+            changed = False
         cls._save_extraction_stats(model, stats)
+        if changed:
+            logger.info(
+                "Output ratio: model=%s, %.3f→%.3f",
+                model, old_ratio, stats["output_ratio"],
+            )
         return stats["output_ratio"]
 
     @classmethod
@@ -202,11 +213,35 @@ class ExtractionAgent:
         converging to the model's true effective‑context limit.
         """
         stats = cls._load_extraction_stats(model)
+        old_lower = stats["boundary_lower"]
+        old_upper = stats["boundary_upper"]
         if passed:
             stats["boundary_lower"] = max(stats["boundary_lower"], actual_total)
         else:
             stats["boundary_upper"] = min(stats["boundary_upper"], actual_total)
+
+        # Symmetric clamp — a PASS at high context proves upper is
+        # at least that high; a DEGRADE at low context proves lower
+        # is at most that low.  The gap can never go negative.
+        if stats["boundary_lower"] > stats["boundary_upper"]:
+            if passed:
+                stats["boundary_upper"] = stats["boundary_lower"]
+            else:
+                stats["boundary_lower"] = stats["boundary_upper"]
+
         cls._save_extraction_stats(model, stats)
+
+        gap = stats["boundary_upper"] - stats["boundary_lower"]
+        if passed and stats["boundary_lower"] > old_lower:
+            logger.info(
+                "Boundary (PASS): model=%s, lower %d→%d, upper=%d, gap=%d",
+                model, old_lower, stats["boundary_lower"], stats["boundary_upper"], gap,
+            )
+        elif not passed and stats["boundary_upper"] < old_upper:
+            logger.info(
+                "Boundary (DEGRADE): model=%s, lower=%d, upper %d→%d, gap=%d",
+                model, stats["boundary_lower"], old_upper, stats["boundary_upper"], gap,
+            )
 
     @classmethod
     def _load_bad_chunks(cls) -> Dict[str, Dict[str, int]]:
@@ -595,6 +630,21 @@ class ExtractionAgent:
             wave_ok = 0
             wave_degraded = 0
 
+            # ── Close previous wave's Terminal windows ────────────
+            try:
+                subprocess.run(
+                    ["osascript", "-e", '''
+                    tell application "Terminal"
+                        repeat with w in windows
+                            if name of w contains "Wave" then close w
+                        end repeat
+                    end tell
+                    '''],
+                    timeout=5, capture_output=True,
+                )
+            except Exception:
+                pass
+
             # ── GPU restart at wave start ─────────────────────────
             try:
                 from src.ingestion.pre_extractor import PreExtractor
@@ -644,6 +694,35 @@ class ExtractionAgent:
                 except OSError:
                     worker_files.append(None)
 
+            # ── Open Terminal windows for live worker output ──────
+            if wave_size > 1:
+                for w_idx, lp in enumerate(log_paths):
+                    chunks_list, _depth = wave[w_idx]
+                    n = len(chunks_list)
+                    first_idx = (chunks_list[0].get("metadata", {}) or {}).get(
+                        "chunk_index", "?")
+                    title = f"Wave{wave_num} Chunk{first_idx} ({n}ch)"
+                    safe_path = shlex.quote(str(lp.resolve()))
+                    # Write a tiny shell script to /tmp — avoids all
+                    # Python→AppleScript→bash escaping ambiguity.
+                    script_path = f"/tmp/opencode_wave{wave_num}_{w_idx}.sh"
+                    try:
+                        with open(script_path, "w") as sf:
+                            sf.write("#!/bin/bash\n")
+                            sf.write(f"printf '\\033]0;{title}\\007'\n")
+                            sf.write(f"tail -f {safe_path}\n")
+                        os.chmod(script_path, 0o755)
+                        subprocess.Popen(
+                            ["osascript", "-e",
+                             f'tell application "Terminal" to do script "{script_path}"'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not open Terminal window for worker %d: %s",
+                            w_idx, exc,
+                        )
+
             try:
                 with ThreadPoolExecutor(max_workers=wave_size) as executor:
                     futures = {}
@@ -661,14 +740,11 @@ class ExtractionAgent:
                         entities, degraded, salvage, output_tokens = future.result()
                         n = len(chunks_list)
 
-                        # Accumulate output token stats for this wave
                         ct = sum(
                             len(self._get_tokenizer().encode(
                                 self._format_chunk_text(j, ch)))
                             for j, ch in enumerate(chunks_list)
                         )
-                        wave_total_chunk_tokens += ct
-                        wave_total_output_tokens += output_tokens
 
                         if degraded:
                             wave_degraded += 1
@@ -691,11 +767,26 @@ class ExtractionAgent:
                                 # not a context‑window problem — skip boundary update.
                                 continue
 
-                            # ── Non‑base degradation: update boundary ──
-                            actual_total = system_tokens + 350 + ct + output_tokens
-                            self._update_boundary(
-                                self.model, actual_total, passed=False,
-                            )
+                            # ── Data‑quality: depth=0 + n≤3 → batch is
+                            # small enough the context window CANNOT be the
+                            # cause.  Skip boundary + ratio so calibration
+                            # only learns from real context‑limit failures.
+                            data_quality = (depth == 0 and n <= 3)
+
+                            if not data_quality:
+                                # Genuine context overflow — calibrate
+                                wave_total_chunk_tokens += ct
+                                wave_total_output_tokens += output_tokens
+                                actual_total = system_tokens + 350 + ct + output_tokens
+                                self._update_boundary(
+                                    self.model, actual_total, passed=False,
+                                )
+                            else:
+                                logger.info(
+                                    "Degraded (depth %d, %d chunks) — "
+                                    "data‑quality fluke, skipping boundary "
+                                    "& ratio update", depth, n,
+                                )
 
                             # ── Split and re‑queue ────────────────────
                             mid = n // 2
@@ -712,6 +803,8 @@ class ExtractionAgent:
                                 queue.append((sub, depth + 1))
                         else:
                             wave_ok += 1
+                            wave_total_chunk_tokens += ct
+                            wave_total_output_tokens += output_tokens
                             for cat, ent_list in entities.items():
                                 all_entities.setdefault(cat, []).extend(ent_list)
                             logger.info(
@@ -735,9 +828,14 @@ class ExtractionAgent:
                         pass
 
             # ── Wave summary ────────────────────────────────────
+            stats_snapshot = self._load_extraction_stats(self.model)
             logger.info(
-                "Wave %d: %d/%d passed, %d degraded → %d queued",
+                "Wave %d: %d/%d passed, %d degraded → %d queued "
+                "(boundary=[%d, %d], ratio=%.3f)",
                 wave_num, wave_ok, wave_size, wave_degraded, len(queue),
+                stats_snapshot["boundary_lower"],
+                stats_snapshot["boundary_upper"],
+                output_ratio,
             )
 
             # ── Per‑wave ratio update ────────────────────────────
@@ -750,12 +848,41 @@ class ExtractionAgent:
             # ── Recompute budget for next wave (boundary may have moved) ──
             chunk_budget = self._calculate_chunk_budget(system_prompt)
 
+            # ── Repack remaining fresh batches with updated budget ────
+            # Degraded sub-batches are preserved as-is (re-merging could
+            # recreate the same degradation).  Only depth‑0 batches get
+            # repacked so ratio/boundary improvements increase density.
+            fresh = [(chs, d) for chs, d in queue if d == 0]
+            degraded = [(chs, d) for chs, d in queue if d > 0]
+            if fresh:
+                all_fresh = [ch for chs, _ in fresh for ch in chs]
+                new_batches = self._pack_chunks_into_batches(all_fresh, chunk_budget)
+                queue = [(b, 0) for b in new_batches] + degraded
+                logger.info(
+                    "Repacked %d chunks → %d batches (budget=%d tok/batch, ratio=%.3f)",
+                    len(all_fresh), len(new_batches), chunk_budget, output_ratio,
+                )
+
         total = sum(len(v) for v in all_entities.values())
         logger.info(
             "Extraction done: %d entities, %d failed, %d categories "
             "(final ratio=%.3f)",
             total, failed, len(all_entities), output_ratio,
         )
+        # ── Close any remaining Terminal windows ──────────────────
+        try:
+            subprocess.run(
+                ["osascript", "-e", '''
+                tell application "Terminal"
+                    repeat with w in windows
+                        if name of w contains "Wave" then close w
+                    end repeat
+                end tell
+                '''],
+                timeout=5, capture_output=True,
+            )
+        except Exception:
+            pass
         return self._merge_entity_batches(all_entities)
 
     def _save_failed_chunk(self, chunk: Dict[str, Any] | None) -> None:

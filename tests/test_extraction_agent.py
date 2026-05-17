@@ -316,14 +316,14 @@ def test_format_chunk_text():
 
 
 def test_calculate_chunk_budget_positive():
-    """Budget should be positive for defaults (boundary_lower=2500, ratio=0.50)."""
+    """Budget should be positive for defaults (boundary_lower=8000, ratio=0.50)."""
     agent = ExtractionAgent()
     system_prompt = ExtractionAgent._build_all_entities_prompt()
     budget = agent._calculate_chunk_budget(system_prompt)
     assert budget > 0
-    # boundary_lower=2500, system=919, overhead=350, ratio=0.50
-    # → (2375 - 1269) / 1.50 = 737
-    assert 500 < budget < 1500
+    # boundary_lower=8000, system=919, overhead=350, ratio=0.50
+    # → (7600 - 1269) / 1.50 = 4220
+    assert 3000 < budget < 5000
 
 
 def test_pack_chunks_into_batches_respects_budget():
@@ -595,43 +595,44 @@ def test_output_ratio_persistence(monkeypatch, tmp_path):
 
 
 def test_boundary_defaults(monkeypatch, tmp_path):
-    """Fresh stats have boundary_lower=2500, boundary_upper=16384."""
+    """Fresh stats have boundary_lower=8000, boundary_upper=16384."""
     monkeypatch.setattr(ExtractionAgent, "_STATS_DIR",
                         tmp_path / "projects" / "default")
     stats = ExtractionAgent._load_extraction_stats("new-model")
-    assert stats["boundary_lower"] == 2500
+    assert stats["boundary_lower"] == 8000
     assert stats["boundary_upper"] == 16384
     assert stats["output_ratio"] == 0.50
 
 
 def test_boundary_update_pass_raises_lower(monkeypatch, tmp_path):
-    """A passing batch raises boundary_lower."""
+    """A passing batch raises boundary_lower above the default."""
     monkeypatch.setattr(ExtractionAgent, "_STATS_DIR",
                         tmp_path / "projects" / "default")
     (tmp_path / "projects" / "default").mkdir(parents=True)
-    ExtractionAgent._update_boundary("m", actual_total=4000, passed=True)
+    ExtractionAgent._update_boundary("m", actual_total=9000, passed=True)
     stats = ExtractionAgent._load_extraction_stats("m")
-    assert stats["boundary_lower"] == 4000  # rose from 2500
+    assert stats["boundary_lower"] == 9000  # rose from 8000
     assert stats["boundary_upper"] == 16384  # unchanged
 
-    ExtractionAgent._update_boundary("m", actual_total=3500, passed=True)
+    ExtractionAgent._update_boundary("m", actual_total=8500, passed=True)
     stats = ExtractionAgent._load_extraction_stats("m")
-    assert stats["boundary_lower"] == 4000  # max(4000, 3500) = 4000
+    assert stats["boundary_lower"] == 9000  # max(9000, 8500) = 9000
 
 
 def test_boundary_update_degrade_lowers_upper(monkeypatch, tmp_path):
-    """A degrading batch lowers boundary_upper."""
+    """A degrading batch lowers boundary_upper and clamps lower ≤ upper."""
     monkeypatch.setattr(ExtractionAgent, "_STATS_DIR",
                         tmp_path / "projects" / "default")
     (tmp_path / "projects" / "default").mkdir(parents=True)
     ExtractionAgent._update_boundary("m", actual_total=6000, passed=False)
     stats = ExtractionAgent._load_extraction_stats("m")
     assert stats["boundary_upper"] == 6000  # fell from 16384
-    assert stats["boundary_lower"] == 2500  # unchanged
+    assert stats["boundary_lower"] == 6000  # clamped down — cannot exceed upper
 
     ExtractionAgent._update_boundary("m", actual_total=7000, passed=False)
     stats = ExtractionAgent._load_extraction_stats("m")
     assert stats["boundary_upper"] == 6000  # min(6000, 7000) = 6000
+    assert stats["boundary_lower"] == 6000  # still clamped
 
 
 def test_calculate_chunk_budget_calibrated(monkeypatch, tmp_path):
@@ -642,24 +643,24 @@ def test_calculate_chunk_budget_calibrated(monkeypatch, tmp_path):
     agent = ExtractionAgent()
     sys_prompt = ExtractionAgent._build_all_entities_prompt()
 
-    # Default: boundary_lower=2500, ratio=0.50
+    # Default: boundary_lower=8000, ratio=0.50
     b1 = agent._calculate_chunk_budget(sys_prompt)
-    assert 500 < b1 < 1500  # ~737
+    assert 3000 < b1 < 5000  # ~4220
 
-    # Simulate accumulated passes → boundary_lower rises to 5000
-    ExtractionAgent._update_boundary(agent.model, 4500, passed=True)
-    ExtractionAgent._update_boundary(agent.model, 5000, passed=True)
+    # Simulate accumulated passes → boundary_lower rises to 9000
+    ExtractionAgent._update_boundary(agent.model, 8500, passed=True)
+    ExtractionAgent._update_boundary(agent.model, 9000, passed=True)
     b2 = agent._calculate_chunk_budget(sys_prompt)
-    # (5000*0.95 - 919 - 350) / 1.50 = (4750-1269)/1.50 = 2320
+    # (9000*0.95 - 919 - 350) / 1.50 = (8550-1269)/1.50 = 4854
     assert b2 > b1
-    assert b2 > 2000
+    assert b2 > 4000
 
     # Also update ratio → budget should adjust further
     ExtractionAgent._update_output_ratio(agent.model, 5000, 2000)
     b3 = agent._calculate_chunk_budget(sys_prompt)
     # ratio now ~0.48 (from 0.40+0.08), same boundary
-    # (4750-1269)/1.48 = 2351
-    assert b3 > 2000
+    # (8550-1269)/1.48 = 4920
+    assert b3 > 4000
 
 
 def test_boundary_persistence_survives_ratio_update(monkeypatch, tmp_path):
@@ -668,10 +669,10 @@ def test_boundary_persistence_survives_ratio_update(monkeypatch, tmp_path):
                         tmp_path / "projects" / "default")
     (tmp_path / "projects" / "default").mkdir(parents=True)
 
-    ExtractionAgent._update_boundary("m", 5000, passed=True)
+    ExtractionAgent._update_boundary("m", 9000, passed=True)
     ExtractionAgent._update_output_ratio("m", 1000, 400)
 
     stats = ExtractionAgent._load_extraction_stats("m")
-    assert stats["boundary_lower"] == 5000  # preserved
+    assert stats["boundary_lower"] == 9000  # preserved
     assert stats["boundary_upper"] == 16384  # preserved
     assert stats["output_ratio"] != 0.50  # updated
