@@ -1,5 +1,7 @@
 """Unit tests for SPECTER2 embedding cache."""
 import json
+
+import numpy as np
 import pytest
 from pathlib import Path
 from src.utils.spector2_cache import Spector2Cache
@@ -99,3 +101,50 @@ class TestSpector2Cache:
         # so total_entries == with_embedding when all have embeddings
         assert cache.stats()["total_entries"] == 1
         assert cache.stats()["with_embedding"] == 1
+
+    def test_find_similar_returns_results(self, cache):
+        """Querying a cached DOI returns similar papers above threshold."""
+        rng = np.random.RandomState(42)
+
+        query = rng.randn(768).astype(float)
+        similar = query + 0.1 * rng.randn(768).astype(float)
+        different = 0.1 * query + rng.randn(768).astype(float)
+
+        cache.put("10.1016/query.001", "s2_query", query.tolist())
+        cache.put("10.1016/similar.002", "s2_similar", similar.tolist())
+        cache.put("10.1016/different.003", "s2_diff", different.tolist())
+
+        results = cache.find_similar("10.1016/query.001", min_score=0.0)
+        assert len(results) == 2
+        dois = {r["doi"] for r in results}
+        assert "10.1016/similar.002" in dois
+        assert "10.1016/different.003" in dois
+
+        scores = [r["score"] for r in results]
+        assert scores[0] >= scores[1]
+
+        for r in results:
+            assert "doi" in r
+            assert "s2_paper_id" in r
+            assert "score" in r
+            assert r["doi"] != "10.1016/query.001"
+
+    def test_find_similar_doi_not_cached(self, cache):
+        """Returns empty list for unknown DOI."""
+        results = cache.find_similar("10.1016/unknown.doi")
+        assert results == []
+
+    def test_find_similar_respects_threshold(self, cache):
+        """Higher threshold returns fewer/no results."""
+        rng = np.random.RandomState(42)
+        emb_a = rng.randn(768).astype(float).tolist()
+        emb_b = rng.randn(768).astype(float).tolist()
+        emb_c = rng.randn(768).astype(float).tolist()
+
+        cache.put("10.1016/thresh_query.001", "s2_tq", emb_a)
+        cache.put("10.1016/thresh_sim.002", "s2_ts", emb_b)
+        cache.put("10.1016/thresh_diff.003", "s2_td", emb_c)
+
+        results_low = cache.find_similar("10.1016/thresh_query.001", min_score=0.0)
+        results_high = cache.find_similar("10.1016/thresh_query.001", min_score=0.99)
+        assert len(results_low) >= len(results_high)

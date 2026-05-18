@@ -77,6 +77,7 @@ class Spector2Cache:
         if not doi_key or embedding is None or len(embedding) != 768:
             return
         self._data[doi_key] = {
+            "doi": doi,
             "s2_paper_id": s2_paper_id,
             "embedding": embedding,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -87,6 +88,59 @@ class Spector2Cache:
         doi_key = doi.lower().strip()
         entry = self._data.get(doi_key)
         return entry is not None and "embedding" in entry
+
+    def find_similar(
+        self,
+        doi: str,
+        *,
+        min_score: float | None = None,
+    ) -> list[dict]:
+        """Return papers similar to *doi* by cosine similarity of SPECTER2 embeddings.
+
+        Returns a list of ``{doi, s2_paper_id, score}`` dicts, sorted by
+        descending similarity, filtering to ``score >= min_score``.
+        Graceful degradation: returns ``[]`` if *doi* is not cached or
+        no cached papers meet the threshold.
+
+        *min_score* defaults to the ``SPECTOR2_SIMILARITY_THRESHOLD`` env
+        var, or 0.6 if unset.
+        """
+        import numpy as np
+        import os
+
+        if min_score is None:
+            min_score = float(os.getenv("SPECTOR2_SIMILARITY_THRESHOLD", "0.6"))
+
+        emb = self.get(doi)
+        if emb is None:
+            return []
+
+        query_vec = np.array(emb, dtype=np.float32)
+        query_norm = np.linalg.norm(query_vec)
+        if query_norm == 0:
+            return []
+
+        results: list[dict] = []
+        for cached_doi, entry in self._data.items():
+            if cached_doi == doi.lower().strip():
+                continue
+            cached_emb = entry.get("embedding")
+            if cached_emb is None or len(cached_emb) != 768:
+                continue
+            candidate_vec = np.array(cached_emb, dtype=np.float32)
+            candidate_norm = np.linalg.norm(candidate_vec)
+            if candidate_norm == 0:
+                continue
+            score = float(np.dot(query_vec, candidate_vec) / (query_norm * candidate_norm))
+            if score >= min_score:
+                results.append({
+                    "doi": entry.get("doi", cached_doi),
+                    "s2_paper_id": entry.get("s2_paper_id", ""),
+                    "score": score,
+                })
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results
 
     def stats(self) -> Dict[str, int]:
         """Return cache statistics."""

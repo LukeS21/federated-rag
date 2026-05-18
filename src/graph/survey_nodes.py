@@ -304,6 +304,18 @@ def survey_community_route_node(
                 [f"c{cid}:{scores.get(cid, 0):.2f}" for cid in relevant[:5]],
             )
 
+            try:
+                from src.graph.progressive_disclosure import ProgressiveDisclosure
+                pd = ProgressiveDisclosure(graph_storage, community_data, summaries)
+                dm = pd.build_disclosure_map(relevant_communities=relevant, query=query)
+                updates["disclosure_map"] = dm
+                logger.info(
+                    "Progressive disclosure: %d communities, %d papers in disclosure map",
+                    dm.get("n_communities", 0), dm.get("n_papers", 0),
+                )
+            except Exception as e:
+                logger.warning("Progressive disclosure construction failed: %s", e)
+
             # Filter chunks to relevant communities' papers
             if relevant:
                 community_papers = get_community_papers(community_data, graph_storage)
@@ -1087,18 +1099,11 @@ def survey_scrub_node(state: AgentState) -> Dict[str, Any]:
     parts.append(final_scrub(cross_synth))
 
     # Phase 11: Community context (progressive disclosure tier 1)
-    community_data = state.get("community_data", {})
-    relevant = state.get("relevant_communities", [])
-    community_summaries = state.get("community_summaries", {})
-    if relevant and community_summaries:
-        parts.append("\n\n# RESEARCH COMMUNITIES\n")
-        parts.append(f"Query mapped to {len(relevant)} relevant research communities.\n")
-        for cid in relevant:
-            info = community_summaries.get(cid, community_summaries.get(str(cid), {}))
-            summary = info.get("summary", "") if isinstance(info, dict) else ""
-            n_entities = info.get("n_entities", "?") if isinstance(info, dict) else "?"
-            if summary:
-                parts.append(f"\n## Community {cid} ({n_entities} entities)\n{summary[:300]}")
+    disclosure_map = state.get("disclosure_map")
+    if disclosure_map:
+        tier1 = disclosure_map.get("tier1_system_overview", "")
+        if tier1:
+            parts.append("\n\n" + tier1)
 
     parts.append("\n\n# RESEARCH GAPS\n")
     parts.append(final_scrub(gap))

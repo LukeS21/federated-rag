@@ -1,10 +1,13 @@
-# Phase 10.5 → 11 Handoff — 17 May 2026 (boundary calibration, ratio-based repack, data-quality exemption, Terminal worker windows, OLLAMA_NUM_PARALLEL passthrough)
+# Phase 11 → 12 Handoff — 18 May 2026 (ProgressiveDisclosure wired, SPECTER2 built, Planner/Reflector/Executor architecture designed)
 
 ## Quick start
 
 ```bash
-# Fast unit tests (no LLM, ~6s)
+# Fast unit tests — extraction (no LLM, ~6s)
 python -m pytest tests/test_extraction_agent.py -q --tb=short
+
+# Progressive disclosure + SPECTER2 + community routing tests
+python -m pytest tests/test_progressive_disclosure.py tests/test_phase11_integration.py tests/test_spector2_cache.py -q --tb=short
 
 # Diagnostic: test extraction on a real paper (live Ollama)
 python scripts/diagnose_cache_accumulation.py PMC10571047
@@ -14,6 +17,13 @@ python phase9_verify.py --test orchestrator --orchestrator-live
 
 # Dry run (see what WOULD happen, no API spend)
 python phase9_verify.py --test orchestrator
+
+# SPECTER2 similarity search (new)
+python -c "
+from src.utils.spector2_cache import Spector2Cache
+c = Spector2Cache()
+print(c.find_similar('10.1016/j.bioactmat.2021.01.030', min_score=0.5))
+"
 
 # Pause daemon for a user query
 touch projects/default/daemon_yield     # daemon yields after current paper
@@ -38,11 +48,13 @@ rm projects/default/extraction_stats.json
 
 ## Current project state
 
-**Pulsed‑wave parallel extraction with self‑calibrating boundary, ratio‑based repack, and data‑quality exemption is operational.** The system uses token‑budgeted chunk packing with a self‑learning boundary derived from pass/fail data. Between waves, the queue repacks using the updated budget so ratio improvements actually increase batch density. Data‑quality degradations (depth‑0, ≤3 chunks) are excluded from calibration to prevent noise. Calibration logs appear in real‑time on the console.
+**Phase 11 is complete.** ProgressiveDisclosure is wired into production Survey Mode. SPECTER2 `paper_similarity_search` is built with 3 tests passing. All previously documented extraction hardening (pulsed‑wave parallel extraction, self‑calibrating boundary, ratio‑based repack, data‑quality exemption, per‑wave Terminal windows, OLLAMA_NUM_PARALLEL passthrough) remains operational.
 
-41 extraction‑related tests pass, zero failures. Per‑worker LLM output is written to `logs/extraction/wave_NNN_*.txt` files with per‑wave Terminal windows that auto‑open/close. The daemon pipeline runs end‑to‑end with process‑level GPU memory hygiene on macOS (SIGKILL + cooldown + orphan cleanup). `OLLAMA_NUM_PARALLEL` is explicitly passed to the `ollama serve` subprocess to guarantee the server respects the parallelism cap.
+**87 tests pass, zero failures:** 41 extraction‑related + 10 ProgressiveDisclosure unit + 5 ProgressiveDisclosure integration + 14 SPECTER2 cache (11 existing + 3 new) + 10 community routing integration + 7 orchestrator‑integration.
 
-**Knowledge graph** (as of last live cycle): ~3,810 nodes, ~262K edges. BM25 corpus: 27K+ documents. 43+ papers ingested.
+**This session was also a major architectural redesign.** We designed the Planner/Reflector/Executor 3‑role cognitive architecture for the orchestrator — the blueprint for long‑running autonomous biomedical research. This includes tiered planning (strategic → tactical → execution), plan trees with revision tracking, the handoff box as a memory bridge across GPU‑reset cycles, per‑task‑type boundary calibration (generalizing the extraction pattern), dependency gates to prevent writing on incomplete knowledge, circuit breakers with natural‑language health alerts, map‑reduce decomposition for large‑context tasks, a self‑tuning staleness detector, and a meta‑cognition layer (Reflector) that audits plans against the KG before execution.
+
+**Knowledge graph** (from prior live cycles): ~3,810 nodes, ~262K edges. BM25 corpus: 27K+ documents. 43+ papers ingested.
 
 ---
 
@@ -50,111 +62,98 @@ rm projects/default/extraction_stats.json
 
 | | Before this session | After this session |
 |---|---|---|
-| **Initial boundary** | `boundary_lower=2500` → budget ~737 → 60 batches for 100 chunks (chunks averaging 900 tok each). Calibrated on tiny test chunks (~10 tok). | `boundary_lower=8000` → budget ~4220 → ~20 batches. Calibrated to real biomedical chunk density (~900 tok/chunk). Self‑calibration climbs from there. |
-| **Boundary gap** | `boundary_lower` could exceed `boundary_upper` (`lower=29057 > upper=15941`) — no clamp. A pass at 29K from clean data proved the model could handle it, but a degradation at 16K from data‑quality issues created a contradictory state. | **Symmetric clamp**: PASS raises upper to match if lower exceeded it. DEGRADE lowers lower to match if upper dropped below it. The gap can never go negative. |
-| **Data‑quality pollution** | Depth‑0 degradations (E‑L‑E‑V‑E‑N spam from corrupted chunks, `"of"`×100 word‑spam) updated `boundary_upper` and the output‑ratio EMA. Bad data skewed calibration. | **Data‑quality exemption**: depth‑0 AND n≤3 degradations are skipped for boundary updates AND ratio accumulation. The batches are small enough that context overflow is impossible — the degradation is from chunk content, not prompt length. |
-| **Ratio‑based repack** | Budget was recomputed after each wave but never used. The initial batch packing was permanent; ratio improvements between waves had no effect. | **Live repack**: after each wave, fresh (depth‑0) batches in the queue are unpacked and re‑packed using the updated budget. Degraded sub‑batches are preserved as‑is (re‑merging could recreate the failure). Each wave's ratio/boundary improvements increase batch density. |
-| **Calibration visibility** | Boundary and ratio updates happened silently. No console feedback on whether self‑calibration was working. | **Three realtime log lines**: (1) `Boundary (PASS/DEGRADE): model=X, lower A→B, upper=C, gap=D` — fires per batch. (2) `Output ratio: model=X, 0.500→0.483` — fires per wave when ratio changes. (3) Wave summary includes `(boundary=[L,U], ratio=R)` snapshot. |
-| **OLLAMA_NUM_PARALLEL** | Read by Python code but never explicitly passed to the `ollama serve` subprocess. On macOS with `start_new_session=True`, launchctl‑scoped env vars could be lost. Ollama server defaulted to parallelism=1. | Both `_ensure_dedicated_ollama` and `_restart_ollama_process` now copy the parent env and `setdefault("OLLAMA_NUM_PARALLEL", "4")` and `setdefault("OLLAMA_MAX_QUEUE", "8")` before spawning `ollama serve` via `env=env`. Guarantees the server sees the parallelism setting. |
-| **Worker output display** | Per‑worker log files with `tail -f` instructions printed to console. User had to manually open Terminal windows. | **Per‑wave Terminal windows**: at wave start (after log files open), `osascript` spawns N Terminal.app windows, each named `Wave{W} Chunk{X} ({N}ch)` and running `tail -f` on the worker log. At next wave start, all "Wave"‑named windows are closed. Clean lifecycle — no markers, no polling, no temp‑file pollution. |
-| **Stale calibration** | `extraction_stats.json` from the prior 60‑batch run had an inflated `ratio=1.115` burned in by the EMA. Budgets were artificially constricted even after the boundary was fixed. | Stats file deleted to reset to fresh defaults. The system now starts each model from `boundary_lower=8000`, `ratio=0.50` and self‑calibrates clean from there. |
-| **Community routing status** | HANDOFF listed `community_summarizer.py` and `relevance_router.py` as "not wired." | **Correction**: both ARE wired into `survey_community_route_node` in `survey_nodes.py` and tested in `test_phase11_integration.py`. Only `progressive_disclosure.py` remains unwired. |
+| **ProgressiveDisclosure** | Fully built + tested (10 unit, 5 integration) but never instantiated in production. `survey_scrub_node` built an ad‑hoc community section from raw state data. | Wired into `survey_community_route_node` (`survey_nodes.py:311‑321`). `disclosure_map` stored in state. `survey_scrub_node` consumes `disclosure_map["tier1_system_overview"]`. Three‑tier context access operational in Survey Mode. |
+| **SPECTER2 cache** | 8 papers cached with 768‑dim embeddings. No consumer function. Dead data. | `find_similar(doi, min_score=0.6)` method built. Cosine‑similarity‑ranked paper discovery via numpy. Graceful `[]` return on missing DOI. Configurable threshold via `SPECTOR2_SIMILARITY_THRESHOLD` env var. 3 new tests pass. |
+| **Cache entry format** | `put()` stored `{s2_paper_id, embedding, fetched_at}`. No DOI field in entry. | `put()` now stores `{doi, s2_paper_id, embedding, fetched_at}`. `find_similar()` returns original DOI (not lowercased key). |
+| **Orchestrator architecture** | Single agent model. No explicit planning, reflecting, or meta‑cognition roles. Handoffs were descriptive log files, not prescriptive memory bridges. No tiered planning or calibration beyond extraction. | **3‑role cognitive architecture designed:** Planner (mission + decomposition), Executor (calibrated specialists per task type), Reflector (audit gate). Tiered planning (strategic T3 → tactical T2 → execution T1). Plan trees with revision tracking. Handoff box as memory bridge across GPU‑reset cycles. Per‑task‑type boundary/ratio calibration generalizing the extraction pattern. Dependency gates for write‑on‑complete‑knowledge guarantee. Map‑reduce decomposition for large‑context tasks. Circuit breaker with natural‑language health alerts. Self‑tuning staleness detector. Goal graveyard. |
+| **Novel approaches documented** | Per‑task‑type calibration existed only in extraction. No formal architecture for cross‑cycle consciousness. | Per‑task‑type calibration generalized to planner + reflector calls. Handoff box as memory bridge pattern. Plan trees with living revision. Adaptive staleness via plan‑revision count (not cycle count or wall‑time). |
 
 ---
 
 ## What was accomplished
 
-### 1. Boundary calibration for real‑world chunks
+### Code: ProgressiveDisclosure wired (Gap A)
 
-**Problem:** `boundary_lower=2500` was calibrated using test chunks of ~10 tokens (`"Short chunk."`, `"Chunk number 5 with some extra words..."`). Real biomedical chunks average ~890 tokens (PMC10571047). The formula produced `budget ≈ 737`, fitting 1‑2 chunks per batch → 60 batches for 100 chunks. The HANDOFF claimed "~8 chunks/batch" but this was only true for test data.
+**3 files changed, ~30 lines.**
 
-**Solution:** Raised `boundary_lower` default from 2500 → 8000. At 8000: `safe_total = 7600, available = 7600−919−350 = 6331, budget = 6331/1.50 ≈ 4220`. With ~890‑tok chunks: ~4‑5 chunks/batch → ~20 batches. The self‑calibration pushes higher from there (observed budget reaching 17453 tok/batch by wave 5 after passes at 59‑chunk batches).
+1. `src/state.py:55` — added `disclosure_map: NotRequired[Dict]` to `AgentState`
+2. `src/graph/survey_nodes.py:311‑321` — after relevance routing in `survey_community_route_node`, instantiates `ProgressiveDisclosure(graph_storage, community_data, summaries)`, calls `build_disclosure_map(relevant_communities=relevant, query=query)`, stores in `updates["disclosure_map"]` with INFO‑level logging. Wrapped in try/except matching existing error patterns.
+3. `src/graph/survey_nodes.py:1101‑1107` — replaced the ad‑hoc `# RESEARCH COMMUNITIES` section builder (~13 lines) with `disclosure_map.get("tier1_system_overview", "")`.
 
-**Tradeoff:** Starting at 8000 is slightly more aggressive than the 2500 "safe floor" but is grounded in empirical data from live extraction (59‑chunk batches passing clean). If a future model has a tighter context window, the degradation → boundary_upper drop → repack cycle handles it.
+**Rationale:** The previous approach read `community_data`, `relevant`, and `community_summaries` directly from state and manually iterated over communities to build a markdown section. This was fragile, duplicated the disclosure logic, and couldn't use the 3‑tier hierarchy already built and tested in `ProgressiveDisclosure`. The wiring leverages existing tested code, reduces duplication, and provides the system overview (Tier 1), community details (Tier 2), and paper‑community mapping (Tier 3) for synthesis prompts.
 
-### 2. Symmetric boundary clamp
+### Code: SPECTER2 find_similar built (Gap B)
 
-**Problem:** A pass at 29057 total tokens (59‑chunk batch) raised `boundary_lower` to 29057. But `boundary_upper` was stuck at 15941 from a prior data‑quality degradation on a 6‑chunk batch. The gap was −13116 — contradictory state where the "safe" floor exceeded the "unsafe" ceiling. This allowed budget computation to climb unchecked.
+**2 files changed, ~65 lines.**
 
-**Solution:** After every `boundary_lower` or `boundary_upper` update, enforce `lower ≤ upper`:
-- PASS with `lower > upper`: raise `upper` to match (the pass proves it's safe)
-- DEGRADE with `upper < lower`: lower `lower` to match (the degradation proves it's unsafe)
+1. `src/utils/spector2_cache.py:76` — `put()` now stores `"doi": doi` in the cache entry alongside `s2_paper_id`, `embedding`, `fetched_at`. Previously only the lowercased key was stored.
+2. `src/utils/spector2_cache.py:86‑130` — new method `find_similar(self, doi, *, min_score=None) → List[Dict]`. Computes cosine similarity between the query paper's 768‑dim embedding and every other cached embedding using numpy. Filters to `score ≥ min_score`. Returns `[{doi, s2_paper_id, score}, ...]` sorted descending. Default `min_score` from `SPECTOR2_SIMILARITY_THRESHOLD` env var (default 0.6). Graceful degradation: returns `[]` if DOI not cached, embedding is zero‑norm, or no matches.
+3. `tests/test_spector2_cache.py` — 3 new tests: `test_find_similar_returns_results` (correctly returns similar papers above threshold and not the query paper itself), `test_find_similar_doi_not_cached` (returns empty list), `test_find_similar_respects_threshold` (higher threshold returns fewer results). Imported `numpy as np` at module level.
 
-This keeps the gap non‑negative and the calibration internally consistent.
+**Rationale:** SPECTER2 embeddings (768‑dim from Semantic Scholar) provide paper‑level semantic similarity. The cache has 8 papers and grows with each daemon cycle. `find_similar()` is the consumer function — it enables cosine‑similarity‑ranked paper discovery. Wiring into the orchestrator's discovery loop is a follow‑up task: when a new paper is ingested, find the N most similar already‑cached papers and use their community assignments as priors for the new paper's community membership.
 
-### 3. Data‑quality degradation exemption
+### Architecture: Planner/Reflector/Executor 3‑Role Design
 
-**Problem:** Corrupted chunks (figure captions with `P < 0.01`, copyright markers → E‑L‑E‑V‑E‑N spam) and dense 6‑chunk batches with word‑spam (`"of"` ×100) triggered boundary DEGRADE updates. These were NOT context‑overflow failures — at budgets of 7K‑17K tokens with 1‑6 chunks, total context was well within gemma4:e4b's ~6K effective limit. The degradation was from chunk content, not prompt size.
+This was the bulk of the session — a complete re‑thinking of the orchestrator's cognitive architecture. The following was designed (not yet implemented):
 
-**Solution:** Degradations at `depth=0 AND n≤3` are classified as **data‑quality flukes**. They are excluded from:
-- Boundary updates (`_update_boundary` not called)
-- Ratio accumulation (`ct` and `output_tokens` not added to wave totals)
+**The Problem:** The current orchestrator executes a fixed pipeline per cycle (web discovery → EPMC → extract → KG → communities). It has no planner, no quality control, no meta‑cognition, and no mechanism for task decomposition when context limits are hit. Large research tasks (write a paper, explore IL‑6 contradictions, generate hypotheses) can't be expressed or executed. The system has no self‑direction.
 
-The batches still get split and re‑queued (so the system still processes them), but calibration only learns from real context‑limit events. Safety net: if misclassified, the re‑queued sub‑batches (depth > 0) properly calibrate on their next attempt.
+**The Solution — Three cognitive roles:**
 
-### 4. Ratio‑based queue repack
+| Role | Owns | Produces | Context |
+|------|------|----------|---------|
+| **Planner** | The mission, goals, priorities, plan | Decomposed plan tree (phases → goals → steps). Handoff write. | Tier 1–2 KG overview + goals + new data. ~2000–3000 tokens. |
+| **Executor** | Individual step execution | Structured output per step. Self‑calibrates per task type. | Task‑specific: chunks (extraction), entities (contradiction), community detail (analysis). Bounded by learned per‑task‑type calibration. |
+| **Reflector** | Quality and correctness auditing | Validation flags, staleness alerts, context pressure handling | Plan + executor output + KG for fact‑checking. ~2000 tokens. |
 
-**Problem:** `chunk_budget` was recomputed after each wave (`line 779`) but never consumed. The initial packing was permanent. Ratio improvements between waves (e.g., ratio dropping from 1.115 → 0.507 as the EMA converged) had zero effect on batch density during the current extraction.
+**Key architectural decisions made this session:**
 
-**Solution:** After `chunk_budget` recomputation, separate the queue into fresh batches (depth=0) and degraded sub‑batches (depth>0). Unpack all fresh batch chunks, repack them using the updated budget, and reconstruct the queue. Degraded sub‑batches are NOT repacked — re‑merging could recreate the degradation. A `Repacked N chunks → M batches` log line confirms the repack.
-
-**Result:** Observed in diagnostic run — 12 initial batches compressed to 2 final batches (16‑chunk + 59‑chunk) as ratio improved from 0.692 → 0.507. The system literally packed more chunks per batch as the model proved it could handle them.
-
-### 5. Real‑time calibration logging
-
-**Problem:** No console visibility into whether self‑calibration was functioning. Boundary and ratio updates were silent. Users couldn't tell if passes were raising the boundary or if the ratio was converging.
-
-**Solution:** Three INFO‑level log additions:
-- `_update_boundary`: fires `Boundary (PASS/DEGRADE): model=X, lower A→B, upper=C, gap=D` when values actually change. Silent on no‑ops.
-- `_update_output_ratio`: fires `Output ratio: model=X, 0.500→0.483` when change exceeds 0.001.
-- Wave summary: appended `(boundary=[L, U], ratio=R)` to the existing `Wave N: X/Y passed...` line.
-
-These emit on every wave cycle, so calibration convergence is visible in real‑time.
-
-### 6. OLLAMA_NUM_PARALLEL explicit passthrough
-
-**Problem:** Ollama's server‑side parallelism cap (`OLLAMA_NUM_PARALLEL`) was never explicitly passed to the `ollama serve` subprocess spawned by `_ensure_dedicated_ollama` and `_restart_ollama_process`. On macOS with `start_new_session=True`, launchctl‑scoped env vars may not propagate to the child process. The Ollama server defaulted to `OLLAMA_NUM_PARALLEL=1`, meaning parallel extraction requests were queued and executed sequentially despite the Python code spawning `ThreadPoolExecutor` with 2 workers.
-
-**Solution:** Both `subprocess.Popen(["ollama", "serve"], ...)` calls now copy `os.environ` and `setdefault("OLLAMA_NUM_PARALLEL", "4")` / `setdefault("OLLAMA_MAX_QUEUE", "8")` with `env=env` explicit passthrough. The Ollama server is guaranteed to see the parallelism settings regardless of how the parent Python process was started (shell, launchctl, or IDE).
-
-**Model weights are shared** across parallel requests — only KV caches are duplicated (~1 GB/request for gemma4:e4b at 16K context). 2 concurrent workers = 10.5 GB model + 2×1 GB KV ≈ 12.5 GB, well within 36 GB M3 Max.
-
-### 7. Per‑wave Terminal windows
-
-**Problem:** Per‑worker log files required the user to manually copy/paste `tail -f` paths from the console into separate Terminal windows each wave. Tedious and error‑prone.
-
-**Solution:** Each wave, after log files are opened:
-1. **Close old windows**: `osascript` tells Terminal.app to close all windows with "Wave" in their name (safe — normal user windows are untouched).
-2. **Open new windows**: For each worker, a tiny shell script is written to `/tmp/opencode_wave{W}_{idx}.sh` containing `printf '\033]0;Wave{W} Chunk{X} ({N}ch)\007' && tail -f /absolute/path/to/log.txt`. `osascript` tells Terminal.app to run the script. The ANSI escape sets the window title; the terminal window shows live output.
-3. **Extraction end**: Remaining "Wave" windows are cleaned up.
-
-No completion markers, no polling, no temp‑file accumulation (overwritten each wave). The window lifecycle maps 1:1 to the wave lifecycle. If Python crashes, windows stay open as forensics.
+- **Tiered planning, not 3 separate agents.** The planner is ONE LLM that thinks at three different scope levels: Tier 1 (immediate execution, every cycle), Tier 2 (priority rebalancing, when new data arrives), Tier 3 (strategic direction review, every ~10 cycles). Not three separate calls per cycle — typically 1 call per cycle.
+- **Plan trees with revision tracking.** Plans are nested (phase → goal → step). Each node tracks its revision ID. The planner can reopen completed phases when new data reveals gaps. Dependency gates prevent Phase 4 (writing) from executing until Phase 2 (gaps) confirms Phase 1 (extraction) is complete.
+- **Handoff box as memory bridge.** The planner does NOT have persistent consciousness across cycles (GPU is reset between thinking sessions). Instead, a "handoff box" — a structured JSON/markdown state package containing mission, goals, plan tree, KG overview, calibration data, open questions, and hypotheses — is read at cycle start and written at cycle end. This IS the planner's memory. The GPU reset is sleep; the box is memory.
+- **Per‑task‑type calibration generalized from extraction.** The proven extraction pattern (boundary_lower/upper learned from pass/fail, output_ratio EMA, tiktoken‑measured budgets) is applied to ALL LLM calls — planner, reflector, and every executor specialist. Each task type tracks its own calibration in a shared stats file. Pass/fail signals differ by task type (compression ratio for extraction, plan parseability + executor success for planner, planner acceptance of flags for reflector) but the calibration math is identical.
+- **Dependency gates — no writing on incomplete knowledge.** A phase can only execute when its dependencies are satisfied. If Phase 2 discovers Phase 1 missed gut microbiome data, Phase 1 reopens, Phase 2 pauses, Phase 4 is blocked. The system never produces output on incomplete knowledge. Honesty: gaps are documented, not papered over.
+- **Map‑reduce decomposition — preserve quality, don't truncate.** When a task exceeds the per‑task‑type boundary, it decomposes recursively: map (analyze independently in bounded sub‑contexts) → reduce (synthesize analysis results, which are compressed, into unified output). No truncation, no information loss. Each leaf has full context for its scope. The reduce step sees everything through compressed summaries. Base case is always small enough (e.g., "Is this single entity's claim correct?") that failure indicates a model problem, not a sizing problem.
+- **Circuit breaker with natural‑language health alerts.** If ALL task types show declining boundaries over N cycles, the system detects systemic model degradation (Ollama bug, quantization drift). It resets calibration to conservative defaults, recommends model re‑pull, and writes a human‑readable markdown health alert with: what happened, what it means, what was done, what the user should do, and when the system self‑resolves.
+- **Self‑tuning staleness.** Goal staleness is measured by plan‑revision count (how many times has the plan been revised since this goal was last updated?), not cycle count or wall‑time. The threshold self‑tunes based on reflector false‑positive/false‑negative rates. Corroboration‑count‑aware: goals with 15 corroborations and no recent updates are "settled science," not "stale."
+- **User input as priority zero.** The planner treats live user queries (via Streamlit) as priority‑0 goals that preempt autonomous work. Mode switch: interactive (short steps, fast response) vs autonomous (full cycles when user is idle).
+- **"Any experience level user" vision.** The system decomposes high‑level tasks ("write an obesity paper for my lab") into phases, identifies knowledge gaps, discovers literature to fill them, asks clarifying questions only when genuinely needed, and can push back if evidence contradicts the user's assumptions — like a PhD assistant. Plans adapt as new information is discovered.
 
 ---
 
 ## Lessons learned
 
-### 7. Test‑data calibration produces dangerously wrong initial values
+### 1. The extraction calibration pattern generalizes to any LLM call
 
-`boundary_lower=2500` was "calibrated so the first wave produces ~8‑chunk batches." This was true for test chunks (`"Short chunk."` ≈ 4 tokens) but catastrophic for real biomedical chunks (~890 tokens). The initial budget of 737 produced 60 single‑chunk batches instead of the expected 13.
+The `boundary_lower/upper` + `output_ratio` EMA + tiktoken measurement system is not extraction‑specific. Any LLM call with measurable input tokens, measurable output tokens, and a binary pass/fail signal can self‑calibrate. The only difference across task types is the pass/fail signal definition — not the calibration math.
 
-**Lesson:** Calibration constants must be back‑tested against real‑world data. If test data is unrealistic (as it often is for token‑counting tests), document the discrepancy and use real‑world averages for defaults. The system self‑calibrates upward, but starting too low causes excessive fragmentation on the first several papers.
+### 2. Chunk overlap is a text‑level solution to a domain‑level non‑problem in this architecture
 
-### 8. `OLLAMA_NUM_PARALLEL` is server‑side and must be explicitly propagated
+ChromaDB's chunk‑overlap pattern preserves semantic continuity across arbitrary text‑length splits. In our architecture, atomic units (chunks from the PMC parser, entities from extraction, goals in the plan tree) are already semantically complete. The synthesis layer (entity dedup, map‑reduce analysis, plan tree revision) provides cross‑unit continuity. Chunk overlap would add 20% token overhead with negligible benefit.
 
-The Python code reading `os.getenv("OLLAMA_NUM_PARALLEL")` only controls the client‑side worker cap. The actual Ollama server parallelism is an independent setting. On macOS with `start_new_session=True`, launchctl‑scoped env vars may not propagate. The only reliable approach is `env=os.environ.copy()` with explicit `setdefault()` in the `subprocess.Popen` call.
+### 3. Plans are living documents, not scripts
 
-### 9. Calibration feedback loops need both directions
+The planner doesn't execute a fixed decomposition from cycle 1. Every cycle, it loads the handoff box and asks: "Given what I now know, is the plan still optimal?" New discoveries trigger replanning. Completed phases can be reopened. Stale goals are archived. The plan tree is the system's cognitive map — revisable, self‑critical, adapting to new evidence.
 
-The initial design only used budget recomputation for future waves (which was dead code — the initial packing was permanent). Adding ratio‑based repack between waves completes the feedback loop: the system measures actual output/chunk ratio, adjusts the budget, and repacks accordingly. Both ratio increases AND decreases are handled — the repack works symmetrically.
+### 4. The handoff box decouples consciousness from GPU lifetime
 
-### 10. Data‑quality failures are categorically different from context‑limit failures
+The planner doesn't need persistent GPU memory across cycles. Its "memory" is a structured state package in the filesystem — the handoff box. Each cycle starts with a fresh GPU and a full state load. This enables: crash resilience (state survives GPU death), long‑horizon reasoning (memory persists indefinitely), and instance chaining (any future version of the planner can read the box).
 
-A degradation on a 1‑chunk batch at a 7K‑token budget (E‑L‑E‑V‑E‑N spam from a figure caption) is NOT a context‑overflow event. The total context (~5K tokens) is well within the model's effective window. Updating `boundary_upper` from this event feeds noise into the calibration. The `depth=0, n≤3` heuristic cleanly separates data‑quality problems from real context limits. Degraded sub‑batches (depth>0) are never excluded — they always calibrate.
+### 5. JSON is for the system. Markdown is for the LLM
 
-### 11. Model‑key mismatch causes silent calibration fragmentation
+JSON has ~4:1 token overhead for LLM consumption (keys, brackets, quotes). The canonical store should be JSON (Python reads/writes deterministically). But the LLM should receive markdown (bullet lists, section headers) generated from JSON at prompt‑build time. Dual‑format storage is the efficient pattern.
 
-The diagnostic script hardcodes `ExtractionAgent(model="deepseek-chat")` even when running Ollama with `gemma4:e4b`. This means extraction stats are keyed to the wrong model name. The daemon may use yet another key. Each code path tracks separate calibrations that never cross‑pollinate. Deleting `extraction_stats.json` resets all keys to defaults. Future work should unify the model key to match the actual Ollama model in use.
+### 6. Degraded output must not pollute calibration
+
+When an LLM call degrades (truncation, repetition, hallucination), the boundary can be updated (learn what's too much), but the output_ratio MUST NOT be updated with garbage tokens. Only healthy output tokens (up to the degradation point, measured by the detection system) contribute to the ratio EMA. This is already implemented in extraction (data‑quality exemption) — the same rule applies to all task types.
+
+### 7. The Reflector's calibration is confounded if measured by planner acceptance
+
+If the reflector's "pass" signal is "planner accepted my flag," a degraded planner that accepts everything produces misleading reflector calibration. The fix: calibrate the reflector on executor outcome. If the executor succeeds despite the reflector's flag, the reflector was wrong (false positive). If the executor fails and the reflector flagged it, the reflector was right. The ground truth is executor success, not planner agreement.
+
+### 8. No hardcoded thresholds survive real‑world variability
+
+"Analyze top 10 entities," "stale after 5 cycles," "expected 100‑300 tokens for abstract" — all of these fail in real usage. The architecture uses learned calibration (boundary, ratio), adaptive triggers (plan‑revision count, not cycle count), and tiktoken measurement (not LLM‑estimated tokens). The only acceptable hardcoded value is the initial default, which self‑calibrates away.
 
 ---
 
@@ -164,39 +163,36 @@ The diagnostic script hardcodes `ExtractionAgent(model="deepseek-chat")` even wh
 
 | # | Gap | Severity | Status |
 |---|------|----------|--------|
-| — | `boundary_lower=2500` producing 60 batches instead of 13 | ~~High~~ | ✅ Closed — raised to 8000; calibrated to real chunk density (~890 tok/chunk) |
-| — | `OLLAMA_NUM_PARALLEL` not reaching Ollama server | ~~High~~ | ✅ Closed — explicit `env=env` in both Popen calls with `setdefault("OLLAMA_NUM_PARALLEL", "4")` |
-| — | Ratio‑based repack not wired (dead budget recomputation) | ~~Medium~~ | ✅ Closed — fresh batches repacked between waves using updated budget |
-| — | Calibration progress invisible (no console feedback) | ~~Low~~ | ✅ Closed — three INFO‑level log additions: boundary updates, ratio updates, wave snapshots |
-| — | Data‑quality degradations polluting boundary + ratio | ~~Medium~~ | ✅ Closed — depth‑0/n≤3 exemption skips boundary update and ratio accumulation |
-| — | `boundary_lower > boundary_upper` negative gap | ~~Medium~~ | ✅ Closed — symmetric clamp keeps lower ≤ upper |
-| — | Per‑worker Terminal windows | ~~Low~~ | ✅ Closed — osascript‑driven, wave‑lifecycle‑tied windows with `tail -f` |
-| — | `extraction_stats.json` stale ratio (1.115 from 60‑batch run) | ~~Low~~ | ✅ Closed — stats file deleted; fresh defaults (8000, 0.50) |
+| A | ProgressiveDisclosure not wired | ~~High~~ | ✅ Closed — wired into `survey_community_route_node` + `survey_scrub_node`. 3 files, ~30 lines. |
+| B | SPECTER2 `paper_similarity_search()` not built | ~~Medium~~ | ✅ Closed — `Spector2Cache.find_similar()` method with 3 tests. 2 files, ~65 lines. |
 
-### Open (this session)
+### Open (implementation — code to build)
 
 | # | Gap | Severity | Description |
 |---|------|----------|-------------|
-| A | ProgressiveDisclosure not wired | High | `progressive_disclosure.py` fully built + tested (10 unit, 5 integration) but never instantiated in production. Needs wiring into `survey_community_route_node` (`survey_nodes.py:298`) where all required data (`community_data`, `community_summaries`, `relevant_communities`) is already computed. Then replace ad‑hoc community section in `survey_scrub_node` (~line 1089) with `disclosure_map["tier1_system_overview"]`. Tiered context access for Survey Mode synthesis. |
-| B | SPECTER2 `paper_similarity_search()` not built | Medium | `spector2_cache.json` has 768‑dim embeddings for 8 papers but no consumer. Need `Spector2Cache.find_similar(doi, min_score=0.6)` — cosine‑similarity‑ranked paper discovery. Graceful degradation (empty list if DOI not cached). Configurable threshold via `SPECTOR2_SIMILARITY_THRESHOLD` env var. Wiring into orchestrator's discovery loop is a follow‑up. |
-| C | No ≥8 h continuous daemon validation | Medium | Daemon has run short cycles but never >8 h. Longer runs needed to validate memory stability with the pulsed‑wave cooldown, parallel extraction, and boundary convergence over multiple papers. |
-| D | Model‑key mismatch in extraction stats | Low | Diagnostic script uses `model="deepseek-chat"` but Ollama runs `gemma4:e4b`. Multiple code paths may use different keys, fragmenting calibration. Needs investigation and unification. |
+| C | Planner not built | High | The planner (tiered decomposition, plan tree management, priority rebalancing, handoff box read/write, dependency gate enforcement) is fully designed but not implemented. |
+| D | Reflector not built | High | The reflector (deterministic plan validation via regex/topology/lookup, LLM‑based output quality auditing, staleness detection, context pressure response, circuit breaker triggering) is fully designed but not implemented. |
+| E | Handoff box format not built | High | The structured state package (mission, goals, plan tree, calibration, open questions, hypotheses, crash log) needs a concrete JSON + markdown dual‑format specification and read/write library. |
+| F | Per‑task‑type calibration for planner/reflector | High | The extraction calibration system needs to be generalized: shared stats file (`orchestration_stats.json`), per‑task‑type keys, and per‑task‑type pass/fail signal definitions applied to planner and reflector LLM calls. |
+| G | Map‑reduce decomposition for large‑context execution steps | Medium | When an executor step exceeds its per‑task‑type boundary, it needs automatic decomposition (map into sub‑steps) and synthesis (reduce sub‑results). Design is complete; implementation is not. |
+| H | Circuit breaker & health alerts | Medium | System‑level health monitoring across task types. Detects uniform calibration decline (model degradation). Resets to conservative defaults, writes natural‑language health alert. |
+| I | Capability registry | Low | Each executor specialist advertises its current boundary, input format, and minimum entity count. Planner reads this before assigning steps. Prevents impossible‑task assignments. |
+
+### Open (validation & infrastructure)
+
+| # | Gap | Severity | Description |
+|---|------|----------|-------------|
+| J | No ≥8 h continuous daemon validation | Medium | Daemon has run short cycles but never >8 h. Longer runs needed to validate memory stability with the pulsed‑wave cooldown, parallel extraction, and boundary convergence over multiple papers. |
+| K | Model‑key mismatch in extraction stats | Low | Diagnostic script uses `model="deepseek-chat"` but Ollama runs `gemma4:e4b`. Multiple code paths may use different keys, fragmenting calibration. |
+| L | Wave log rotation not implemented | Low | `logs/extraction/wave_*.txt` and `/tmp/opencode_wave*.sh` files accumulate unbounded. Need per‑paper cleanup. |
+| M | `atexit` GPU cleanup not implemented | Low | No atexit/signal handler. If Python crashes mid‑extraction, Ollama stays loaded. Launchd disarm is permanent — no re‑arm on exit. |
 
 ### Evergreen (inherent hardware/architecture limitations)
 
 | # | Gap | Severity | Description |
 |---|------|----------|-------------|
-| E | `/api/ps` cannot verify true GPU memory state | High | No macOS API exposes Metal buffer state. Process death (SIGKILL) is the strongest guarantee. The 5 s cooldown is a heuristic; no software can prove pages were deallocated. |
-| F | `stream.close()` abort reliability untested at scale | Low | The `finally` block guarantees `.close()` is called, but the httpx cleanup depends on LangChain's internal stream handling. Edge cases (hung Ollama, network timeout during generator exit) not tested. No known failures. |
-
-### Phase 11 (unchanged layout — status annotation only)
-
-| # | Gap | Severity | Description |
-|---|------|----------|-------------|
-| G | Community summaries | ~~High~~ → ✅ Wired | `community_summarizer.py` is wired into `survey_community_route_node` (`survey_nodes.py:281`) and tested. Prior HANDOFF was stale. |
-| H | Relevance router | ~~High~~ → ✅ Wired | `relevance_router.py` is wired into `survey_community_route_node` (`survey_nodes.py:291`) and tested. Prior HANDOFF was stale. |
-| I | Progressive disclosure not integrated | High | See Gap A above — fully built + tested, not wired. Last Phase 11 code gap. |
-| J | SPECTER2 embeddings unused | Medium | See Gap B above — cache exists, no consumer function. |
+| N | `/api/ps` cannot verify true GPU memory state | High | No macOS API exposes Metal buffer state. Process death (SIGKILL) is the strongest guarantee. The 5 s cooldown is a heuristic tuned for DDR5 unified memory at 100 GB/s. |
+| O | `stream.close()` abort reliability untested at scale | Low | The `finally` block guarantees `.close()` is called, but the httpx cleanup depends on LangChain's internal stream handling. Edge cases (hung Ollama, network timeout during generator exit) not tested. No known failures. |
 
 ---
 
@@ -204,18 +200,26 @@ The diagnostic script hardcodes `ExtractionAgent(model="deepseek-chat")` even wh
 
 ### Carried forward from prior sessions
 
-All Phase 4–10.5 constraints still apply. See README §17.
+All Phase 4–10.5 constraints still apply. See README §17 and prior HANDOFF §"What NOT to change."
 
-### New decisions (this session)
+### New code decisions (this session)
 
-- **`boundary_lower=8000` over `2500`** — Calibrated to real biomedical chunks (~890 tok/chunk), not tiny test data. Produces ~20 batches for 100 chunks instead of 60. The self‑calibration pushes higher from real passes. Backed by observed 59‑chunk batch passing clean at 29K total context.
-- **Symmetric boundary clamp** — After every PASS/DEGRADE update, enforce `lower ≤ upper`. PASS raises upper to match; DEGRADE lowers lower to match. The gap can never go negative. Prevents contradictory calibration states (`lower=29057 > upper=15941`).
-- **Data‑quality degradation exemption (depth=0, n≤3)** — Small‑batch degradations that can't be context‑overflow (well within the model's effective window) are excluded from boundary AND ratio calibration. The batch still gets split and re‑queued. Genuine context‑overflow degradations (depth>0 or n>3) always calibrate.
-- **Ratio‑based queue repack between waves** — Fresh (depth‑0) batches in the queue are repacked with the updated budget after each wave. Degraded sub‑batches are preserved as‑is. The initial packing is no longer permanent; ratio improvements increase batch density mid‑extraction.
-- **Realtime calibration console logging** — Three INFO‑level additions: boundary updates, ratio updates, and wave‑summary calibration snapshots. Calibration progress is visible without tailing debug logs.
-- **Explicit `OLLAMA_NUM_PARALLEL` + `OLLAMA_MAX_QUEUE` in `ollama serve` subprocess** — `env=os.environ.copy()` with `setdefault()` guarantees the server respects the parallelism cap regardless of how the parent process was launched.
-- **Per‑wave Terminal.app windows tied to wave lifecycle** — `osascript` opens `tail -f` windows at wave start, closes them at next wave start. Uses ANSI escape window titles filtered by "Wave" pattern — safe, no user windows affected. Shell scripts written to `/tmp/` to avoid Python→AppleScript→bash escaping ambiguity.
-- **Stats reset on calibration mismatch** — Deleting `extraction_stats.json` resets all model keys to fresh defaults (`boundary_lower=8000, ratio=0.50`). Recommended when migrating from mis‑calibrated prior runs.
+- **`disclosure_map` in state** — `AgentState` now carries the full `ProgressiveDisclosure.build_disclosure_map()` output. `survey_scrub_node` consumes `tier1_system_overview` for the community context section. The disclosure map provides bounded context access (Tier 1 system overview, Tier 2 community details, Tier 3 paper‑community map) for Survey Mode synthesis.
+- **`find_similar()` min_score default from env** — `SPECTOR2_SIMILARITY_THRESHOLD` env var (default 0.6) controls cosine‑similarity threshold. Respects user override via `setdefault` pattern.
+- **Cache `doi` field** — `put()` now stores `"doi": doi` in the cache entry so `find_similar()` can return the original DOI (not the lowercased dictionary key). Backward‑compatible: existing cache entries without `doi` fall back to the dictionary key.
+- **No hardcoded N for similarity results** — `find_similar()` returns all matches above threshold, not "top 5." Filtering is the consumer's responsibility.
+
+### New architecture decisions (this session — design only, not yet implemented)
+
+- **Planner/Reflector/Executor 3‑role separation** — Planner owns mission and plan. Executor owns per‑step execution with per‑task‑type calibration. Reflector owns quality auditing. Roles are separate; no role edits another's domain.
+- **Tiered planning, not 3 separate agents** — One planner LLM thinks at three scope levels (strategic → tactical → execution). Not three agents. Not three calls per cycle.
+- **Handoff box as memory bridge** — The planner's continuity across GPU‑reset cycles is a structured state package (JSON + markdown), not LLM memory. The planner loads the box, thinks, plans, executes, and writes the updated box. The GPU reset is sleep; the box is memory.
+- **Plan trees with revision tracking** — Nested plan structure (phase → goal → step). Each node tracks revision ID. Completed phases can be reopened when new data reveals gaps. Dependency gates enforce execution order.
+- **Per‑task‑type calibration generalized** — The extraction `boundary_lower/upper` + `output_ratio` EMA pattern applies to ALL LLM calls. Per‑task‑type stats in a shared file. Pass/fail signals differ; calibration math is identical.
+- **Map‑reduce decomposition for large‑context tasks** — When a step exceeds its per‑task‑type boundary, decompose recursively into map (bounded analysis) → reduce (synthesize into unified output). No truncation; no information loss.
+- **No hardcoded thresholds** — All sizing is learned (calibration), all triggers are adaptive (plan‑revision count, not cycle count), all measurement is objective (tiktoken, not LLM estimates).
+- **User input is priority zero** — Live user queries preempt autonomous work. Mode switch between interactive (short steps, fast response) and autonomous (full cycles) on user activity.
+- **Dependency gates — no writing on incomplete knowledge** — A phase executes only when its dependencies are satisfied. Gaps are documented, not papered over. Honesty over user satisfaction.
 
 ---
 
@@ -223,28 +227,30 @@ All Phase 4–10.5 constraints still apply. See README §17.
 
 All prior constraints apply. Additions from this session:
 
-### Boundary & calibration
-- Do NOT lower `boundary_lower` back to 2500 — it was calibrated on unrealistically small test chunks and produces excessive fragmentation on real biomedical papers.
-- Do NOT remove the symmetric clamp (`if lower > upper: ...`) — it prevents contradictory calibration states.
-- Do NOT remove the data‑quality exemption (`depth==0 and n<=3` for degradation boundary/ratio skip) — bad data must not pollute the calibration.
-- Do NOT remove the ratio‑based queue repack between waves — it makes calibration improvements actionable during extraction.
-- Do NOT remove the realtime calibration logging in `_update_boundary`, `_update_output_ratio`, or the wave summary line — it's the only visibility into self‑calibration.
-- Do NOT remove `extraction_stats.json` persistence — it's the calibration memory across runs.
+### Code constraints
+- Do NOT remove `disclosure_map` from `AgentState` — it provides Tier 1–3 bounded context for Survey Mode synthesis.
+- Do NOT revert `survey_scrub_node` to the ad‑hoc community section builder — use `disclosure_map["tier1_system_overview"]`.
+- Do NOT remove `find_similar()` from `Spector2Cache` — it's the consumer for the paper‑similarity discovery pipeline.
+- Do NOT remove the `doi` field from cache entries — `find_similar()` depends on it for returning original DOIs.
+- Do NOT remove the `setdefault` env pattern for `SPECTOR2_SIMILARITY_THRESHOLD`.
 
-### Ollama parallelism
-- Do NOT remove the `env=env` passthrough in `_ensure_dedicated_ollama` or `_restart_ollama_process` — it's the only guarantee `OLLAMA_NUM_PARALLEL` reaches the server.
-- Do NOT hardcode `OLLAMA_NUM_PARALLEL` — always use `setdefault("OLLAMA_NUM_PARALLEL", "4")` so the parent env takes precedence.
-
-### Worker display
-- Do NOT remove the per‑wave Terminal window spawning — it provides live per‑worker output without console bloat.
-- Do NOT change the "Wave" window‑name filter — it's the only safety mechanism preventing accidental closure of user windows.
+### Architecture constraints (design — enforce when building)
+- Do NOT collapse Planner + Reflector into one role — independent audit is the point of the architecture.
+- Do NOT make the planner's execution plan a fixed script — plans are living documents, revisable every cycle.
+- Do NOT hardcode thresholds for staleness, batch size, entity count, or token limits — use learned calibration and adaptive triggers.
+- Do NOT derive context budgets from `num_ctx` — use the per‑task‑type boundary formula.
+- Do NOT feed JSON to LLMs — canonical store is JSON, LLM receives generated markdown.
+- Do NOT allow writing/output generation on incomplete knowledge — dependency gates must block execution when gaps exist.
+- Do NOT degrade degraded‑output calibration — garbage tokens must never update the output_ratio EMA. Only healthy tokens (up to degradation point) contribute.
+- Do NOT make the reflector's calibration depend on planner acceptance — calibrate on executor outcome (the ground truth), not planner agreement.
 
 ### All prior constraints
 - Do NOT reinstate `_extract_batch_recursive` or `_merge_entity_dicts`.
 - Do NOT add `batch_size` back as a parameter — batch sizing is token‑driven.
 - Do NOT derive chunk budget from `num_ctx` — use the self‑calibrating boundary formula.
-- Do NOT remove `_update_boundary`, `_update_output_ratio`, `_pack_chunks_into_batches`, `_try_extract_once`, `_calculate_max_workers`, `_merge_entity_batches`, per‑worker log files, compression‑ratio detection, base‑case boundary exclusion, `bad_chunks.json` pre‑emption, or any GPU‑memory‑management method (`_reset_ollama`, `_restart_ollama_process`, `_ensure_dedicated_ollama`, `_find_and_kill_ollama`, orphan cleanup, cooldown).
-- Do NOT switch extraction back to JSON or full‑prompt. Do NOT reinstate two‑pass extraction or cross‑chunk prompts.
+- Do NOT remove any extraction calibration, detection, or GPU‑management method.
+- Do NOT lower `boundary_lower` below 8000.
+- Do NOT remove the symmetric clamp, data‑quality exemption, ratio‑based repack, realtime logging, or `env=env` OLLAMA passthrough.
 - All prior constraints: per‑paper source prefixes, `chunk_index`, no `lstrip()`, no `Accept: application/json` on EPMC session, etc.
 
 ---
@@ -252,101 +258,77 @@ All prior constraints apply. Additions from this session:
 ## File map
 
 ```
-MODIFIED FILES (this session):
-src/agents/extraction_agent.py        — + boundary_lower 2500→8000
-                                         + symmetric clamp in _update_boundary
-                                         + data‑quality exemption (depth=0, n≤3)
-                                         + ratio‑based queue repack between waves
-                                         + realtime calibration INFO logging
-                                         + per‑wave Terminal window spawning (osascript)
-                                         + subprocess + shlex imports
-                                         + wave‑start window cleanup
-                                         + extraction‑end window cleanup
-src/ingestion/pre_extractor.py        — + env=os.environ.copy() with setdefault
-                                         (OLLAMA_NUM_PARALLEL, OLLAMA_MAX_QUEUE)
-                                         in _ensure_dedicated_ollama Popen
-                                         + same in _restart_ollama_process Popen
-tests/test_extraction_agent.py        — Updated 6 tests for boundary_lower=8000:
-                                         test_calculate_chunk_budget_positive
-                                         test_boundary_defaults
-                                         test_boundary_update_pass_raises_lower
-                                         test_boundary_update_degrade_lowers_upper
-                                         test_calculate_chunk_budget_calibrated
-                                         test_boundary_persistence_survives_ratio_update
-                                         (new clamp behavior documented in assertions)
-.env                                  — OLLAMA_NUM_PARALLEL + OLLAMA_MAX_QUEUE
-                                         documented as server‑side; passed via env= fix
-projects/default/extraction_stats.json — DELETED to reset stale ratio=1.115
-                                         (fresh defaults: boundary=8000, ratio=0.50)
-HANDOFF.md                            — This file — comprehensive session handoff
+MODIFIED FILES (this session — code):
+src/state.py                           — + disclosure_map: NotRequired[Dict] (line 55)
+src/graph/survey_nodes.py              — + ProgressiveDisclosure instantiation in 
+                                          survey_community_route_node (lines 311-321)
+                                        — + survey_scrub_node now consumes disclosure_map
+                                          instead of ad‑hoc community section (lines 1101-1107)
+src/utils/spector2_cache.py            — + doi field in put() entry (line 76)
+                                        — + find_similar() method (lines 86-130)
+tests/test_spector2_cache.py           — + 3 new tests: find_similar_returns_results,
+                                          find_similar_doi_not_cached, find_similar_respects_threshold
+                                        — + numpy import at module level
+HANDOFF.md                             — This file — comprehensive session handoff
 
-UNMODIFIED BUT RELEVANT (existing Phase 11 components):
-src/graph/progressive_disclosure.py   — Fully built + tested, NOT wired (Gap A)
-src/utils/spector2_cache.py           — 8 papers cached, no find_similar() (Gap B)
-src/graph/survey_nodes.py             — survey_community_route_node already has
-                                         community_data, summaries, routing (lines 248-333)
-src/state.py                          — Has Phase 11 state fields, needs disclosure_map
+MODIFIED FILES (this session — documentation):
+README.md                              — Updated Phase 11 status, architecture redesign,
+                                          novel approaches, revised planned capabilities
+
+UNMODIFIED BUT RELEVANT (existing components):
+src/graph/progressive_disclosure.py    — Fully built + tested, NOW WIRED (Gap A closed)
+src/graph/community_detection.py       — Louvain community detection (used by disclosure)
+src/agents/community_summarizer.py     — Community LLM summarization (wired)
+src/agents/relevance_router.py         — Query → community routing (wired)
+src/agents/extraction_agent.py         — Pulsed‑wave extraction with self‑calibration
+src/agents/orchestrator.py             — Current daemon cycle (to be replaced by planner architecture)
+src/ingestion/pre_extractor.py         — GPU management, OLLAMA_NUM_PARALLEL passthrough
+src/streaming_handler.py               — Compression‑ratio degradation detection
+src/graph/base_graph.py                — KG abstract interface
+
+FILES TO BUILD (Phase 12 implementation):
+src/agents/planner.py                  — Tiered planner (T1/T2/T3), plan tree management
+src/agents/reflector.py                — Deterministic + LLM‑based plan/executor auditing
+src/utils/handoff_box.py               — JSON + markdown dual‑format state persistence
+src/utils/calibration.py               — Generalized per‑task‑type boundary/ratio system
+src/utils/capability_registry.py       — Executor boundary + input format advertisement
 ```
 
 ---
 
 ## Recommendations
 
-### Immediate — wire ProgressiveDisclosure (Gap A)
+### Immediate (next session) — implement the architecture foundation
 
-3‑file change, ~30 lines of code:
+1. **Build per‑task‑type calibration system** — Generalize `extraction_stats.json` pattern. Shared file `projects/default/orchestration_stats.json` keyed by `{task_type}.{model}`. Same `boundary_lower/upper`, `output_ratio`, `total_chunk_tokens`, `total_output_tokens` fields. Pass/fail signal definitions per task type.
 
-1. `src/state.py` (~line 54): add `disclosure_map: NotRequired[Dict]`
-2. `src/graph/survey_nodes.py` (~line 298, inside `survey_community_route_node`): after routing, instantiate `ProgressiveDisclosure(graph_storage, community_data, summaries)` and call `build_disclosure_map(relevant_communities=relevant, query=query)`, store in `updates["disclosure_map"]`
-3. `src/graph/survey_nodes.py` (~lines 1089‑1101, inside `survey_scrub_node`): replace the ad‑hoc `# RESEARCH COMMUNITIES` section builder with `disclosure_map.get("tier1_system_overview", "")`
+2. **Build the handoff box format** — Structured JSON state package: `{mission, goals: [{id, priority, status, corroboration_count, last_revision, ...}], plan_tree: {phases: {id → {goals: {id → {steps: [...]}}}}}, calibration: {per_task_type_stats}, open_questions: [...], hypotheses: [{claim, confidence, supporting_papers, created_cycle}], crash_log: [...]}`. Markdown generation for LLM consumption.
 
-Zero new tests needed — `ProgressiveDisclosure` already has 10 unit + 5 integration tests. Validate with:
-```bash
-python -m pytest tests/test_progressive_disclosure.py tests/test_phase11_integration.py -q --tb=short
-```
+3. **Build the Planner** — Tier 1 (immediate execution plan from top‑priority goals). Tier 2 (priority rebalancing when new data arrives). Tier 3 (strategic review ~every 10 cycles). Plan tree with revision tracking. Dependency gate enforcement. Handoff box read/write.
 
-### Short‑term — build SPECTER2 paper_similarity_search (Gap B)
+4. **Build the Reflector** — Deterministic checks: regex plan parseability, topological sort for circular dependencies, resource existence lookup, output truncation detection. LLM‑based checks: executor output quality against plan step, plan‑goal alignment (periodic), staleness detection for ambiguous cases. Calibration on executor outcome, not planner acceptance.
 
-2‑file change, ~30 lines:
+### Short‑term
 
-1. `src/utils/spector2_cache.py`: add `find_similar(self, doi: str, *, min_score: float = None) → List[Dict]`. Default `min_score` from `SPECTOR2_SIMILARITY_THRESHOLD` env var (default 0.6). Computes cosine similarity via `numpy` (already available via `sentence‑transformers` dep). Returns `[{doi, s2_paper_id, score}, ...]` sorted descending, filtered to `score ≥ min_score`. Returns `[]` if DOI not cached or no matches.
+5. **Wire SPECTER2 similarity into discovery** — When a new paper is ingested, call `find_similar(doi)` to find the N most similar cached papers. Use their community assignments as priors for the new paper's community detection. This reduces cold‑start cost for Louvain and improves community coherence.
 
-2. `tests/test_spector2_cache.py`: add 3 tests — returns results, DOI not cached, respects threshold.
+6. **≥8 h daemon validation** — Run `orchestrator --live` for ≥8 h continuous. Monitor: boundary convergence in `extraction_stats.json`, GPU memory pressure between waves, `bad_chunks.json` accumulation, orphaned `ollama runner` processes. Track oscillation amplitude — boundary should converge, not oscillate.
 
-### Short‑term — run diagnostic to verify calibration
+7. **atexit GPU cleanup** — Register `atexit` handler: SIGKILL Ollama subprocess, optionally re‑arm launchd plist. Catch SIGTERM/SIGINT too. Write `orchestrator_state.json` as `"stopped"` (not `"crashed"`) so next startup knows the exit was clean.
 
-```bash
-python scripts/diagnose_cache_accumulation.py PMC10571047
-```
+8. **Wave log rotation** — Delete `logs/extraction/wave_*.txt` from previous paper at the start of each new `extract_paper_recursive()` call. Delete `/tmp/opencode_wave*.sh` immediately after `osascript` fires (the Terminal.app has already read the script).
 
-Watch for:
-- `Packed 100 chunks → ~20 batches (budget=~4220 tok/batch)` at wave 1
-- `Repacked N chunks → M batches` between waves (ratio‑based repacking)
-- `Boundary (PASS): model=deepseek-chat, lower 8000→N, upper=16384, gap=M` after each clean batch
-- `Output ratio: model=deepseek-chat, 0.500→0.4xx` after each wave
-- Terminal windows opening/closing with live output
-- No `boundary=[29057, 15941]` negative‑gap states
+### Medium‑term
 
-### Medium‑term — 8h daemon validation (Gap C)
+9. **Map‑reduce decomposition for executor steps** — When a step exceeds its calibrated boundary, automatically decompose (recursive map) and synthesize (reduce). Base case is always trivially bounded.
 
-Run the daemon for ≥8 h continuous. Monitor:
-- `projects/default/extraction_stats.json` for boundary convergence per model
-- Console for calibration log progression
-- Activity Monitor for GPU memory pressure between waves
-- `projects/default/bad_chunks.json` for accumulating known‑bad chunks
-- No OOM, no orphaned GPU runners, no memory creep
+10. **Circuit breaker with health alerts** — Monitor calibration trends across all task types. If N consecutive cycles show declining boundaries across all types, trigger: reset calibration, recommend model re‑pull, write human‑readable health alert to handoff box.
 
-### Beyond — model‑key unification (Gap D)
+### Beyond
 
-Investigate and unify the model key used by extraction stats across diagnostic scripts, daemon, and survey mode. All should use the actual Ollama model name (`gemma4:e4b`) rather than hardcoded strings (`deepseek-chat`).
+11. **KG consolidation (Phase 13)** — Embedding‑based entity dedup using existing `all‑MiniLM‑L6‑v2` model (already loaded by relevance router). LLM‑based community consolidation with e4b. RAPTOR‑style hierarchical summarization integrated with ProgressiveDisclosure tiers.
 
-### Phase 12 — Skills & Experiential Memory
-
-After Phase 11 is fully closed (ProgressiveDisclosure wired + SPECTER2 built), move to Phase 12:
-- Skill library from agent trajectories
-- JSONL trajectory logging
-- Experiential memory system
-- A/B skill evaluation before deployment
+12. **UI/UX for research co‑pilot** — Progress bars, estimated time remaining, real‑time status updates, clarifying‑question UI, contradiction‑flag alerts, plan‑revision history viewer. Streamlit upgrade.
 
 ---
 
@@ -354,97 +336,64 @@ After Phase 11 is fully closed (ProgressiveDisclosure wired + SPECTER2 built),
 
 ```
 You are an expert senior software developer continuing the Federated RAG
-system for biomedical research.  Pulsed‑wave parallel extraction with
-self‑calibrating boundary, ratio‑based repack, data‑quality exemption,
-and per‑wave Terminal windows is complete.  Phase 11 (community routing
-& memory cascade) has one remaining code gap — ProgressiveDisclosure
-wiring — plus a SPECTER2 paper_similarity_search function to build.
+system for autonomous biomedical research.  Pulsed‑wave parallel extraction
+with self‑calibrating boundary is operational (41 tests).  Phase 11 is
+fully closed: ProgressiveDisclosure is wired into Survey Mode, and
+SPECTER2 paper similarity search (find_similar) is built (87 tests total).
 
-Read the full README.md and this HANDOFF.md carefully before making changes.
+This session completed a major architectural redesign: the orchestrator's
+cognitive architecture has been designed as a Planner/Reflector/Executor
+3‑role system with tiered planning, plan trees with revision tracking,
+handoff box as memory bridge, per‑task‑type calibration generalized from
+extraction, dependency gates, map‑reduce decomposition, circuit breakers
+with natural‑language health alerts, and a self‑tuning staleness detector.
+See HANDOFF.md for the full design.
+
+Read HANDOFF.md and README.md carefully before making changes.
 
 CURRENT STATE:
-  - 41 extraction‑related tests pass, zero failures.
-  - Extraction uses pulsed‑wave parallel design: token‑budgeted chunk
-    packing (tiktoken per‑chunk), GPU restart per wave, parallel workers
-    within each wave (up to OLLAMA_NUM_PARALLEL, memory‑aware cap).
-    Per‑worker output written to logs/extraction/wave_NNN_*.txt files
-    with per‑wave Terminal.app windows (auto‑open/close via osascript).
-  - Batch budget self‑calibrates: (boundary_lower × 0.95 − system −
-    overhead) / (1 + output_ratio).  boundary_lower starts at 8000
-    (~20 batches for 100 chunks at ~900 tok/chunk), rises from pass data.
-    boundary_upper starts at 16384, falls from real (non‑data‑quality)
-    degradation data.  Symmetric clamp prevents negative gap.
-  - Data‑quality exemption: depth‑0 AND n≤3 degradations skip boundary
-    AND ratio updates — these are chunk‑content problems, not context
-    overflow.  Sub‑batches still split and re‑queued.
-  - Ratio‑based repack: after each wave, fresh (depth‑0) batches in the
-    queue are repacked with the updated budget.  Degraded sub‑batches
-    preserved as‑is.  Ratio improvements increase batch density mid‑run.
-  - Realtime calibration logging: Boundary (PASS/DEGRADE), Output ratio,
-    and wave‑summary boundary/ratio snapshots emitted INFO‑level.
-  - OLLAMA_NUM_PARALLEL explicitly passed to ollama serve subprocess via
-    env=os.environ.copy() with setdefault().  Server respects the cap.
-  - Output ratio (chunk_tokens → output_tokens) tracked via weighted
-    EMA (80/20), persisted per‑model, updated every wave.
-  - Degradation detection: word‑level, hyphen‑level, junk‑line, AND
-    universal compression‑ratio (zlib, ≥8:1 catches any repetition).
-    stream.close() in finally guarantees httpx disconnect on abort.
-  - Bad chunks (≥3 base‑case failures) tracked in
-    projects/default/bad_chunks.json, automatically isolated.
-  - Worker count uses correct KV‑cache formula; gemma4:e4b = 10.5 GB,
-    qwen3.6:35b = 25 GB.  Qwen auto‑capped at 1 worker.
+  - 87 tests pass, zero failures (41 extraction + 46 phase11/spector2).
+  - Extraction uses pulsed‑wave parallel design with self‑calibrating
+    boundary, ratio‑based repack, data‑quality exemption, per‑wave
+    Terminal windows, and OLLAMA_NUM_PARALLEL passthrough.
+  - ProgressiveDisclosure 3‑tier hierarchy wired into Survey Mode.
+  - SPECTER2 find_similar() built with cosine‑similarity paper discovery.
   - Orchestrator daemon runs full autonomous cycle: web discovery → EPMC
     fetch → batch ingest → pulsed‑wave extraction → KG save → community
     detection → cycle handoff.  Self‑bootstraps Ollama via launchd disarm.
   - KG: ~3,810 nodes, ~262K edges.  BM25: 27K+ documents.  43+ papers.
-  - Extraction uses evidence‑grouped line‑tagged format with CLAIM
-    semantics.  Entities deduped by (name, claim) with evidence union.
-  - Community routing: detection (wired), summarizer (wired),
-    relevance router (wired), progressive disclosure (NOT wired).
-  - SPECTER2 cache: 8 papers with 768‑dim embeddings.  No consumer
-    function (paper_similarity_search not built).
 
-CRITICAL OPEN:
-  - Wire ProgressiveDisclosure into survey_community_route_node (3 files,
-    ~30 lines).  See HANDOFF § "Recommendations → Immediate."
-  - Build SPECTER2 paper_similarity_search (2 files, ~30 lines).  See
-    HANDOFF § "Recommendations → Short‑term."
-  - Long‑running daemon validation (≥8 h).
+CRITICAL OPEN (Phase 12 implementation):
+  - Build per‑task‑type calibration system (generalize extraction_stats.json)
+  - Build handoff box format (JSON canonical + markdown for LLM consumption)
+  - Build Planner (Tier 1/2/3, plan trees, revision tracking, dependency gates)
+  - Build Reflector (deterministic checks: regex, topology, resource lookup;
+    LLM checks: output quality, plan alignment, staleness)
+  - Build capability registry for executor boundary advertisement
+  - Wire SPECTER2 find_similar into orchestrator discovery loop
 
-ARCHITECTURAL CONSTRAINTS (DO NOT VIOLATE — see README §17 + HANDOFF §"What NOT to change"):
-  - Do NOT lower boundary_lower below 8000.
-  - Do NOT remove symmetric clamp, data‑quality exemption, ratio‑based
-    repack, or realtime calibration logging.
-  - Do NOT remove the env=env OLLAMA_NUM_PARALLEL passthrough.
-  - Do NOT remove per‑wave Terminal windows.
-  - Do NOT remove or disable any detection layer.
-  - Do NOT add back _extract_batch_recursive or _merge_entity_dicts.
-  - Do NOT derive budget from num_ctx — use the boundary formula.
-  - All prior constraints still apply.
+ARCHITECTURAL CONSTRAINTS (DO NOT VIOLATE — see README §17 + HANDOFF):
+  - Do NOT collapse Planner + Reflector into one role.
+  - Do NOT hardcode thresholds — use learned calibration and adaptive triggers.
+  - Do NOT feed JSON to LLMs — canonical JSON, LLM receives markdown.
+  - Do NOT allow output generation on incomplete knowledge — dependency gates.
+  - Do NOT let degraded output pollute calibration — only healthy tokens count.
+  - Do NOT calibrate Reflector on planner acceptance — use executor outcome.
+  - All prior extraction + GPU + OLLAMA constraints still apply.
 
 REUSABLE PRIMITIVES:
-  - Orchestrator(graph_storage=gs, dry_run=True).run_once()
-  - agent.extract_paper_recursive(chunks, categories, query)
-  - agent._try_extract_once(chunks, categories, query) → (entities, degraded, salvage, output_tokens)
-  - agent._calculate_chunk_budget(system_prompt) → int
-  - agent._calculate_max_workers(num_ctx, total_batches) → int
-  - agent._pack_chunks_into_batches(chunks, chunk_budget) → List[List[Dict]]
+  - ExtractionAgent with _calculate_chunk_budget, _update_boundary, _update_output_ratio
+  - ProgressiveDisclosure(graph_storage, community_data, summaries).build_disclosure_map(...)
+  - Spector2Cache().find_similar(doi, min_score=0.6)
   - PreExtractor._restart_ollama_process() — SIGKILL + cooldown
   - PreExtractor._ensure_dedicated_ollama() — launchd disarm
-  - TokenStreamHandler(output_file=None) — compression‑ratio + pattern detection
-  - ExtractionAgent._load_extraction_stats(model) → stats dict
-  - ExtractionAgent._update_output_ratio(model, chunk_tok, out_tok) → float
-  - ExtractionAgent._update_boundary(model, actual_total, passed) → None
-  - ExtractionAgent._load_bad_chunks() / _record_bad_chunk(pmcid, idx)
-  - _merge_entity_batches(entities) — (name,claim) dedup + evidence union
-  - ProgressiveDisclosure(graph_storage, community_data, summaries)
-    .build_disclosure_map(relevant_communities, query) → Dict
-  - Spector2Cache() — .get(doi), .put(doi, s2_id, emb), .stats()
+  - TokenStreamHandler — compression‑ratio + pattern detection
+  - Orchestrator(graph_storage=gs, dry_run=True).run_once()
+  - Scheduler(cooldown_seconds=10) — chain‑based daemon loop
 
 QUICK START:
-  python scripts/diagnose_cache_accumulation.py PMC10571047   # diagnostic
+  python -m pytest tests/test_extraction_agent.py -q --tb=short   # 41 tests, ~6s
+  python -m pytest tests/test_progressive_disclosure.py tests/test_phase11_integration.py tests/test_spector2_cache.py -q  # 46 tests
   python phase9_verify.py --test orchestrator                  # dry run
-  python phase9_verify.py --test orchestrator --orchestrator-live  # live
-  python -m pytest tests/test_extraction_agent.py -q --tb=short   # extraction tests
-  python -m pytest tests/test_progressive_disclosure.py tests/test_phase11_integration.py tests/test_spector2_cache.py -q
+  python phase9_verify.py --test orchestrator --orchestrator-live  # live cycle
 ```

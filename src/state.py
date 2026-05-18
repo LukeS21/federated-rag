@@ -52,6 +52,7 @@ class AgentState(TypedDict):
     relevant_communities: NotRequired[List[int]]
     community_scores: NotRequired[Dict[str, float]]
     disclosure_tier: NotRequired[int]
+    disclosure_map: NotRequired[Dict]
 
     # Runtime configuration (optional)
     num_ctx: NotRequired[int]

@@ -18,9 +18,10 @@ Phase   Status
  9      API‑Based Literature Ingestion (Europe PMC, SPECTER2)                  ✅ Complete
 10      Autonomous Background Agent (orchestrator daemon)                      ✅ Complete
 10.5    Extraction Hardening (batched extraction, memory mgmt, streaming)        ✅ Complete
-11      Memory Cascade & Community Routing                                     ⬜ Partial build (summarizer + router wired; progressive disclosure + SPECTER2 remain)
-12      Skills & Experiential Memory                                           ⬜ Designed
-13      Output Tools & Structured Writing                                      ⬜ Designed
+11      Memory Cascade & Community Routing                                     ✅ Complete (wired + tested; progressive disclosure + SPECTER2 built)
+12      Autonomous Research Brain (Planner/Reflector/Executor architecture)     ⬜ Designed — next implementation phase
+13      Knowledge Consolidation & Meta‑Cognition                                ⬜ Designed
+14      Research Co‑Pilot UI/UX                                                ⬜ Planned
 ```
 
 ---
@@ -63,6 +64,7 @@ We are building an **AI research brain** — a system that doesn't just answer q
 - **Propose new directions** — generate novel, testable hypotheses grounded in evidence
 - **Present findings proactively** — surface discoveries, contradictions, and emergent insights to the researcher
 - **Support researcher tasks** — answer questions, write papers and grants, explore contradictory claims — all evidence-grounded
+- **Empower any experience level** — a researcher can ask "write a paper about obesity for my lab" and the system decomposes the task with PhD‑level rigor: finding knowns, unknowns, writing nuances, research questions to explore, asking clarifying questions only when genuinely needed, and planning experiments. The AI handles the literature review, evidence tracking, contradiction flagging, and writing — the researcher does the lab work.
 
 ### 1.2 Design Principles
 
@@ -74,17 +76,19 @@ We are building an **AI research brain** — a system that doesn't just answer q
 | **Deterministic orchestration** | LangGraph state machine routes execution; no unbounded LLM loops |
 | **Heterogeneous multi-agent debate** | Different model families resist peer-pressure convergence during synthesis |
 | **Local-first, air-gap ready** | Defaults to local Ollama; dual-instance Docker architecture for sensitive/secure data |
-| **Schema-less extraction** | The LLM discovers categories from the literature, not from a fixed YAML |
+| **Self‑calibrating agents** | Every LLM call learns its own boundary (budget → pass/fail → adjust) per task type and per model. No hardcoded batch sizes, context limits, or stale thresholds. Pattern proven in extraction; generalized to all orchestration LLM calls. |
+| **Memory bridge across cycles** | The planner's continuity is a structured state package (handoff box) read at cycle start and written at cycle end — not persistent LLM context. GPU reset is sleep; the box is memory. |
+| **Decompose, never truncate** | When a task exceeds a calibrated boundary, decompose recursively (map → reduce) with full context per sub‑task. No information loss. Base case is always small enough that failure indicates a model problem, not a sizing problem. |
 
 ---
 
 ## 2. Current State
 
-**As of 17 May 2026 — Pulsed‑wave parallel extraction with self‑calibrating boundary, ratio‑based repack, data‑quality exemption, realtime calibration logging, and per‑wave Terminal worker windows operational.  Phase 10.5 extraction hardening is complete.  Phase 11 community routing has one remaining code gap (ProgressiveDisclosure wiring) plus a SPECTER2 paper‑similarity search to build.**
+**As of 18 May 2026 — Phase 11 is fully closed.  ProgressiveDisclosure is wired into production Survey Mode (3‑tier hierarchical context access).  SPECTER2 `paper_similarity_search()` is built with 3 tests passing.  87 tests pass, zero failures.  The orchestrator's cognitive architecture has been redesigned as a Planner/Reflector/Executor 3‑role system — the blueprint for long‑running autonomous biomedical research.**
 
 | Metric | Value |
 |--------|-------|
-| Tests passing | **41** (extraction‑related; full suite ~375) |
+| Tests passing | **87** (41 extraction‑related + 46 progressive‑disclosure/phase11/spector2; full suite ~375) |
 | Knowledge graph | ~3,810 nodes, ~262K edges |
 | BM25 corpus | 27K+ indexed documents |
 | Papers ingested | ~43+ OA papers (multiple daemon cycles) |
@@ -116,23 +120,42 @@ We are building an **AI research brain** — a system that doesn't just answer q
 
 - **Web UI**: Query interface with 4 modes, benchmark dashboard, session history, export.
 
+- **ProgressiveDisclosure (Phase 11)**: Three‑tier hierarchical context access (Tier 1: system overview, Tier 2: community detail with evidence, Tier 3: paper‑level entities) wired into Survey Mode's `survey_community_route_node` and `survey_scrub_node`. All synthesis prompts receive bounded, evidence‑anchored context through the disclosure map.
+
+- **SPECTER2 paper similarity (Phase 11)**: `Spector2Cache.find_similar(doi, min_score=0.6)` performs cosine‑similarity‑ranked paper discovery against 768‑dim paper‑level embeddings from the Semantic Scholar API. Configurable threshold via `SPECTOR2_SIMILARITY_THRESHOLD` env var. Graceful degradation (empty list if DOI not cached).
+
+### What's Designed — Phase 12 Architecture
+
+This session (18 May 2026) produced a complete architectural redesign of the orchestrator's cognitive layer. The current daemon executes a fixed pipeline per cycle. The redesigned architecture introduces three cognitive roles:
+
+- **Planner** — Owns the mission, goals, priorities, and plan. Decomposes high‑level research tasks (e.g., "write an obesity paper for my lab") into bounded, executable steps using tiered planning (strategic → tactical → execution). Writes the handoff box — a structured state package that serves as memory across GPU‑reset cycles.
+
+- **Executor** — Calibrated specialists per task type (extraction, contradiction analysis, gap analysis, hypothesis generation, paper writing). Each specialist has its own `boundary_lower/upper` and `output_ratio` learned from pass/fail data — the same pattern proven in the extraction pipeline. GPU reset between steps. Checkpoint after each step.
+
+- **Reflector** — Quality audit gate. Validates plans against the KG (deterministic checks: regex, topological sort, resource lookup) and executor output against plan steps (LLM‑based). Detects stale goals via plan‑revision‑count (not wall‑time). Triggers circuit breaker with natural‑language health alerts when systemic degradation is detected.
+
+Key architectural innovations designed: handoff box as memory bridge across GPU‑reset cycles (planner continuity without persistent LLM context), plan trees with revision tracking (phases can be reopened when new data reveals gaps), dependency gates (no writing on incomplete knowledge), map‑reduce decomposition for large‑context tasks (no truncation — decompose, don't cut), per‑task‑type calibration generalized from extraction, and self‑tuning staleness detection. See [`HANDOFF.md`](HANDOFF.md) for full design.
+
 ### Open Problems
 
-- **Ollama GPU memory at the Metal layer is fundamentally opaque** (Gap E). No software‑level API exposes true Metal buffer state. Process death (SIGKILL) is the strongest guarantee available; the 5 s cooldown after kill is a heuristic tuned for DDR5 unified memory at 100 GB/s.
+- **Ollama GPU memory at the Metal layer is fundamentally opaque** (Gap N). No software‑level API exposes true Metal buffer state. Process death (SIGKILL) is the strongest guarantee available; the 5 s cooldown after kill is a heuristic tuned for DDR5 unified memory at 100 GB/s.
 - **`stream.close()` abort reliability** — breaking the `for` loop and calling `stream.close()` sends `GeneratorExit`, but the underlying httpx cleanup depends on LangChain's internal stream handling. The `finally` block guarantees `.close()` is called; edge cases remain untested at scale.
-- **ProgressiveDisclosure not wired** — `progressive_disclosure.py` is fully built and tested (10 unit + 5 integration tests) but never instantiated in production. The data it needs (`community_data`, `community_summaries`, `relevant_communities`) is already computed in `survey_community_route_node`. Wiring replaces the ad‑hoc community section in `survey_scrub_node` with structured tiered disclosure.
-- **SPECTER2 `paper_similarity_search()` not built** — `spector2_cache.json` has 768‑dim embeddings for 8 papers but no consumer function. A `find_similar(doi, min_score=0.6)` method is needed for cosine‑similarity‑ranked paper discovery.
+- **Planner/Reflector not yet built** — The cognitive architecture (3‑role design with tiered planning, handoff box, per‑task‑type calibration, map‑reduce decomposition, dependency gates, circuit breaker) is fully designed but not implemented. This is the Phase 12 implementation scope.
 - **No long‑running daemon validation** ≥8 h continuous. Short cycles of 2‑4 papers have been tested.
 - **Model‑key mismatch** — diagnostic script hardcodes `model="deepseek-chat"` while running `gemma4:e4b` via Ollama. Extracted stats are keyed to the wrong model, fragmenting calibration across code paths.
+- **Disk hygiene gaps** — `logs/extraction/wave_*.txt` and `/tmp/opencode_wave*.sh` files accumulate unbounded. No atexit GPU cleanup handler. Wave log rotation, temp‑file cleanup, and crash‑resilience handlers needed before indefinite deployment.
 
 ### What's Next
 
-1. **Wire ProgressiveDisclosure** — last Phase 11 code gap (3 files, ~30 lines). Instantiate in `survey_community_route_node`, store `disclosure_map` in state, consume in `survey_scrub_node`.
-2. **Build SPECTER2 `paper_similarity_search`** — `Spector2Cache.find_similar()` with cosine‑similarity ranking (2 files, ~30 lines).
-3. **≥8 h daemon validation run** — validate memory stability, boundary convergence, and parallel extraction over multiple daemon cycles.
-4. **Investigate gemma4:26b** (17 GB, 25.8B parameters) for higher extraction quality. The self‑calibrating boundary will automatically adjust.
+1. **Build per‑task‑type calibration system** — Generalize `extraction_stats.json` to `orchestration_stats.json`. All LLM calls (planner, reflector, all executors) get per‑task‑type `boundary_lower/upper` and `output_ratio`.
+2. **Build handoff box format** — Structured JSON + generated markdown state package for cross‑cycle planner continuity.
+3. **Build Planner** — Tiered decomposition (T1/T2/T3), plan tree management, dependency gate enforcement, handoff box read/write.
+4. **Build Reflector** — Deterministic checks (regex, topology, resource lookup) + LLM checks (output quality, plan alignment, staleness).
+5. **Wire SPECTER2 similarity into discovery** — `find_similar()` informs community assignment for new papers.
+6. **≥8 h daemon validation** — Memory stability, boundary convergence, GPU pressure over multiple cycles.
+7. **Disk hygiene fixes** — Wave log rotation, temp‑file cleanup, atexit GPU handlers.
 
-See [Planned Capabilities](#18-planned-capabilities) for Phase 12+ roadmap.
+See [Planned Capabilities](#18-planned-capabilities) for Phase 13+ roadmap.
 
 ---
 
@@ -875,6 +898,7 @@ The system was built in 10 phases over ~2 months (April–May 2026), progressing
 - **Phases 8-9**: Scale — Europe PMC API ingestion (replacing EZProxy/Playwright), SPECTER2 embeddings, corpus-scale retrieval at 22K+ documents
 - **Phase 10**: Autonomy — background daemon (web discovery → EPMC → ingest → KG → handoff every 60 min), line-tagged extraction format, parallel subagents
 - **Phase 10.5**: Extraction hardening — compression‑ratio degradation detection (universal, pattern‑agnostic), pulsed‑wave parallel extraction with self‑calibrating boundary‑based budget, token‑based greedy chunk packing (tiktoken), per‑worker log files, bad‑chunk pre‑emption (`bad_chunks.json`), boundary calibration for real‑world chunks (boundary_lower=8000), symmetric boundary clamp, data‑quality degradation exemption (depth=0, n≤3), ratio‑based queue repack between waves, realtime calibration INFO logging, OLLAMA_NUM_PARALLEL explicit passthrough to ollama serve, per‑wave Terminal.app worker windows.
+- **Phase 11**: Memory cascade — Community summarizer (LLM), relevance router (embedding‑based), community detection (Louvain) ALL wired into Survey Mode. **ProgressiveDisclosure** 3‑tier hierarchical context access wired into `survey_community_route_node` (Tier 1: system overview, Tier 2: community detail with evidence, Tier 3: paper‑level entities). **SPECTER2 paper similarity** `find_similar()` built with cosine‑similarity‑ranked paper discovery and 3 tests. **Architectural redesign**: Planner/Reflector/Executor 3‑role cognitive architecture designed — tiered planning, plan trees with revision tracking, handoff box as memory bridge, per‑task‑type calibration generalized from extraction, dependency gates, map‑reduce decomposition, circuit breakers, self‑tuning staleness, and goal graveyard.
 
 Full build history with per-phase deliverables, lessons learned, and benchmark details: [`docs/phase-history.md`](docs/phase-history.md).
 
@@ -954,30 +978,44 @@ These rules preserve the system's design integrity. **Do not violate them.**
 - Web search results are discovery-only (`source_type: "discovery"`) — never used as evidence
 - Do NOT use `lstrip()` for prefix removal — use `removeprefix()` or explicit check
 
+### New Architecture Constraints (Phase 12 design — enforce when building)
+
+These constraints derive from the Planner/Reflector/Executor 3‑role architecture designed in Phase 11. See [`HANDOFF.md`](HANDOFF.md) for rationale.
+
+- **Do NOT collapse Planner + Reflector into one role** — independent audit is the point. Plans are audited by a separate cognitive layer.
+- **Do NOT hardcode thresholds** — all sizing is learned (calibration), triggers are adaptive (plan‑revision count), measurement is objective (tiktoken). No magic numbers.
+- **Do NOT feed JSON to LLMs** — canonical store is JSON (Python reads/writes deterministically). LLMs receive generated markdown with ~1:1 token‑to‑content ratio (vs JSON's ~4:1 overhead).
+- **Do NOT allow output generation on incomplete knowledge** — dependency gates block execution when gaps exist. Honesty over user satisfaction. Gaps are documented, not papered over.
+- **Do NOT let degraded output pollute calibration** — degraded tokens must never update the `output_ratio` EMA. Only healthy tokens (up to degradation point, measured by detection system) contribute. This is already enforced in extraction; the same rule applies to all task types.
+- **Do NOT calibrate Reflector on planner acceptance** — use executor success/failure as ground truth. Planner acceptance is a confounded signal.
+- **Do NOT derive context budgets from `num_ctx`** — use the per‑task‑type boundary formula (identical to extraction: `(boundary_lower × 0.95 − system − overhead) / (1 + output_ratio)`).
+- **Do NOT truncate large‑context tasks** — decompose via map‑reduce. Every leaf has full context for its scope. Synthesis sees everything through compressed summaries.
+- **Plans are living documents, not scripts** — the planner must evaluate plan validity every cycle and revise when new data reveals gaps. Completed phases can be reopened. Stale goals are archived. No fixed‑path execution.
+- **Handoff box is the memory bridge** — planner continuity is the box, not persistent LLM context. GPU reset is sleep; the box is memory.
+
 ---
 
 ## 18. Planned Capabilities
 
-### 18.1 What's Designed (Phases 11-13)
+### 18.1 What's Designed (Phases 12-14)
 
 | Phase | Capability | Components |
 |-------|-----------|------------|
-| **11** | Community Routing | Relevance router gates KG community access; progressive disclosure tiers (system→community→paper); wire community routing into Survey Mode retrieval |
-| **12** | Skills & Memory | Skill library (.md files from agent trajectories); JSONL trajectory logging; experiential memory; A/B skill evaluation before deployment |
-| **13** | Output Templates | Grant proposal, paper, methods section, and review templates; evidence-anchored writing with auto-citation; pre-output anchoring gate |
+| **12** | Autonomous Research Brain | Planner (tiered decomposition, plan trees, dependency gates, handoff box R/W). Reflector (deterministic + LLM‑based plan/executor auditing). Per‑task‑type calibration generalized to all LLM calls. Capability registry. Map‑reduce decomposition for large‑context executor steps. Circuit breaker with natural‑language health alerts. |
+| **13** | Knowledge Consolidation | Embedding‑based entity dedup (all‑MiniLM‑L6‑v2, already loaded). LLM‑based community consolidation (gemma4:e4b as judge). RAPTOR‑style hierarchical summarization integrated with ProgressiveDisclosure tiers. Cross‑paper claim dedup via SPECTER2 similarity. Stale/dead‑end KG pruning with corroboration‑count‑aware heuristics. |
+| **14** | Research Co‑Pilot UI/UX | Progress bars, estimated time remaining, real‑time status updates. Clarifying‑question UI. Contradiction‑flag alerts. Plan‑revision history viewer. Evidence‑anchored writing with auto‑citation. Pre‑output anchoring gate. Streamlit upgrade. |
 
 ### 18.2 Beyond the Current Roadmap
 
-These capabilities are central to the North Star vision and will follow Phase 13:
+These capabilities are central to the North Star vision and will follow Phase 14:
 
 | Capability | Description |
 |-----------|-------------|
 | **Persistent Belief Store** | Expand the claim ledger into a living hypothesis tracker. Each hypothesis carries: status (supported/challenged/contradicted/deprecated), confidence (0.0–1.0), evidence_for (citations + excerpts), evidence_against, version_history, first_seen, last_updated. Stored alongside the KG in `projects/default/`. |
-| **Contradiction Detection Agent** | A new agent that runs during daemon cycles after ingestion: checks newly extracted entities/claims against existing beliefs, flags contradictions ("paper PMC-X challenges hypothesis #7"), updates confidences. This is the cognitive step that closes the loop between ingestion and belief evolution. |
-| **Probabilistic KG Edges** | Edge weights in the knowledge graph carry confidence scores adjusted over time — more confirming papers increase weight, contradictory papers flag and branch. The KG becomes a probabilistic belief system, not a static fact database. |
-| **Attention Router** | A lightweight model that decides what to load into active context for any task: which KG communities are relevant? Which hypotheses? Which papers? Loads compressed summaries for relevant content, skips everything else. Builds on Phase 11's community routing. |
-| **Hypothesis Generator** | Proposes novel, testable hypotheses based on KG patterns, community intersections, and identified gaps — not just finding what's missing, but generating what's next. |
-| **Instance Chaining Protocol** | Formal handoff when agent context fills during long-running tasks: compress state → structured handoff (what's done, pending, key findings, current position) → next agent picks up. Generalizes the cycle handoff pattern. |
+| **Contradiction Detection Agent** | A new executor specialist that runs during daemon cycles after ingestion: checks newly extracted entities/claims against existing beliefs, flags contradictions ("paper PMC‑X challenges hypothesis #7"), updates confidences. This closes the loop between ingestion and belief evolution. |
+| **Probabilistic KG Edges** | Edge weights in the knowledge graph carry confidence scores adjusted over time — more confirming papers increase weight, contradictory papers flag and branch. The KG becomes a probabilistic belief system. |
+| **Attention Router** | A lightweight model that decides what to load into active context for any task: which KG communities are relevant? Which hypotheses? Loads compressed summaries for relevant content, skips everything else. Builds on Phase 11's community routing and ProgressiveDisclosure tiering. |
+| **Instance Chaining Protocol** | Formal handoff when agent context fills during long‑running tasks: compress state → structured handoff (what's done, pending, key findings, current position) → next agent picks up. Generalizes the cycle handoff pattern — the handoff box IS the instance chaining protocol. |
 | **Full Local AI Migration** | Complete transition from DeepSeek API to local Ollama for all workloads, with performance parity via model optimization and prompt engineering. |
 
 ---
