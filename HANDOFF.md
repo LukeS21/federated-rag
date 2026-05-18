@@ -98,6 +98,8 @@ This was the bulk of the session — a complete re‑thinking of the orchestrato
 
 **The Problem:** The current orchestrator executes a fixed pipeline per cycle (web discovery → EPMC → extract → KG → communities). It has no planner, no quality control, no meta‑cognition, and no mechanism for task decomposition when context limits are hit. Large research tasks (write a paper, explore IL‑6 contradictions, generate hypotheses) can't be expressed or executed. The system has no self‑direction.
 
+**The primitive that validated this approach:** The Drafter→Critic→Arbiter chain (Section 6 of README) was the first proof‑of‑concept — a produce→audit→correct loop specialized for evidence‑grounded paragraph synthesis. D/C/A proved the pattern works. Phase 12 generalizes it: the same produce→audit→correct loop applied to ALL research tasks through Planner/Reflector/Executor roles.
+
 **The Solution — Three cognitive roles:**
 
 | Role | Owns | Produces | Context |
@@ -118,6 +120,14 @@ This was the bulk of the session — a complete re‑thinking of the orchestrato
 - **Self‑tuning staleness.** Goal staleness is measured by plan‑revision count (how many times has the plan been revised since this goal was last updated?), not cycle count or wall‑time. The threshold self‑tunes based on reflector false‑positive/false‑negative rates. Corroboration‑count‑aware: goals with 15 corroborations and no recent updates are "settled science," not "stale."
 - **User input as priority zero.** The planner treats live user queries (via Streamlit) as priority‑0 goals that preempt autonomous work. Mode switch: interactive (short steps, fast response) vs autonomous (full cycles when user is idle).
 - **"Any experience level user" vision.** The system decomposes high‑level tasks ("write an obesity paper for my lab") into phases, identifies knowledge gaps, discovers literature to fill them, asks clarifying questions only when genuinely needed, and can push back if evidence contradicts the user's assumptions — like a PhD assistant. Plans adapt as new information is discovered.
+
+### Architectural lineage — D/C/A is the primitive P/R/E loop
+
+The Drafter→Critic→Arbiter chain (Section 6 of README) was the **first proof-of-concept** for the Planner/Reflector/Executor pattern now generalized in Phase 12. D/C/A is a specialized instantiation for evidence-grounded paragraph synthesis: Drafter = Executor (synthesis specialist), Critic = Reflector (audit against evidence), Arbiter = Executor (revision specialist). The produce→audit→correct pattern validated in D/C/A now applies to ALL research tasks.
+
+**"Survey Mode" is Planner decomposition depth, not a separate architecture.** Quick/Deep/Survey/Sectioned modes represent how deeply the Planner decomposes a user query — not different code paths. A Quick query delegates to a single synthesis executor. A Survey query triggers full community routing, gap analysis, and cross-community synthesis — all through the same P/R/E pipeline. The current LangGraph `survey_nodes.py` graph is the pre‑Planner implementation; it will be refactored into P/R/E as the Planner matures.
+
+**Evidence anchoring runs through every P/R/E stage.** Extraction captures `evidence_phrase` + `source_paper`. ProgressiveDisclosure tiers provide bounded access (Tier 1: overview, Tier 2: community detail with evidence, Tier 3: paper evidence). The Reflector verifies claims trace to sources. The UI renders clickable citations that drill into highlighted evidence. The P/R/E architecture is the enforcement layer for evidence grounding — every claim the system makes is traceable to a specific sentence in a specific paper. No output reaches the user without passing through the Reflector's evidence gate.
 
 ---
 
@@ -154,6 +164,14 @@ If the reflector's "pass" signal is "planner accepted my flag," a degraded plann
 ### 8. No hardcoded thresholds survive real‑world variability
 
 "Analyze top 10 entities," "stale after 5 cycles," "expected 100‑300 tokens for abstract" — all of these fail in real usage. The architecture uses learned calibration (boundary, ratio), adaptive triggers (plan‑revision count, not cycle count), and tiktoken measurement (not LLM‑estimated tokens). The only acceptable hardcoded value is the initial default, which self‑calibrates away.
+
+### 9. D/C/A was the primitive P/R/E loop — generalizing to all tasks is the natural next step
+
+The Drafter→Critic→Arbiter chain proved that produce→audit→correct works for evidence‑grounded synthesis. The Planner/Reflector/Executor architecture is the same pattern at a higher level of abstraction, applied to ALL research tasks (extraction, contradiction detection, gap analysis, hypothesis generation, paper writing). "Survey Mode" dissolves as a concept — it's Planner decomposition depth, not a separate code path. Quick/Deep/Survey/Sectioned modes represent how deeply the Planner decomposes a query, and all route through the same P/R/E pipeline.
+
+### 10. Evidence anchoring runs through every layer — it's not a feature, it's the architecture
+
+Extraction captures `evidence_phrase` + `source_paper`. ProgressiveDisclosure tiers provide bounded access. The Reflector verifies claims trace to sources. Every output to the user carries clickable citations that drill into highlighted evidence. This is not a quality check bolted on after generation — it's the architectural guarantee that the system never makes an unverifiable claim.
 
 ---
 
@@ -243,6 +261,8 @@ All prior constraints apply. Additions from this session:
 - Do NOT allow writing/output generation on incomplete knowledge — dependency gates must block execution when gaps exist.
 - Do NOT degrade degraded‑output calibration — garbage tokens must never update the output_ratio EMA. Only healthy tokens (up to degradation point) contribute.
 - Do NOT make the reflector's calibration depend on planner acceptance — calibrate on executor outcome (the ground truth), not planner agreement.
+- Do NOT treat "Survey Mode" or "Quick/Deep/Survey" as separate architectures — they are Planner decomposition depth. All modes route through the same P/R/E pipeline.
+- Do NOT remove evidence anchoring at any layer — every claim must trace to a source paper and evidence chunk. The Reflector gates output. The UI renders clickable citations.
 
 ### All prior constraints
 - Do NOT reinstate `_extract_batch_recursive` or `_merge_entity_dicts`.

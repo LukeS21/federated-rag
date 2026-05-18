@@ -296,15 +296,19 @@ class BaseGraphStorage(ABC):
 
 The graph grows through two channels:
 
-1. **Query-time**: During Deep/Survey mode, `GraphBuilder` creates nodes for each extracted entity and edges for co-occurring pairs within the same chunk. Attaches `evidence_phrase` and `source_paper` to every edge.
+1. **Query-time**: During Deep/Survey mode, `GraphBuilder` creates nodes for each extracted entity and edges for co-occurring pairs within the same chunk. Attaches `evidence_phrase` and `source_paper` to every edge. Every entity in the KG is evidence‑anchored: traceable to a specific sentence in a specific paper.
 
 2. **Background daemon**: The orchestrator runs `PreExtractor` on newly ingested papers, extracts entities, and feeds them into `GraphBuilder` via `graph_storage`. Community detection (Louvain algorithm) runs after each cycle, grouping entities into research clusters (e.g., "titanium surface modification" vs. "macrophage signaling").
+
+**Evidence anchoring through the architecture:** Every claim flows through the same chain — extraction captures `evidence_phrase` + `source_paper`, ProgressiveDisclosure tiers provide bounded access (Tier 1: overview, Tier 2: community detail with evidence, Tier 3: paper evidence), the Reflector verifies claims trace to sources, and the UI renders clickable citations that drill into highlighted evidence. The Planner/Reflector/Executor architecture is the enforcement layer for evidence grounding at scale.
 
 **Future: Probabilistic edges** — as the belief store is implemented, edges will carry `confidence` scores that are adjusted over time based on supporting or contradicting evidence discovered in background cycles.
 
 ---
 
-## 6. Multi-Agent Synthesis
+## 6. Multi-Agent Synthesis (Primitive P/R/E Loop)
+
+> **Architectural note (May 2026):** The Drafter→Critic→Arbiter chain was the first proof-of-concept for the **Planner/Reflector/Executor** pattern now generalized in Phase 12. D/C/A is a specialized instantiation for evidence-grounded paragraph synthesis: Drafter = Executor (synthesis specialist), Critic = Reflector (audit against evidence), Arbiter = Executor (revision specialist). The same produce→audit→correct pattern now applies to ALL research tasks — extraction, contradiction detection, gap analysis, hypothesis generation, paper writing. See [Phase 12: Autonomous Research Brain](#18-planned-capabilities) for the generalized architecture.
 
 ### 6.1 Core Principle: Heterogeneous, Role-Structured Debate with Evidence Anchoring
 
@@ -349,7 +353,9 @@ After the Arbiter produces a revised synthesis, the system performs an automated
 - Anchoring Score < 0.85 → flagged claims sent back to Arbiter for conditional second pass
 - If after second pass Anchoring Score < 0.85 → escalate to human approval gate (LangGraph interrupt)
 
-### 6.4 Flow Diagram
+### 6.4 Flow Diagram (Primitive P/R/E Loop)
+
+> This is the produce→audit→correct loop specialized for synthesis. In the generalized architecture (Phase 12), the Planner decomposes tasks, Executor specialists handle each step, and the Reflector validates output — the same pattern at a higher level of abstraction.
 
 ```text
 ┌──────────┐     ┌──────────────┐     ┌───────────┐
@@ -518,6 +524,8 @@ Entities without evidence grounding are discarded or flagged.
 ---
 
 ## 9. Execution Modes
+
+> **Architectural note (May 2026):** Quick/Deep/Survey/Sectioned modes are **Planner decomposition depth** — not separate code paths. A Quick query gets 1 synthesis executor step. A Deep query triggers extraction + synthesis + validation through the P/R/E loop. A Survey query triggers full community routing, gap analysis, and cross-community synthesis. In the Phase 12 architecture, the Planner determines decomposition depth based on the query, and all modes route through the same Planner→Executor→Reflector pipeline. The LangGraph graphs below are the current implementation; they will be refactored into the P/R/E architecture as the Planner matures.
 
 ### 9.1 Quick Mode
 **Purpose**: Factual lookup with minimal latency.  
